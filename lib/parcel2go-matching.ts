@@ -1,0 +1,127 @@
+import "server-only";
+
+import type { Parcel2GoShipment } from "@/lib/parcel2go";
+
+export type Parcel2GoMatchMethod = "order_reference" | "customer_email" | "customer_phone" | "delivery_address";
+
+export type Parcel2GoOrderMatchCandidate = {
+  id: string;
+  sourceOrderId: string;
+  orderNumber: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  shippingAddress: string;
+  createdAt: string;
+};
+
+export type Parcel2GoOrderMatch = {
+  orderId: string;
+  method: Parcel2GoMatchMethod;
+};
+
+const MAX_DAYS_BETWEEN_ORDER_AND_BOOKING = 45;
+
+function compact(value: string | undefined) {
+  return (value ?? "").toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function phoneDigits(value: string | undefined) {
+  return (value ?? "").replace(/\D/g, "").slice(-10);
+}
+
+function referenceKeys(value: string) {
+  const key = value.toLocaleLowerCase().replace(/\s+/g, "").trim();
+  return new Set([key, key.replace(/^#/, "")]);
+}
+
+function textIsInAddress(address: string, value: string | undefined) {
+  const needle = compact(value);
+  return needle.length >= 4 && compact(address).includes(needle);
+}
+
+function bookingDate(shipment: Parcel2GoShipment) {
+  return shipment.paidAt ?? shipment.collectionDate;
+}
+
+function daysFromOrderToBooking(orderCreatedAt: string, shipment: Parcel2GoShipment) {
+  const shipmentDate = bookingDate(shipment);
+  if (!shipmentDate) return undefined;
+  const days = (Date.parse(shipmentDate) - Date.parse(orderCreatedAt)) / 86_400_000;
+  return Number.isFinite(days) ? days : undefined;
+}
+
+function isEligibleForDateBasedMatch(order: Parcel2GoOrderMatchCandidate, shipment: Parcel2GoShipment) {
+  const days = daysFromOrderToBooking(order.createdAt, shipment);
+  return days !== undefined && days >= -1 && days <= MAX_DAYS_BETWEEN_ORDER_AND_BOOKING;
+}
+
+function matchingReferenceOrder(shipment: Parcel2GoShipment, orders: Parcel2GoOrderMatchCandidate[]) {
+  const references = new Set(shipment.importedReferences.flatMap((reference) => [...referenceKeys(reference)]));
+  if (references.size === 0) return undefined;
+  const matches = orders.filter((order) => {
+    const sourceOrderId = order.sourceOrderId.toLocaleLowerCase().replace(/\s+/g, "").trim();
+    const orderNumber = referenceKeys(order.orderNumber);
+    return references.has(sourceOrderId) || [...orderNumber].some((key) => references.has(key));
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function matchMethod(input: {
+  email: boolean;
+  phone: boolean;
+  name: boolean;
+  postcode: boolean;
+  street: boolean;
+  property: boolean;
+}): Parcel2GoMatchMethod | undefined {
+  if (input.email) return "customer_email";
+  if (input.phone) return "customer_phone";
+  if (input.name && input.postcode && (input.street || input.property)) return "delivery_address";
+  return undefined;
+}
+
+/**
+ * Matches only when independent customer and delivery signals make the result
+ * unambiguous. Ambiguous deliveries stay unlinked so a status is never shown
+ * against the wrong customer's order.
+ */
+export function findParcel2GoOrderMatch(shipment: Parcel2GoShipment, orders: Parcel2GoOrderMatchCandidate[]): Parcel2GoOrderMatch | undefined {
+  const referenceOrder = matchingReferenceOrder(shipment, orders);
+  if (referenceOrder) return { orderId: referenceOrder.id, method: "order_reference" };
+
+  const delivery = shipment.deliveryAddress;
+  const shipmentName = compact(delivery.contactName);
+  const shipmentEmail = compact(delivery.email);
+  const shipmentPhone = phoneDigits(delivery.phone);
+  const shipmentPostcode = compact(delivery.postcode);
+
+  const candidates = orders.flatMap((order) => {
+    if (!isEligibleForDateBasedMatch(order, shipment)) return [];
+    const email = Boolean(shipmentEmail && compact(order.customerEmail) === shipmentEmail);
+    const phone = Boolean(shipmentPhone && phoneDigits(order.customerPhone) === shipmentPhone);
+    const name = Boolean(shipmentName && compact(order.customerName) === shipmentName);
+    const postcode = Boolean(shipmentPostcode && compact(order.shippingAddress).includes(shipmentPostcode));
+    const street = textIsInAddress(order.shippingAddress, delivery.street);
+    const property = textIsInAddress(order.shippingAddress, delivery.property);
+    const town = textIsInAddress(order.shippingAddress, delivery.town);
+    const method = matchMethod({ email, phone, name, postcode, street, property });
+    if (!method) return [];
+
+    const days = daysFromOrderToBooking(order.createdAt, shipment) ?? MAX_DAYS_BETWEEN_ORDER_AND_BOOKING;
+    const score = (email ? 100 : 0)
+      + (phone ? 80 : 0)
+      + (name ? 25 : 0)
+      + (postcode ? 20 : 0)
+      + (street ? 35 : 0)
+      + (property ? 20 : 0)
+      + (town ? 10 : 0)
+      + Math.max(0, 10 - Math.floor(days / 5));
+    return [{ order, method, score }];
+  }).sort((left, right) => right.score - left.score);
+
+  const best = candidates[0];
+  const runnerUp = candidates[1];
+  if (!best || best.score < 80 || (runnerUp && best.score - runnerUp.score < 20)) return undefined;
+  return { orderId: best.order.id, method: best.method };
+}
