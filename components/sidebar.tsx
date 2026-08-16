@@ -25,7 +25,7 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="brand-lockup">
-        <Image src="/serenity-hue-logo-black.png" alt="Serenity Hue by Shabina" width={122} height={122} priority />
+        <Image src="/serenity-hue-logo-white.png" alt="Serenity Hue by Shabina" width={122} height={122} priority />
       </div>
       <nav aria-label="Main navigation" className="nav-list nav-list--desktop">
         {primaryItems.map(({ href, label, icon: Icon }) => (
@@ -44,6 +44,12 @@ export function Sidebar() {
           <Link className={pathname === "/inventory/packaging" ? "inventory-subnav__link is-active" : "inventory-subnav__link"} href="/inventory/packaging" onClick={() => setInventoryOpen(false)}>Packaging</Link>
         </div>}
       </nav>
+      <div className="sidebar-spacer" />
+      <div className="sidebar-account" aria-label="Current workspace">
+        <span className="sidebar-account__avatar" aria-hidden="true">SH</span>
+        <span className="sidebar-account__copy"><strong>Serenity Hue</strong><small>Operations</small></span>
+        <ChevronDown className="sidebar-account__chevron" aria-hidden="true" size={15} strokeWidth={1.8} />
+      </div>
       <nav aria-label="Mobile navigation" className="mobile-navigation">
         {mobileItems.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;

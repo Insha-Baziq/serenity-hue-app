@@ -283,20 +283,21 @@ function OrderDetails({ order }: { order: Order }) {
       <div className="order-detail-header">
         <div>
           <p className="workspace-kicker">Order detail</p>
-          <SheetTitle asChild><h2>{order.number}</h2></SheetTitle>
-          <ChannelPill channel={order.channel} />
+          <div className="order-detail-heading-line">
+            <SheetTitle asChild><h2>{order.number}</h2></SheetTitle>
+            <ChannelPill channel={order.channel} />
+          </div>
+          <div className="order-detail-statuses">
+            <PaymentPill status={order.payment} />
+            <FulfillmentPill status={order.fulfillment} />
+          </div>
         </div>
+        {order.adminUrl && <a className={`${buttonVariants({ variant: "outline", size: "compact" })} source-link`} href={order.adminUrl} target="_blank" rel="noreferrer">Open in {sourceLabel}<ExternalLink size={14} aria-hidden="true" /></a>}
       </div>
       <SheetDescription id="order-sheet-description" className="sr-only">
         Full order information for {order.number}.
       </SheetDescription>
-      {order.adminUrl ? (
-        <a className={`${buttonVariants({ variant: "outline", size: "compact" })} source-link`} href={order.adminUrl} target="_blank" rel="noreferrer">
-          Open in Shopify<ExternalLink size={14} aria-hidden="true" />
-        </a>
-      ) : (
-        <p className="source-link source-link--unavailable">A direct {sourceLabel} link will appear once that channel is connected.</p>
-      )}
+      {!order.adminUrl && <p className="source-link source-link--unavailable">A direct {sourceLabel} link will appear once that channel is connected.</p>}
       <div className="customer-block">
         <p className="detail-label">Customer</p>
         <h3>{order.customer}</h3>
