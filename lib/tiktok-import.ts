@@ -3,7 +3,8 @@ import "server-only";
 import {
   getActiveTikTokConnections,
   getLatestTikTokOrderUpdatedAt,
-  hasImportedTikTokOrders,
+  hasCompletedTikTokBackfill,
+  markTikTokBackfillCompleted,
   updateTikTokConnectionShop,
   updateTikTokConnectionTokens,
 } from "@/lib/repository";
@@ -20,6 +21,16 @@ type TikTokShop = {
 type TikTokOrderSearchResult = {
   orders: UnknownRecord[];
   nextPageToken?: string;
+};
+
+type SqlStatement = {
+  sql: string;
+  args: (string | number | null)[];
+};
+
+type TikTokMappings = {
+  byExternalVariant: Map<string, string[]>;
+  byExternalProduct: Map<string, string[]>;
 };
 
 export type TikTokImportResult = {
@@ -153,7 +164,7 @@ async function searchOrderRecords(input: { accessToken: string; shopCipher: stri
       accessToken: input.accessToken,
       query: {
         shop_cipher: input.shopCipher,
-        page_size: 100,
+        page_size: 50,
         page_token: pageToken,
         sort_field: "update_time",
         sort_order: "DESC",
@@ -185,34 +196,43 @@ async function getOrderDetails(input: { accessToken: string; shopCipher: string;
   return details;
 }
 
-async function confirmedVariantId(input: { externalVariantId: string; externalProductId: string }) {
+async function loadTikTokMappings(): Promise<TikTokMappings> {
   const db = await getTursoClient();
-  if (input.externalVariantId) {
-    const mapped = await db.execute({
-      sql: `SELECT variant_id FROM channel_mappings
-            WHERE channel = 'tiktok' AND active = 1 AND status = 'confirmed' AND multiplier = 1 AND external_variant_id = ?
-            LIMIT 2`,
-      args: [input.externalVariantId],
-    });
-    if (mapped.rows.length === 1) return text(mapped.rows[0].variant_id) || null;
+  const result = await db.execute(`SELECT external_variant_id, external_product_id, variant_id
+    FROM channel_mappings
+    WHERE channel = 'tiktok' AND active = 1 AND status = 'confirmed' AND multiplier = 1
+      AND (external_variant_id IS NOT NULL OR external_product_id IS NOT NULL)`);
+  const byExternalVariant = new Map<string, string[]>();
+  const byExternalProduct = new Map<string, string[]>();
+  for (const row of result.rows) {
+    const variantId = text(row.variant_id);
+    if (!variantId) continue;
+    const externalVariantId = text(row.external_variant_id);
+    const externalProductId = text(row.external_product_id);
+    if (externalVariantId) byExternalVariant.set(externalVariantId, [...(byExternalVariant.get(externalVariantId) ?? []), variantId]);
+    if (externalProductId) byExternalProduct.set(externalProductId, [...(byExternalProduct.get(externalProductId) ?? []), variantId]);
   }
-  if (input.externalProductId) {
-    const mapped = await db.execute({
-      sql: `SELECT variant_id FROM channel_mappings
-            WHERE channel = 'tiktok' AND active = 1 AND status = 'confirmed' AND multiplier = 1 AND external_product_id = ?
-            LIMIT 2`,
-      args: [input.externalProductId],
-    });
-    if (mapped.rows.length === 1) return text(mapped.rows[0].variant_id) || null;
-  }
-  return null;
+  return { byExternalVariant, byExternalProduct };
 }
 
-async function upsertOrder(order: UnknownRecord, initialBackfill: boolean) {
-  const sourceOrderId = orderId(order);
-  if (!sourceOrderId) return false;
+function mappedVariantId(values: string[] | undefined) {
+  return values?.length === 1 ? values[0] : null;
+}
 
-  const db = await getTursoClient();
+function confirmedVariantId(input: { externalVariantId: string; externalProductId: string }, mappings: TikTokMappings) {
+  if (input.externalVariantId) {
+    const mapped = mappedVariantId(mappings.byExternalVariant.get(input.externalVariantId));
+    if (mapped) return mapped;
+  }
+  return input.externalProductId
+    ? mappedVariantId(mappings.byExternalProduct.get(input.externalProductId))
+    : null;
+}
+
+function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, mappings: TikTokMappings): SqlStatement[] | undefined {
+  const sourceOrderId = orderId(order);
+  if (!sourceOrderId) return undefined;
+
   const address = record(order.recipient_address) ?? record(order.shipping_address);
   const payment = record(order.payment);
   const lines = records(order.line_items ?? order.order_line_list ?? order.items);
@@ -225,7 +245,7 @@ async function upsertOrder(order: UnknownRecord, initialBackfill: boolean) {
   const shipping = cents(payment?.shipping_fee ?? order.shipping_fee);
   const tax = cents(payment?.tax ?? payment?.tax_amount ?? order.tax_amount);
   const currency = text(payment?.currency ?? order.currency) || "GBP";
-  const statements: { sql: string; args: (string | number | null)[] }[] = [{
+  const statements: SqlStatement[] = [{
     sql: `INSERT INTO orders (id, source, source_order_id, order_number, customer_name, customer_email, customer_phone,
                               shipping_address_json, currency, total_amount, subtotal_amount, shipping_amount, tax_amount,
                               financial_status, fulfillment_status, source_created_at, source_updated_at, imported_at)
@@ -266,7 +286,7 @@ async function upsertOrder(order: UnknownRecord, initialBackfill: boolean) {
       const externalLineId = text(line.id ?? line.order_line_id) || `${sourceOrderId}:${index}`;
       const externalVariantId = text(line.sku_id ?? line.variant_id);
       const externalProductId = text(line.product_id);
-      const variantId = await confirmedVariantId({ externalVariantId, externalProductId });
+      const variantId = confirmedVariantId({ externalVariantId, externalProductId }, mappings);
       statements.push({
         sql: `INSERT INTO order_items (id, order_id, variant_id, source_line_item_id, title, variant_title, sku, quantity, unit_price_amount, image_url)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -294,8 +314,7 @@ async function upsertOrder(order: UnknownRecord, initialBackfill: boolean) {
       args: [id, now, now, now, now],
     });
   }
-  await db.batch(statements, "write");
-  return true;
+  return statements;
 }
 
 /** Imports the seller's authorized TikTok Shop orders into the shared order model. */
@@ -304,11 +323,14 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
   const connections = await getActiveTikTokConnections();
   if (connections.length === 0) throw new TikTokNotConnectedError();
 
-  const initialBackfill = !(await hasImportedTikTokOrders());
+  const initialBackfill = !(await hasCompletedTikTokBackfill());
   const updatedAfter = initialBackfill ? undefined : await getLatestTikTokOrderUpdatedAt();
   const importedOrderIds = new Set<string>();
+  const db = await getTursoClient();
+  const mappings = await loadTikTokMappings();
   let shopsImported = 0;
   let lastError: unknown;
+  let importFailed = false;
 
   for (const connection of connections) {
     try {
@@ -328,16 +350,27 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
         const ids = [...new Set(searchResults.map(orderId).filter(Boolean))];
         const details = ids.length > 0 ? await getOrderDetails({ accessToken, shopCipher: shop.cipher, orderIds: ids }) : [];
         const completeOrders = details.length > 0 ? details : searchResults;
+        let pendingStatements: SqlStatement[] = [];
         for (const order of completeOrders) {
-          if (await upsertOrder(order, initialBackfill)) importedOrderIds.add(orderId(order));
+          const statements = buildOrderStatements(order, initialBackfill, mappings);
+          if (!statements) continue;
+          pendingStatements.push(...statements);
+          importedOrderIds.add(orderId(order));
+          if (pendingStatements.length >= 250) {
+            await db.batch(pendingStatements, "write");
+            pendingStatements = [];
+          }
         }
+        if (pendingStatements.length > 0) await db.batch(pendingStatements, "write");
       }
     } catch (error) {
       lastError = error;
+      importFailed = true;
     }
   }
 
   if (shopsImported === 0 && lastError) throw lastError;
   if (shopsImported === 0) throw new Error("TikTok Shop returned no authorized shops for this connection");
+  if (initialBackfill && !importFailed) await markTikTokBackfillCompleted();
   return { orders: importedOrderIds.size, shops: shopsImported, baselineOrders: initialBackfill ? importedOrderIds.size : 0 };
 }

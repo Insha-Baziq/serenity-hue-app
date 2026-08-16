@@ -335,10 +335,24 @@ export async function updateTikTokConnectionShop(input: { id: string; shopId: st
   });
 }
 
-export async function hasImportedTikTokOrders() {
+export async function hasCompletedTikTokBackfill() {
   const db = await getTursoClient();
-  const result = await db.execute("SELECT 1 FROM orders WHERE source = 'tiktok' LIMIT 1");
+  const result = await db.execute(
+    "SELECT 1 FROM tiktok_import_state WHERE id = 'global' AND backfill_completed_at IS NOT NULL LIMIT 1",
+  );
   return result.rows.length > 0;
+}
+
+export async function markTikTokBackfillCompleted() {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO tiktok_import_state (id, backfill_completed_at, updated_at)
+          VALUES ('global', ?, ?)
+          ON CONFLICT(id) DO UPDATE SET backfill_completed_at = excluded.backfill_completed_at,
+            updated_at = excluded.updated_at`,
+    args: [now, now],
+  });
 }
 
 export async function getLatestTikTokOrderUpdatedAt() {

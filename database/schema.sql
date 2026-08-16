@@ -250,3 +250,9 @@ CREATE TABLE IF NOT EXISTS tiktok_connections (
 );
 
 CREATE INDEX IF NOT EXISTS tiktok_connections_status_idx ON tiktok_connections(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS tiktok_import_state (
+  id TEXT PRIMARY KEY,
+  backfill_completed_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
