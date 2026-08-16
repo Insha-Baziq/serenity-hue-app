@@ -42,4 +42,4 @@ After deployment, create one schedule to call:
 POST https://YOUR_APP_URL/api/jobs/reconcile
 ```
 
-with cron expression `*/15 * * * *`. The route verifies QStash signatures when both signing keys are present. Start at 15 minutes: direct webhooks deliver the live path, and this job closes gaps without wasteful polling.
+with cron expression `*/30 * * * *`. The route verifies QStash signatures when both signing keys are present. Direct webhooks deliver the live path, and this job closes gaps with a 30-minute reconciliation cadence.

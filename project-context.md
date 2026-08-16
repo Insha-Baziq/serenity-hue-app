@@ -35,7 +35,7 @@ The client previously had a static HTML dashboard generated with Claude. It was 
 - The repository layer switches to Turso when `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are present; no app code should need a large rewrite for that move.
 - The production app is deployed to Vercel via the CLI at `https://serenity-hue-operations.vercel.app`, with server functions configured for Vercel's Dublin (`dub1`) region.
 - Supabase, Neon, Cloudflare D1, and Cloudflare hosting are not selected.
-- Upstash QStash EU is configured to call the production reconciliation endpoint every five minutes. The manual **Sync now** control remains available for an immediate refresh.
+- Upstash QStash EU is intended to call the production reconciliation endpoint every 30 minutes (`*/30 * * * *`). The manual **Sync now** control remains available for an immediate refresh.
 
 ### Inventory philosophy
 
@@ -192,7 +192,7 @@ TikTok is implemented as a direct server-side integration:
 - `POST /api/sync` runs a manual direct-channel reconciliation and is used by the **Sync now** button.
 - `POST /api/jobs/reconcile` is the scheduled endpoint. It verifies QStash signatures only when both QStash signing keys are configured.
 - Sync leases in the database prevent overlapping reconciliation jobs.
-- QStash schedule `serenity-hue-shopify-sync` is active in the EU region with cron `*/5 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys, and an initial production run succeeded on 15 August 2026.
+- QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/30 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
 
 ## Data model
 
