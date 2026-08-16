@@ -33,10 +33,19 @@ type TikTokMappings = {
   byExternalProduct: Map<string, string[]>;
 };
 
+export type TikTokRedactedSample = {
+  orderId: "[redacted]";
+  customer: "[redacted]";
+  lineItems: number;
+  hasShippingAddress: boolean;
+  hasEmail: boolean;
+};
+
 export type TikTokImportResult = {
   orders: number;
   shops: number;
   baselineOrders: number;
+  redactedSample?: TikTokRedactedSample;
 };
 
 export class TikTokNotConnectedError extends Error {
@@ -331,6 +340,7 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
   let shopsImported = 0;
   let lastError: unknown;
   let importFailed = false;
+  let redactedSample: TikTokRedactedSample | undefined;
 
   for (const connection of connections) {
     try {
@@ -354,6 +364,15 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
         for (const order of completeOrders) {
           const statements = buildOrderStatements(order, initialBackfill, mappings);
           if (!statements) continue;
+          if (!redactedSample) {
+            redactedSample = {
+              orderId: "[redacted]",
+              customer: "[redacted]",
+              lineItems: records(order.line_items ?? order.order_line_list ?? order.items).length,
+              hasShippingAddress: shippingAddress(order).length > 0,
+              hasEmail: Boolean(text(order.buyer_email ?? order.customer_email)),
+            };
+          }
           pendingStatements.push(...statements);
           importedOrderIds.add(orderId(order));
           if (pendingStatements.length >= 250) {
@@ -372,5 +391,10 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
   if (shopsImported === 0 && lastError) throw lastError;
   if (shopsImported === 0) throw new Error("TikTok Shop returned no authorized shops for this connection");
   if (initialBackfill && !importFailed) await markTikTokBackfillCompleted();
-  return { orders: importedOrderIds.size, shops: shopsImported, baselineOrders: initialBackfill ? importedOrderIds.size : 0 };
+  return {
+    orders: importedOrderIds.size,
+    shops: shopsImported,
+    baselineOrders: initialBackfill ? importedOrderIds.size : 0,
+    redactedSample,
+  };
 }

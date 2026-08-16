@@ -13,6 +13,7 @@ async function reconcile() {
     recordsSeen: result.recordsSeen,
     recordsChanged: result.recordsChanged,
     message: result.message,
+    tiktokSample: result.tiktokSample,
   });
   return Response.json(result, { status: result.ok ? 200 : 503 });
 }

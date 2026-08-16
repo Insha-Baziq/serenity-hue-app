@@ -4,7 +4,7 @@ import { hasParcel2GoCredentials } from "@/lib/parcel2go";
 import { importRecentParcel2GoShipments } from "@/lib/parcel2go-import";
 import { importShopifySnapshot } from "@/lib/shopify-import";
 import { hasShopifyCredentials } from "@/lib/shopify";
-import { importTikTokOrders, TikTokNotConnectedError } from "@/lib/tiktok-import";
+import { importTikTokOrders, TikTokNotConnectedError, type TikTokRedactedSample } from "@/lib/tiktok-import";
 
 export type SyncTrigger = "manual" | "scheduled" | "webhook";
 
@@ -15,6 +15,7 @@ export type SyncResult = {
   recordsSeen: number;
   recordsChanged: number;
   completedAt: string;
+  tiktokSample?: TikTokRedactedSample;
 };
 
 /**
@@ -41,11 +42,13 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
 
     const imported = await importShopifySnapshot();
     let tiktokOrders = 0;
+    let tiktokSample: TikTokRedactedSample | undefined;
     let tiktokNote = " TikTok Shop is awaiting seller authorization.";
     const failures: string[] = [];
     try {
       const tiktok = await importTikTokOrders();
       tiktokOrders = tiktok.orders;
+      tiktokSample = tiktok.redactedSample;
       tiktokNote = ` TikTok Shop refreshed ${tiktok.orders} orders from ${tiktok.shops} ${tiktok.shops === 1 ? "shop" : "shops"}.`;
       if (tiktok.baselineOrders > 0) tiktokNote += ` ${tiktok.baselineOrders} initial TikTok orders were kept as the inventory baseline.`;
     } catch (error) {
@@ -77,7 +80,7 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
     const recordsSeen = imported.orders + imported.variants + tiktokOrders + parcel2GoRecords;
     const status = failures.length > 0 ? "failed" : "succeeded";
     await recordSyncRun({ id, trigger, provider: "direct", status, message, recordsSeen, recordsChanged: recordsSeen, finished: true });
-    return { ok: status === "succeeded", status, message, recordsSeen, recordsChanged: recordsSeen, completedAt };
+    return { ok: status === "succeeded", status, message, recordsSeen, recordsChanged: recordsSeen, completedAt, tiktokSample };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected reconciliation error";
     await recordSyncRun({ id, trigger, provider: "direct", status: "failed", message, finished: true });
