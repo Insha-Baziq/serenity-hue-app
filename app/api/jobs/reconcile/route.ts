@@ -7,6 +7,13 @@ export const maxDuration = 300;
 
 async function reconcile() {
   const result = await syncDirectChannels("scheduled");
+  console.info("[scheduled-sync-summary]", {
+    ok: result.ok,
+    status: result.status,
+    recordsSeen: result.recordsSeen,
+    recordsChanged: result.recordsChanged,
+    message: result.message,
+  });
   return Response.json(result, { status: result.ok ? 200 : 503 });
 }
 
