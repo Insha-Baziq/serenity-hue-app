@@ -1070,18 +1070,15 @@ body {
 .ci-logo--tiktok { background: #010101; }
 .ci-mk .ci-logo { box-shadow: none; }
 
-.ci-banner { display: flex; align-items: center; gap: 14px; margin: 20px 0 8px; padding: 14px 18px; border: 1px solid var(--accent-line); border-left: 4px solid var(--accent); border-radius: 12px; background: var(--accent-tint); transition: background .3s ease, border-color .3s ease; }
-.ci-banner p { font-size: 13px; color: var(--accent-deep); }
-.ci-banner p b { font-weight: 800; }
-.ci-banner p span { color: var(--ink-soft); font-weight: 500; }
-.ci-refresh { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 15px; border: 1px solid var(--accent-line); border-radius: 10px; background: #fff; color: var(--accent-deep); font-size: 12px; font-weight: 750; transition: transform .16s ease, background .2s ease; }
-.ci-refresh:not(:disabled):hover { transform: translateY(-1px); background: var(--accent-tint); }
-.ci-refresh:disabled { opacity: .6; }
-.ci-notice { margin: 10px 0 0; padding: 11px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink-soft); font-size: 12px; }
+.ci-notice { margin: 16px 0 0; padding: 11px 15px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-tint); color: var(--accent-deep); font-size: 12px; font-weight: 600; }
 
+.ci-switch { margin-top: 20px; }
 .ci-workspace .inventory-toolbar { display: flex; align-items: center; gap: 12px; }
 .ci-count { margin-left: auto; padding-right: 4px; font-size: 11px; font-weight: 700; color: var(--ink-faint); }
-.ci-table { min-width: 780px; }
+.ci-table { min-width: 940px; }
+.ci-sku { color: #695f64 !important; font-size: 12px !important; }
+.ci-muted { color: #7c6e75 !important; }
+.ci-row--edited { background: #fff7fb; box-shadow: inset 2px 0 0 var(--accent); }
 .ci-qty { text-align: center !important; font-variant-numeric: tabular-nums; }
 .ci-qty--active { background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent-line); transition: background .3s ease; }
 th.ci-qty--active { color: var(--accent-deep); }
@@ -1108,35 +1105,7 @@ th.ci-qty--active { color: var(--accent-deep); }
 .ci-chip--risk { background: #ffeef0; color: #bb3442; }
 .ci-chip--unset { background: #f0eaed; color: #7a6a72; }
 
-.ci-logwrap { margin-top: 34px; }
-.ci-logwrap h2 { font-family: "Iowan Old Style", Baskerville, serif; font-size: 26px; font-weight: 400; letter-spacing: -.04em; color: var(--ink); }
-.ci-logwrap__sub { margin: 6px 0 18px; color: var(--ink-soft); font-size: 13px; }
-.ci-log { border: 1px solid #e4dce0; border-radius: 14px; overflow: hidden; background: #fffefd; }
-.ci-logrow { display: grid; grid-template-columns: 92px 132px 1fr auto; gap: 14px; align-items: center; padding: 13px 18px; border-bottom: 1px solid #f0eaed; font-size: 12px; }
-.ci-logrow:last-child { border-bottom: 0; }
-.ci-logrow:hover { background: #fff9fc; }
-.ci-when { color: var(--ink-faint); font-size: 11px; }
-.ci-who { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: #4c3a45; }
-.ci-av { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; font-weight: 800; color: #fff; }
-.ci-av--staff { background: linear-gradient(140deg, #7f2d70, #b43b8e); }
-.ci-av--sys { background: #d7cad1; color: #6a5a63; }
-.ci-who small { display: block; font-weight: 600; color: var(--ink-faint); font-size: 10px; }
-.ci-what { color: #55454e; overflow: hidden; text-overflow: ellipsis; }
-.ci-badge { font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 6px; }
-.ci-badge--s { background: #eef8ea; color: #42763f; }
-.ci-badge--t { background: #fff0f4; color: #c02b52; }
-.ci-badge--m { background: #f8e9f2; color: #8d2867; }
-.ci-fromto { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-.ci-reason { color: var(--ink-faint); }
-.ci-delta { font-variant-numeric: tabular-nums; font-weight: 800; }
-.ci-delta--up { color: #2f7c54; }
-.ci-delta--down { color: #bb3442; }
-
 @media (max-width: 720px) {
   .ci-switch { grid-template-columns: 1fr; }
   .ci-chan__sub { display: none; }
-  .ci-banner { flex-wrap: wrap; }
-  .ci-refresh { margin-left: 0; width: 100%; justify-content: center; }
-  .ci-logrow { grid-template-columns: 1fr auto; gap: 6px 12px; }
-  .ci-when { order: 3; grid-column: 1 / -1; }
 }

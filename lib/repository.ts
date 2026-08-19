@@ -544,25 +544,32 @@ const LEDGER_TONES = ["blush", "smoke", "taupe", "amber", "rose"] as const;
 /** The three-inventory view: master (in-app) + fetched Shopify and TikTok display levels per variant. */
 export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
   const db = await getTursoClient();
-  const [variantsResult, masterResult, tiktokResult, syncedResult, ledgerResult] = await Promise.all([
-    db.execute(`SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [variantsResult, masterResult, tiktokResult, syncedResult, salesResult] = await Promise.all([
+    db.execute(`SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity, v.lead_time_days, v.packaging_type
                 FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`),
     db.execute(`SELECT variant_id, quantity FROM master_inventory`),
     db.execute(`SELECT variant_id, SUM(available_quantity) AS qty FROM channel_inventory WHERE channel = 'tiktok' AND variant_id IS NOT NULL GROUP BY variant_id`),
     db.execute(`SELECT MAX(synced_at) AS synced_at FROM channel_inventory WHERE channel = 'tiktok'`),
-    db.execute(`SELECT l.id, l.inventory, l.change_type, l.actor, l.quantity_before, l.quantity_after, l.quantity_delta, l.reference, l.created_at,
-                  CASE WHEN v.id IS NOT NULL THEN p.title || CASE WHEN v.title <> 'Default Title' THEN ' — ' || v.title ELSE '' END ELSE 'Inventory item' END AS item
-                FROM inventory_ledger l
-                LEFT JOIN variants v ON v.id = l.variant_id
-                LEFT JOIN products p ON p.id = v.product_id
-                ORDER BY l.created_at DESC LIMIT 12`),
+    db.execute({
+      sql: `SELECT oi.variant_id,
+              SUM(CASE WHEN o.source_created_at >= ? THEN oi.quantity ELSE 0 END) AS sold_7d,
+              SUM(oi.quantity) AS sold_30d
+            FROM order_items oi JOIN orders o ON o.id = oi.order_id
+            WHERE o.source_created_at >= ? AND oi.variant_id IS NOT NULL GROUP BY oi.variant_id`,
+      args: [sevenDaysAgo, thirtyDaysAgo],
+    }),
   ]);
 
   const masterByVariant = new Map(masterResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
   const tiktokByVariant = new Map(tiktokResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.qty)]));
+  const soldByVariant = new Map(salesResult.rows.map((row) => [stringValue(row.variant_id), { sold7d: numberValue(row.sold_7d), sold30d: numberValue(row.sold_30d) }]));
 
   const rows: ChannelInventoryRow[] = variantsResult.rows.map((row, index) => {
     const variantId = stringValue(row.id);
+    const leadTimeDays = nullableNumber(row.lead_time_days);
+    const sales = soldByVariant.get(variantId) ?? { sold7d: 0, sold30d: 0 };
     return {
       variantId,
       product: stringValue(row.product),
@@ -572,27 +579,14 @@ export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
       master: masterByVariant.has(variantId) ? masterByVariant.get(variantId)! : null,
       shopify: numberValue(row.available_quantity),
       tiktok: tiktokByVariant.has(variantId) ? tiktokByVariant.get(variantId)! : null,
+      sold7d: sales.sold7d,
+      sold30d: sales.sold30d,
+      leadTime: leadTimeDays ? `${leadTimeDays} days` : "—",
+      packagingType: stringValue(row.packaging_type) || "Not set",
     };
   });
 
-  const ledger: InventoryLedgerEntry[] = ledgerResult.rows.map((row) => {
-    const changeType = stringValue(row.change_type) as InventoryLedgerEntry["changeType"];
-    return {
-      id: stringValue(row.id),
-      item: stringValue(row.item) || "Inventory item",
-      inventory: stringValue(row.inventory) as InventoryLedgerEntry["inventory"],
-      changeType,
-      actor: stringValue(row.actor),
-      isSystem: changeType === "sale",
-      quantityBefore: nullableNumber(row.quantity_before),
-      quantityAfter: nullableNumber(row.quantity_after),
-      quantityDelta: numberValue(row.quantity_delta),
-      reference: stringValue(row.reference),
-      createdAt: stringValue(row.created_at),
-    };
-  });
-
-  return { rows, ledger, tiktokSyncedAt: stringValue(syncedResult.rows[0]?.synced_at) || null, sync: await getLatestSync() };
+  return { rows, tiktokSyncedAt: stringValue(syncedResult.rows[0]?.synced_at) || null, sync: await getLatestSync() };
 }
 
 /** Appends one immutable audit-ledger row. Never updates or deletes existing rows. */
@@ -630,6 +624,18 @@ export async function setMasterQuantity(input: { variantId: string; quantity: nu
   });
   await recordInventoryLedgerEntry({ variantId: input.variantId, inventory: "master", changeType: "manual_edit", actor: input.actor, quantityBefore: before, quantityAfter: quantity, reference: "recount" });
   return { before, after: quantity };
+}
+
+/** Saves a batch of master edits in one action; each changed variant records one ledger entry. */
+export async function setMasterQuantities(input: { updates: { variantId: string; quantity: number }[]; actor: string }): Promise<{ saved: number }> {
+  let saved = 0;
+  for (const update of input.updates) {
+    if (typeof update.variantId !== "string" || !update.variantId.trim()) continue;
+    if (!Number.isFinite(update.quantity) || update.quantity < 0) continue;
+    await setMasterQuantity({ variantId: update.variantId, quantity: update.quantity, actor: input.actor });
+    saved += 1;
+  }
+  return { saved };
 }
 
 export type AlertCandidate = Omit<InventoryAlert, "id" | "firstSeenAt" | "lastSeenAt">;
