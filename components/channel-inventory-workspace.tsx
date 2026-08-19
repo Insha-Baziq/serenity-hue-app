@@ -33,15 +33,6 @@ function ChannelLogo({ channel, size = 42 }: { channel: InventoryChannel; size?:
   return <span className="ci-logo ci-logo--master" style={{ width: size, height: size }} aria-hidden="true">SH</span>;
 }
 
-type Status = { cls: "ok" | "low" | "risk" | "unset"; label: string };
-
-function statusFor(master: number | null, shopify: number, tiktok: number | null): Status {
-  if (master === null) return { cls: "unset", label: "Set master" };
-  if (master < shopify + (tiktok ?? 0)) return { cls: "risk", label: "Oversell risk" };
-  if (tiktok !== null && tiktok <= 3) return { cls: "low", label: "TikTok selling out" };
-  return { cls: "ok", label: "Scarcity OK" };
-}
-
 const PAGE_SIZES = [25, 40, 50];
 
 export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInventorySnapshot }) {
@@ -170,34 +161,27 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
             <thead>
               <tr>
                 <th>Product</th>
-                <th>SKU</th>
                 <th className={`ci-qty${channel === "master" ? " ci-qty--active" : ""}`}><span className="ci-colhead ci-colhead--master"><span className="ci-mk">SH</span>Master</span></th>
                 <th className={`ci-qty${channel === "shopify" ? " ci-qty--active" : ""}`}><span className="ci-colhead ci-colhead--shopify"><span className="ci-mk"><ChannelLogo channel="shopify" size={16} /></span>Shopify</span></th>
                 <th className={`ci-qty${channel === "tiktok" ? " ci-qty--active" : ""}`}><span className="ci-colhead ci-colhead--tiktok"><span className="ci-mk"><ChannelLogo channel="tiktok" size={16} /></span>TikTok</span></th>
-                <th className="ci-qty">Sold 7d</th>
                 <th>Lead time</th>
                 <th>Packaging</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {visible.map((row) => {
                 const master = masterOf(row);
-                const status = statusFor(master, row.shopify, row.tiktok);
                 const edited = row.variantId in drafts && drafts[row.variantId] !== (row.master ?? 0);
                 return (
                   <tr key={row.variantId} className={edited ? "ci-row--edited" : ""}>
                     <td className="inventory-product ci-product"><ProductArt tone={row.imageTone} size="small" /><span><strong>{row.product}</strong><small>{row.variant && row.variant !== "Default Title" ? row.variant : "Default variant"}</small></span></td>
-                    <td className="ci-sku">{row.sku || "—"}</td>
                     {channel === "master"
                       ? <td className="ci-qty ci-qty--active"><span className="ci-stepper"><button type="button" aria-label="Decrease" onClick={() => editMaster(row, (master ?? 0) - 1)}><Minus size={14} /></button><input key={`${row.variantId}-${row.master}`} inputMode="numeric" value={master ?? 0} onChange={(event) => editMaster(row, Number(event.target.value.replace(/\D/g, "")) || 0)} /><button type="button" aria-label="Increase" onClick={() => editMaster(row, (master ?? 0) + 1)}><Plus size={14} /></button></span></td>
                       : <td className="ci-qty"><span className="ci-num ci-num--master">{master ?? "—"}</span></td>}
                     <td className={`ci-qty${channel === "shopify" ? " ci-qty--active" : ""}`}><span className={`ci-num${channel === "shopify" ? "" : " ci-num--dim"}`}>{row.shopify}</span></td>
                     <td className={`ci-qty${channel === "tiktok" ? " ci-qty--active" : ""}`}><span className={`ci-num${channel === "tiktok" ? "" : " ci-num--dim"}`}>{row.tiktok ?? "—"}</span></td>
-                    <td className="ci-qty ci-muted">{row.sold7d || "—"}</td>
                     <td className="ci-muted">{row.leadTime}</td>
                     <td className="ci-muted">{row.packagingType}</td>
-                    <td><span className={`ci-chip ci-chip--${status.cls}`}><i />{status.label}</span></td>
                   </tr>
                 );
               })}
