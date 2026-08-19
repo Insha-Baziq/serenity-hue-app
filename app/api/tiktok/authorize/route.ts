@@ -1,5 +1,6 @@
 import { createTikTokOAuthState } from "@/lib/repository";
 import { hasTikTokAppCredentials, hashTikTokOAuthState, tiktokAuthorizationUrl } from "@/lib/tiktok";
+import { requireApiSession } from "@/lib/auth-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,7 +12,8 @@ function stateCookie(value: string, maxAge: number) {
   return `tiktok_oauth_state=${value}; Max-Age=${maxAge}; Path=/api/tiktok/callback; HttpOnly; SameSite=Lax${secure}`;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
   if (!hasTikTokAppCredentials()) {
     return Response.json({ message: "TikTok app credentials are not configured" }, { status: 503 });
   }

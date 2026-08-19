@@ -3,25 +3,37 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronDown, ClipboardList, Home, Package, type LucideIcon } from "lucide-react";
+import { Boxes, ChevronDown, ClipboardList, Home, LogOut, Package, Users, type LucideIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { authClient } from "@/lib/auth-client";
 
 const primaryItems: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/overview", label: "Overview", icon: Home },
   { href: "/orders", label: "Orders", icon: ClipboardList },
+  { href: "/employees", label: "Employees", icon: Users },
 ];
 
 const mobileItems: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/overview", label: "Overview", icon: Home },
   { href: "/orders", label: "Orders", icon: ClipboardList },
+  { href: "/employees", label: "Employees", icon: Users },
   { href: "/inventory/products", label: "Products", icon: Package },
   { href: "/inventory/packaging", label: "Packaging", icon: Boxes },
 ];
 
 export function Sidebar() {
+  const router = useRouter();
   const pathname = usePathname();
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const inventoryActive = pathname.startsWith("/inventory");
+
+  async function signOut() {
+    await authClient.signOut();
+    router.replace("/login");
+    router.refresh();
+  }
+
   return (
     <aside className="sidebar">
       <div className="brand-lockup">
@@ -45,11 +57,11 @@ export function Sidebar() {
         </div>}
       </nav>
       <div className="sidebar-spacer" />
-      <div className="sidebar-account" aria-label="Current workspace">
+      <button type="button" className="sidebar-account" aria-label="Sign out of Serenity Hue Operations" onClick={signOut}>
         <span className="sidebar-account__avatar" aria-hidden="true">SH</span>
         <span className="sidebar-account__copy"><strong>Serenity Hue</strong><small>Operations</small></span>
-        <ChevronDown className="sidebar-account__chevron" aria-hidden="true" size={15} strokeWidth={1.8} />
-      </div>
+        <LogOut className="sidebar-account__chevron" aria-hidden="true" size={15} strokeWidth={1.8} />
+      </button>
       <nav aria-label="Mobile navigation" className="mobile-navigation">
         {mobileItems.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;

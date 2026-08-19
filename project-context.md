@@ -1,6 +1,6 @@
 # Serenity Hue Operations — Project Context
 
-Last updated: 16 August 2026
+Last updated: 18 August 2026
 
 This file is the working handoff for the Serenity Hue internal operations app. Read it before making product, data-model, integration, or UI decisions.
 
@@ -55,25 +55,40 @@ npm run dev
 
 Primary local URLs:
 
+Every route under `app/(operations)/` is gated: the operations layout calls `getCurrentSession()` and redirects to `/login` when there is no valid Better Auth session. The root route `/` also redirects to `/login`.
+
 | Route | Current behaviour |
 | --- | --- |
-| `/overview` | Intentional placeholder: “This page is being set up.” |
-| `/orders` | Live Shopify orders table and order detail sheet. |
+| `/login` | Sign-in screen (public). Split-panel layout: campaign portrait + email/password form via Better Auth. |
+| `/overview` | Live overview workspace: order/channel summary, inventory counts (units on hand, live/low/out-of-stock variants, packaging types), recent orders, sync status, and a **Sync now** button. No longer a placeholder. |
+| `/orders` | Live Shopify (and authorized TikTok) orders table and order detail sheet. |
+| `/employees` | Staff list (name, email, status, last seen) with a create-employee form. |
 | `/inventory` | Redirects to `/inventory/products`. |
 | `/inventory/products` | Product-level inventory table with variant detail sheet. |
 | `/inventory/packaging` | Separate packaging materials table. |
 
-Routes such as `/analytics`, `/products`, `/sync-health`, and `/settings` are deliberately not part of the current navigation or feature scope.
+`/overview` is served by the `[section]` dynamic route, which `notFound()`s for any section other than `overview`. Routes such as `/analytics`, `/products`, `/sync-health`, and `/settings` are deliberately not part of the current navigation or feature scope.
 
 ### Sidebar
 
-The sidebar contains only:
+The desktop sidebar contains:
 
 1. Overview
 2. Orders
-3. Inventory — an expandable item with **Products** and **Packaging** sub-pages
+3. Employees
+4. Inventory — an expandable item with **Products** and **Packaging** sub-pages
+
+A **Sign out** control sits at the bottom of the sidebar and calls `authClient.signOut()`. The mobile bottom navigation exposes Overview, Orders, Employees, Products, and Packaging.
 
 The old Operations section, Sync health, and Settings navigation entries were removed at the user’s request.
+
+### Employees / staff authentication
+
+Implemented features:
+
+- `/employees` lists Better Auth users joined to their sessions: name, email, `active`/`offline` status (any unexpired session), and last-seen time (`components/employees-workspace.tsx`).
+- The create-employee form posts to `POST /api/employees`, which requires a valid session, validates name/email/password, and calls `createEmployee()` in `lib/repository.ts` to insert a `user` + credential `account` row with a hashed password.
+- There is no self-service sign-up in the UI; new staff are created by an already-authenticated user, or bootstrapped from `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` on first request (see Authentication below).
 
 ### Orders page
 
@@ -174,7 +189,7 @@ The Parcel2Go client-credentials flow is server-side only. `PARCEL2GO_CLIENT_ID`
 - The response contains courier/service, parcel/transaction IDs, tracking milestone timestamps, estimate, a `tracking-page` link, booking/collection dates, and delivery-recipient details. Recipient email, phone, name, and address are used in memory only to make high-confidence matches and are not copied into the delivery tables.
 - The importer links a delivery automatically only when an exact source reference is found or when the recipient and delivery-address evidence agrees with a Shopify order in the 45-day booking window. Ties and weak matches remain unlinked; never show delivery status against an uncertain order.
 - `POST /api/webhooks/parcel2go` is deployed and deliberately excluded from Basic Auth. It verifies the Parcel2Go HMAC-SHA256 signature, rejects stale/duplicate events, and is active when Parcel2Go is configured with the deployed webhook URL and its matching secret.
-- The existing five-minute reconciliation refreshes Parcel2Go deliveries once the deployed code is active. Webhooks will prompt an additional refresh once configured.
+- The scheduled 30-minute reconciliation refreshes Parcel2Go deliveries once the deployed code is active. Webhooks will prompt an additional refresh once configured.
 
 ### TikTok Shop
 
@@ -185,7 +200,7 @@ TikTok is implemented as a direct server-side integration:
 - `lib/tiktok.ts` signs every Open API request, refreshes expiring access tokens, and never exposes a credential to the browser.
 - `lib/tiktok-import.ts` enumerates authorized shops, pages through order updates, retrieves full order details in batches of 50, and normalizes them into `orders` and `order_items` with source `tiktok`.
 - The first history import is written as an inventory baseline, preventing historic TikTok sales from changing current stock. Later orders are eligible for existing inventory operations only when a confirmed one-to-one mapping has multiplier `1`.
-- TikTok webhooks are signature-checked, deduplicated, and acknowledged immediately. The five-minute reconciliation imports the authoritative order state, which covers lost, duplicated, or out-of-order webhook events.
+- TikTok webhooks are signature-checked, deduplicated, and acknowledged immediately. The 30-minute reconciliation imports the authoritative order state, which covers lost, duplicated, or out-of-order webhook events.
 
 ### Manual and scheduled sync
 
@@ -193,6 +208,27 @@ TikTok is implemented as a direct server-side integration:
 - `POST /api/jobs/reconcile` is the scheduled endpoint. It verifies QStash signatures only when both QStash signing keys are configured.
 - Sync leases in the database prevent overlapping reconciliation jobs.
 - QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/30 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
+
+## Authentication (Better Auth)
+
+Staff authentication uses **Better Auth** with the email + password provider. It replaced the old Basic Auth flow as the primary access control.
+
+Relevant files:
+
+- `lib/auth.ts` — server Better Auth instance, backed by the same libSQL/Turso database via `LibsqlDialect`.
+- `lib/auth-client.ts` — browser client (`createAuthClient`) used for sign-in and sign-out.
+- `lib/auth-guard.ts` — `getCurrentSession()` (page guard) and `requireApiSession()` (API guard).
+- `app/api/auth/[...all]/route.ts` — Better Auth request handler.
+- `app/login/page.tsx` + `components/login-form.tsx` — sign-in UI.
+
+Key behaviour:
+
+- `isBetterAuthConfigured()` always returns `true`, so the app **fails closed**: production uses `BETTER_AUTH_SECRET`, local development falls back to a non-production secret constant. There is no mode where auth is silently off.
+- Sign-up is disabled unless `AUTH_ALLOW_SIGN_UP=true`. Staff are added through the Employees page instead.
+- `ensureAuthDatabase()` runs on session checks. If `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` are set and no matching user exists, it bootstraps a single admin `user` + credential `account`. Remove those env values after the first admin exists.
+- `trustedOrigins` includes the resolved app URL, the Vercel production URL, and localhost. The cookie prefix is `serenity-hue`.
+- The operations layout redirects unauthenticated visitors to `/login`; API routes that mutate data (e.g. `POST /api/employees`) call `requireApiSession()` and return 401 without a session.
+- `proxy.ts` no longer issues a Basic Auth challenge — it is a pass-through, and its matcher excludes `/login`, `/api/auth`, `/api/jobs/reconcile`, `/api/webhooks/parcel2go`, and the TikTok callback/webhook routes. `INTERNAL_APP_USERNAME` / `INTERNAL_APP_PASSWORD` remain only as a documented temporary fallback and are not the active mechanism.
 
 ## Data model
 
@@ -211,6 +247,7 @@ The schema is in `database/schema.sql`. Key tables are:
 | `inventory_alerts` | Backend alert candidates; deliberately not surfaced in the current UI. |
 | `channel_mappings` | Legacy/possible future channel mapping data; not current live TikTok state. |
 | `sync_runs`, `sync_leases`, `webhook_events` | Operational sync bookkeeping. |
+| `user`, `session`, `account`, `verification` | Better Auth staff accounts, sessions, and credentials. Quoted table names because they are SQL keywords. The Employees page reads `user` joined to `session`. |
 
 ### Inventory reconciliation caveat
 
@@ -246,6 +283,7 @@ The old `tiktok_listing_map.csv` is static mapping metadata. It is **not** proof
 - A transparent black-wordmark version for the light UI is at `public/serenity-hue-logo-black.png`; the official pink monogram is retained.
 - That black-wordmark asset is currently used by `components/sidebar.tsx` and `app/icon.png` is the matching favicon.
 - `app/icon.png` is the current Next.js favicon convention asset.
+- The login screen uses its own assets in `public/`: `serenity-hue-login-logo.png` (panel logo) and `serenity-hue-login-portrait.png` (campaign image). White/enhanced wordmark variants (`serenity-hue-logo-white.png`, `serenity-hue-logo-enhanced.png`) also exist for contrast contexts.
 - Do not redesign or alter the official logo unless asked again.
 
 The user prefers clean, dense, Shopify-inspired tables over generic dashboard cards. Avoid adding promotional text, vague operational “punch lines,” arbitrary status cards, or fake analytics.
@@ -256,40 +294,62 @@ Existing local shadcn-style primitives live in `components/ui/` and use Radix wh
 
 - `.env.local` is local-only and ignored. It contains development Shopify configuration and must never be committed.
 - Parcel2Go credentials are server-only environment values. Do not prefix them with `NEXT_PUBLIC_`, commit them, or expose them to the browser.
-- `.env.example` lists the required deployment variables without values.
-- `proxy.ts` provides Basic Auth when both `INTERNAL_APP_USERNAME` and `INTERNAL_APP_PASSWORD` are set. It intentionally allows frictionless local development when they are absent.
-- The scheduled QStash route is excluded from Basic Auth so QStash can call it; signature verification protects it.
-- Vercel SSO deployment protection is disabled because app-level Basic Auth protects staff pages while allowing the QStash route to run. Add proper staff authentication if the app grows beyond one private client team.
+- `.env.example` lists the required deployment variables without values, including the Better Auth values (`BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_ALLOW_SIGN_UP`, optional `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD`).
+- Staff access is now enforced by **Better Auth** (see the Authentication section), not Basic Auth. Keep `BETTER_AUTH_SECRET` server-side and at least 32 random characters in every deployed environment.
+- `proxy.ts` is a pass-through; `INTERNAL_APP_USERNAME` / `INTERNAL_APP_PASSWORD` are only a temporary fallback and should be removed once Better Auth is confirmed active in production.
+- The scheduled QStash route, the Better Auth handler, the login page, the TikTok callback/webhook, and the Parcel2Go webhook are excluded from the proxy matcher so they remain reachable; the sensitive endpoints protect themselves with signature verification or their own session checks.
+- Vercel SSO deployment protection is disabled because app-level Better Auth protects staff pages while allowing the QStash and webhook routes to run.
 
 ## File map
 
 ```text
 app/
+  page.tsx                             Redirects to /login
+  login/page.tsx                       Sign-in screen (public)
   (operations)/
+    layout.tsx                         Session guard + app shell
     orders/page.tsx                    Orders route
+    employees/page.tsx                 Employees / staff route
     inventory/products/page.tsx        Products route
     inventory/packaging/page.tsx       Packaging route
     inventory/page.tsx                 Redirect to Products
-    [section]/page.tsx                 Overview placeholder only
+    [section]/page.tsx                 Overview workspace (section === "overview")
+  api/auth/[...all]/route.ts           Better Auth handler
+  api/employees/route.ts               Create-employee endpoint (session-guarded)
   api/sync/route.ts                    Manual sync
   api/jobs/reconcile/route.ts          QStash scheduled sync
+  api/tiktok/authorize|callback|webhook  TikTok OAuth + webhook
+  api/webhooks/parcel2go/route.ts      Parcel2Go webhook
+  api/orders/[orderId]/parcel2go/route.ts  Order delivery detail
   api/development/import-legacy/route.ts  Dev-only legacy import
   icon.png                             Favicon
 
 components/
+  overview-workspace.tsx               Overview UI
   orders-workspace.tsx                 Orders UI
+  employees-workspace.tsx              Employees UI + create form
+  login-form.tsx                       Sign-in form
   inventory-workspace.tsx              Products inventory UI
   packaging-workspace.tsx              Packaging UI
-  sidebar.tsx                          Main navigation
+  sidebar.tsx                          Main navigation + sign out
+  status-pill.tsx                      Order/payment status pills
+  product-art.tsx                      Product thumbnail art
   table-column-picker.tsx              Reusable visible-column control
   sync-button.tsx                      Manual sync control
 
 lib/
+  auth.ts                              Better Auth server instance + admin bootstrap
+  auth-client.ts                       Better Auth browser client
+  auth-guard.ts                        Session guards for pages and API routes
   shopify.ts                           Shopify token + GraphQL client
   shopify-import.ts                    Shopify data import/upsert
+  parcel2go.ts / parcel2go-import.ts / parcel2go-matching.ts  Parcel2Go client, import, order matching
+  tiktok.ts / tiktok-import.ts         TikTok signed client + importer
   sync.ts                              Single sync entrypoint
   turso.ts                             Local libSQL / future Turso client
-  repository.ts                        Database reads and sync bookkeeping
+  repository.ts                        Database reads, employees, sync bookkeeping
+  format.ts                            Money/date formatting helpers
+  types.ts                             Shared domain types
   inventory-rules.ts                   Operational reconciliation rules
   legacy-inventory-import.ts           Development-only import of old CRM CSVs
 ```
@@ -316,10 +376,10 @@ In Parcel2Go's API credential settings, configure the webhook URL as `https://se
 2. Decide the exact TikTok Shop API access path and obtain real credentials; then implement the direct adapter and test order/stock normalization.
 3. Confirm the client’s desired stock-alert rules before surfacing alerts on Overview or elsewhere.
 4. Decide whether packaging counts should be editable in-app and, if so, implement an audited adjustment workflow instead of a cosmetic button.
-5. Monitor the five-minute direct-channel reconciliation and keep the TikTok importer incremental as order volume grows.
+5. Monitor the 30-minute direct-channel reconciliation and keep the TikTok importer incremental as order volume grows.
 6. Keep the Turso database and Vercel function region aligned with the client's location if the hosting region changes.
 7. Confirm the Vercel plan is suitable for commercial client use before long-term production operation.
-8. Replace temporary Basic Auth with proper staff authentication before the app grows beyond one private client team.
+8. Better Auth staff authentication now replaces Basic Auth. Remaining: verify it end-to-end in production, remove the `INITIAL_ADMIN_*` bootstrap and `INTERNAL_APP_*` fallback env values once the first admin exists, and add roles/permissions if staff responsibilities diverge.
 
 ## Current non-goals
 

@@ -1,7 +1,8 @@
 import "server-only";
 
 import { getTursoClient } from "@/lib/turso";
-import type { InventoryAlert, InventorySnapshot, Order, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, ProductInventory, StockMovement, SyncSnapshot } from "@/lib/types";
+import { hashPassword } from "better-auth/crypto";
+import type { Employee, InventoryAlert, InventorySnapshot, Order, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, ProductInventory, StockMovement, SyncSnapshot } from "@/lib/types";
 
 type SqlValue = string | number | null;
 
@@ -155,6 +156,60 @@ export async function getOrders(): Promise<Order[]> {
       deliveries: deliveriesByOrderId.get(id) ?? [],
     } satisfies Order;
   }));
+}
+
+export async function getEmployees(): Promise<Employee[]> {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const result = await db.execute({
+    sql: `SELECT u.id, u.name, u.email, u.image, u.createdAt,
+                 MAX(s.updatedAt) AS last_seen_at,
+                 CASE WHEN MAX(CASE WHEN s.expiresAt > ? THEN 1 ELSE 0 END) = 1
+                      THEN 'active' ELSE 'offline' END AS status
+          FROM "user" AS u
+          LEFT JOIN "session" AS s ON s.userId = u.id
+          GROUP BY u.id, u.name, u.email, u.image, u.createdAt
+          ORDER BY u.createdAt DESC`,
+    args: [now],
+  });
+
+  return result.rows.map((row) => ({
+    id: stringValue(row.id),
+    name: stringValue(row.name) || "Unnamed employee",
+    email: stringValue(row.email),
+    image: optionalString(row.image),
+    createdAt: stringValue(row.createdAt),
+    lastSeenAt: optionalString(row.last_seen_at),
+    status: stringValue(row.status) === "active" ? "active" : "offline",
+  }));
+}
+
+export async function createEmployee(input: { name: string; email: string; password: string }): Promise<Employee> {
+  const db = await getTursoClient();
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+  const existing = await db.execute({ sql: `SELECT id FROM "user" WHERE lower(email) = ? LIMIT 1`, args: [email] });
+  if (existing.rows.length > 0) throw new Error("EMPLOYEE_ALREADY_EXISTS");
+
+  const now = new Date().toISOString();
+  const userId = `user_${crypto.randomUUID()}`;
+  const accountId = `account_${crypto.randomUUID()}`;
+  const passwordHash = await hashPassword(input.password);
+
+  await db.execute({
+    sql: `INSERT INTO "user" (id, name, email, emailVerified, image, createdAt, updatedAt)
+          VALUES (?, ?, ?, 0, NULL, ?, ?)`,
+    args: [userId, name, email, now, now],
+  });
+  await db.execute({
+    sql: `INSERT INTO "account"
+            (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
+             accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
+          VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+    args: [accountId, userId, userId, passwordHash, now, now],
+  });
+
+  return { id: userId, name, email, createdAt: now, status: "offline" };
 }
 
 export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipmentOption[]> {

@@ -1,9 +1,11 @@
 import { linkParcel2GoShipment } from "@/lib/repository";
+import { requireApiSession } from "@/lib/auth-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, context: RouteContext<"/api/orders/[orderId]/parcel2go">) {
+  if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
   const { orderId } = await context.params;
   let body: unknown;
   try {

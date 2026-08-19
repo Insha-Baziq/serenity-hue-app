@@ -129,6 +129,16 @@ export type SyncSnapshot = {
   liveChannels: number;
 };
 
+export type Employee = {
+  id: string;
+  name: string;
+  email: string;
+  image?: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  status: "active" | "offline";
+};
+
 export type InventorySnapshot = {
   products: ProductInventory[];
   packaging: PackagingMaterial[];
