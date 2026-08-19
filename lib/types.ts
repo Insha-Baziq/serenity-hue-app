@@ -27,6 +27,40 @@ export type ProductInventory = {
   isBundle?: boolean;
 };
 
+export type InventoryChannel = "master" | "shopify" | "tiktok";
+
+export type ChannelInventoryRow = {
+  variantId: string;
+  product: string;
+  variant: string;
+  sku: string;
+  imageTone: "blush" | "smoke" | "taupe" | "amber" | "rose";
+  master: number | null;
+  shopify: number;
+  tiktok: number | null;
+};
+
+export type ChannelInventorySnapshot = {
+  rows: ChannelInventoryRow[];
+  ledger: InventoryLedgerEntry[];
+  tiktokSyncedAt: string | null;
+  sync: SyncSnapshot;
+};
+
+export type InventoryLedgerEntry = {
+  id: string;
+  item: string;
+  inventory: InventoryChannel;
+  changeType: "manual_edit" | "sale" | "allocation_push" | "reconcile_fix" | "bundle_deduct";
+  actor: string;
+  isSystem: boolean;
+  quantityBefore: number | null;
+  quantityAfter: number | null;
+  quantityDelta: number;
+  reference: string;
+  createdAt: string;
+};
+
 export type PackagingMaterial = {
   id: string;
   title: string;

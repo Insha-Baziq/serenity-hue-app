@@ -163,6 +163,43 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 
 CREATE INDEX IF NOT EXISTS stock_movements_variant_created_idx ON stock_movements(variant_id, created_at DESC);
 
+-- Three-inventory model: master physical stock, fetched channel display levels, and an audit ledger.
+CREATE TABLE IF NOT EXISTS master_inventory (
+  variant_id TEXT PRIMARY KEY REFERENCES variants(id) ON DELETE CASCADE,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  anchored_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS channel_inventory (
+  id TEXT PRIMARY KEY,
+  variant_id TEXT REFERENCES variants(id) ON DELETE SET NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('shopify', 'tiktok')),
+  external_product_id TEXT,
+  external_sku_id TEXT,
+  warehouse_id TEXT,
+  available_quantity INTEGER NOT NULL DEFAULT 0,
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (channel, external_sku_id, warehouse_id)
+);
+CREATE INDEX IF NOT EXISTS channel_inventory_variant_idx ON channel_inventory(variant_id, channel);
+
+CREATE TABLE IF NOT EXISTS inventory_ledger (
+  id TEXT PRIMARY KEY,
+  variant_id TEXT REFERENCES variants(id) ON DELETE SET NULL,
+  inventory TEXT NOT NULL CHECK (inventory IN ('master', 'shopify', 'tiktok')),
+  change_type TEXT NOT NULL CHECK (change_type IN ('manual_edit', 'sale', 'allocation_push', 'reconcile_fix', 'bundle_deduct')),
+  actor TEXT NOT NULL,
+  quantity_before INTEGER,
+  quantity_after INTEGER,
+  quantity_delta INTEGER NOT NULL,
+  reference TEXT,
+  result TEXT NOT NULL DEFAULT 'ok' CHECK (result IN ('ok', 'failed')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS inventory_ledger_created_idx ON inventory_ledger(created_at DESC);
+CREATE INDEX IF NOT EXISTS inventory_ledger_variant_idx ON inventory_ledger(variant_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS inventory_order_applications (
   order_id TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
   stock_recorded_at TEXT,

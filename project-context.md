@@ -381,6 +381,49 @@ In Parcel2Go's API credential settings, configure the webhook URL as `https://se
 7. Confirm the Vercel plan is suitable for commercial client use before long-term production operation.
 8. Better Auth staff authentication now replaces Basic Auth. Remaining: verify it end-to-end in production, remove the `INITIAL_ADMIN_*` bootstrap and `INTERNAL_APP_*` fallback env values once the first admin exists, and add roles/permissions if staff responsibilities diverge.
 
+## Three-inventory model (master + channel allocation) — agreed design, not yet built
+
+This is the agreed direction as of 19 August 2026, confirmed directly with the client. It supersedes the earlier idea of a single "common pool that keeps both channels equal" — that idea is **rejected** because it would break the client's deliberate TikTok scarcity strategy.
+
+### Why the channels intentionally differ
+
+The client keeps TikTok stock **deliberately low** as an algorithm play: low displayed stock signals scarcity/demand and TikTok pushes the listing. So a large Shopify-vs-TikTok quantity gap is **intended**, not an error to reconcile. Any feature that forces the two channels to the same number is wrong.
+
+### The three inventories
+
+| Inventory | Source | Who changes it | Notes |
+| --- | --- | --- | --- |
+| **Master** | Maintained inside this app (seeded from the client's Dropbox master Excel) | Staff set it manually; app auto-decrements on every sale | The real physical warehouse count. NOT pulled from Shopify or TikTok. |
+| **TikTok** | Fetched from TikTok Shop Open API | Client's scarcity level (set on TikTok, or — Phase 2 — from this app) | A deliberately low display level. |
+| **Shopify** | Fetched from Shopify Admin API | Client's allocation (set on Shopify, or — Phase 2 — from this app) | Usually a fuller allocation. |
+
+### Core rules
+
+- **Setting a channel display level does NOT deduct master.** Allocating 100 to Shopify and 10 to TikTok leaves master unchanged. Channel levels are independent display numbers, not withdrawals from master.
+- **Every sale on either channel deducts master by the sold quantity** (× bundle multiplier for bundles). A Shopify sale → Shopify shown −1 (Shopify does this) and master −1 (app does this). A TikTok sale → TikTok shown −1 (TikTok does this) and master −1 (app does this).
+- **Master is a manual anchor + auto-decrement.** When staff set master (e.g. 500) from the Excel, only sales *after* that point deduct it. Re-counting resets the anchor. Past/baseline orders must not retroactively deduct — reuse the existing baseline mechanism (`inventory_order_applications`) and per-order idempotency so each order applies once.
+- **Guardrail alert:** warn when `master < TikTok shown + Shopify shown`, i.e. the channels together promise more than physically exists (oversell risk).
+
+### Matching (the linchpin)
+
+TikTok SKUs carry **no `seller_sku`** (confirmed 19 Aug 2026 — all 107 TikTok SKUs returned empty). So Shopify↔TikTok↔master matching cannot use SKU codes. It must use an app-maintained mapping (extend `channel_mappings`) plus name-based matching, analyst-reviewed. TikTok also has many **duplicate/relisted** products and ~20 **bundles**; bundles deduct multiple master lines via `bundle_components`. The client's master Excel structure determines the master table shape — obtain it before finalizing the schema.
+
+### Audit ledger (required)
+
+Every inventory change on all three inventories writes one **immutable, append-only** row (reuse/extend `stock_movements`). Never update or delete a ledger row. Each row captures: timestamp, actor (staff user via Better Auth, or `system: shopify sale` / `system: tiktok sale`), which inventory (master/shopify/tiktok), product, change type (`manual_edit` | `sale` | `allocation_push` | `reconcile_fix` | `bundle_deduct`), before→after snapshot, delta, source reference (order id for sales), and result (ok/failed for channel pushes). Two views: per-product history timeline, and a global filterable activity feed.
+
+### Direct channel writes (Phase 2)
+
+The app will let staff **set the TikTok/Shopify display level directly from the app** and push it to the platform. This is deliberate, human-initiated allocation — not the rejected auto-sync loop — so it is low-risk. Requirements: edit → review → push (never silent), audit-logged, partial-failure surfaced per channel, per-warehouse (TikTok) / per-location (Shopify) targeting. **TikTok write is ready** (`seller.product.write` / "Product modify" granted and re-authorized 19 Aug 2026). **Shopify needs the `write_inventory` scope added** to the custom app before Shopify writes work. Oversell resolution policy default (last-unit race, if a common-pool sync is ever added): keep the TikTok order, cancel the unfulfilled Shopify order (TikTok penalizes seller cancellations; Shopify does not), never cancel a fulfilled/shipped order, human confirms.
+
+### UI: Inventory → Products with a channel switch
+
+Three views selected by a prominent switch: **Master · Shopify · TikTok**. The Shopify and TikTok views must show the **platform logo** in the heading and theme the surface to that platform's colour, so staff cannot push the wrong number to the wrong platform. Combined view shows master / Shopify shown / TikTok shown side by side with status chips. Dense Shopify-inspired tables, consistent with the existing plum/magenta palette, `Iowan Old Style` headings and `Avenir Next` body. Build phases: **Phase 1** = three-tab read + editable master + sale-driven master decrement + audit ledger; **Phase 2** = editable channel levels (push to Shopify + TikTok).
+
+### Verified working (19 Aug 2026)
+
+TikTok product read + write scopes are live on the production token (`seller.product.basic`, `seller.product.write`, plus order/authorization scopes). A local read via the Turso CLI confirmed 56 TikTok products / 107 SKUs / 2,575 units. Shopify holds 38 variants / 2,168 units. Only one product (copper peptide) currently matches across channels — consistent with the intentional-divergence strategy. Diagnostic endpoint `GET /api/tiktok/inventory-check` exists (session-guarded, read-only).
+
 ## Current non-goals
 
 - AfterShip integration

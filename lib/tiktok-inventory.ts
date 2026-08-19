@@ -3,6 +3,7 @@ import "server-only";
 import { getActiveTikTokConnections, updateTikTokConnectionTokens } from "@/lib/repository";
 import { hasTikTokApiCredentials, refreshTikTokAccessToken, tiktokApiRequest } from "@/lib/tiktok";
 import { TikTokNotConnectedError } from "@/lib/tiktok-import";
+import { getTursoClient } from "@/lib/turso";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -125,4 +126,49 @@ export async function fetchTikTokInventory(): Promise<{
   }
 
   return { grantedScopes: [...grantedScopes], shops: shopsSeen, skus };
+}
+
+/**
+ * Fetches TikTok inventory and caches it in `channel_inventory`, resolving each
+ * SKU to a Shopify variant through the product-level `channel_mappings`. TikTok
+ * SKUs carry no seller_sku, so matching is by mapped product id only; a mapped
+ * SKU also backfills the mapping's `external_variant_id` for future writes.
+ */
+export async function storeTikTokInventory(): Promise<{ skus: number; matched: number; syncedAt: string }> {
+  const { skus } = await fetchTikTokInventory();
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+
+  const mappingResult = await db.execute(`SELECT external_product_id, variant_id FROM channel_mappings
+    WHERE channel = 'tiktok' AND active = 1 AND external_product_id IS NOT NULL`);
+  const variantsByProduct = new Map<string, string[]>();
+  for (const row of mappingResult.rows) {
+    const productId = typeof row.external_product_id === "string" ? row.external_product_id : "";
+    const variantId = typeof row.variant_id === "string" ? row.variant_id : "";
+    if (productId && variantId) variantsByProduct.set(productId, [...(variantsByProduct.get(productId) ?? []), variantId]);
+  }
+
+  let matched = 0;
+  for (const sku of skus) {
+    const candidates = variantsByProduct.get(sku.productId);
+    const variantId = candidates?.length === 1 ? candidates[0] : null;
+    if (variantId) matched += 1;
+    const warehouseId = sku.warehouses[0]?.warehouseId || "default";
+    await db.execute({
+      sql: `INSERT INTO channel_inventory (id, variant_id, channel, external_product_id, external_sku_id, warehouse_id, available_quantity, synced_at)
+            VALUES (?, ?, 'tiktok', ?, ?, ?, ?, ?)
+            ON CONFLICT(channel, external_sku_id, warehouse_id) DO UPDATE SET
+              variant_id = excluded.variant_id, external_product_id = excluded.external_product_id,
+              available_quantity = excluded.available_quantity, synced_at = excluded.synced_at`,
+      args: [crypto.randomUUID(), variantId, sku.productId || null, sku.skuId || `${sku.productId}:${matched}`, warehouseId, sku.totalQuantity, now],
+    });
+    if (variantId && sku.skuId) {
+      await db.execute({
+        sql: `UPDATE channel_mappings SET external_variant_id = ? WHERE channel = 'tiktok' AND variant_id = ? AND external_product_id = ? AND (external_variant_id IS NULL OR external_variant_id = '')`,
+        args: [sku.skuId, variantId, sku.productId],
+      });
+    }
+  }
+
+  return { skus: skus.length, matched, syncedAt: now };
 }

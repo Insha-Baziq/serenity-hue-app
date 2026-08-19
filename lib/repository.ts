@@ -2,7 +2,7 @@ import "server-only";
 
 import { getTursoClient } from "@/lib/turso";
 import { hashPassword } from "better-auth/crypto";
-import type { Employee, InventoryAlert, InventorySnapshot, Order, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, ProductInventory, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { ChannelInventoryRow, ChannelInventorySnapshot, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, Order, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, ProductInventory, StockMovement, SyncSnapshot } from "@/lib/types";
 
 type SqlValue = string | number | null;
 
@@ -537,6 +537,99 @@ export async function getInventory(): Promise<InventorySnapshot> {
   }));
 
   return { products, packaging, alerts, recentMovements, sync: await getLatestSync() };
+}
+
+const LEDGER_TONES = ["blush", "smoke", "taupe", "amber", "rose"] as const;
+
+/** The three-inventory view: master (in-app) + fetched Shopify and TikTok display levels per variant. */
+export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
+  const db = await getTursoClient();
+  const [variantsResult, masterResult, tiktokResult, syncedResult, ledgerResult] = await Promise.all([
+    db.execute(`SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity
+                FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`),
+    db.execute(`SELECT variant_id, quantity FROM master_inventory`),
+    db.execute(`SELECT variant_id, SUM(available_quantity) AS qty FROM channel_inventory WHERE channel = 'tiktok' AND variant_id IS NOT NULL GROUP BY variant_id`),
+    db.execute(`SELECT MAX(synced_at) AS synced_at FROM channel_inventory WHERE channel = 'tiktok'`),
+    db.execute(`SELECT l.id, l.inventory, l.change_type, l.actor, l.quantity_before, l.quantity_after, l.quantity_delta, l.reference, l.created_at,
+                  CASE WHEN v.id IS NOT NULL THEN p.title || CASE WHEN v.title <> 'Default Title' THEN ' — ' || v.title ELSE '' END ELSE 'Inventory item' END AS item
+                FROM inventory_ledger l
+                LEFT JOIN variants v ON v.id = l.variant_id
+                LEFT JOIN products p ON p.id = v.product_id
+                ORDER BY l.created_at DESC LIMIT 12`),
+  ]);
+
+  const masterByVariant = new Map(masterResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
+  const tiktokByVariant = new Map(tiktokResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.qty)]));
+
+  const rows: ChannelInventoryRow[] = variantsResult.rows.map((row, index) => {
+    const variantId = stringValue(row.id);
+    return {
+      variantId,
+      product: stringValue(row.product),
+      variant: stringValue(row.variant),
+      sku: stringValue(row.sku),
+      imageTone: LEDGER_TONES[index % LEDGER_TONES.length],
+      master: masterByVariant.has(variantId) ? masterByVariant.get(variantId)! : null,
+      shopify: numberValue(row.available_quantity),
+      tiktok: tiktokByVariant.has(variantId) ? tiktokByVariant.get(variantId)! : null,
+    };
+  });
+
+  const ledger: InventoryLedgerEntry[] = ledgerResult.rows.map((row) => {
+    const changeType = stringValue(row.change_type) as InventoryLedgerEntry["changeType"];
+    return {
+      id: stringValue(row.id),
+      item: stringValue(row.item) || "Inventory item",
+      inventory: stringValue(row.inventory) as InventoryLedgerEntry["inventory"],
+      changeType,
+      actor: stringValue(row.actor),
+      isSystem: changeType === "sale",
+      quantityBefore: nullableNumber(row.quantity_before),
+      quantityAfter: nullableNumber(row.quantity_after),
+      quantityDelta: numberValue(row.quantity_delta),
+      reference: stringValue(row.reference),
+      createdAt: stringValue(row.created_at),
+    };
+  });
+
+  return { rows, ledger, tiktokSyncedAt: stringValue(syncedResult.rows[0]?.synced_at) || null, sync: await getLatestSync() };
+}
+
+/** Appends one immutable audit-ledger row. Never updates or deletes existing rows. */
+export async function recordInventoryLedgerEntry(entry: {
+  variantId: string | null;
+  inventory: InventoryLedgerEntry["inventory"];
+  changeType: InventoryLedgerEntry["changeType"];
+  actor: string;
+  quantityBefore: number | null;
+  quantityAfter: number | null;
+  reference?: string;
+  result?: "ok" | "failed";
+}) {
+  const db = await getTursoClient();
+  const delta = (entry.quantityAfter ?? 0) - (entry.quantityBefore ?? 0);
+  await db.execute({
+    sql: `INSERT INTO inventory_ledger (id, variant_id, inventory, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, result, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [crypto.randomUUID(), entry.variantId, entry.inventory, entry.changeType, entry.actor,
+      entry.quantityBefore, entry.quantityAfter, delta, entry.reference ?? null, entry.result ?? "ok", new Date().toISOString()],
+  });
+}
+
+/** Sets the master physical count for a variant (manual anchor) and logs the change. */
+export async function setMasterQuantity(input: { variantId: string; quantity: number; actor: string }): Promise<{ before: number | null; after: number }> {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const quantity = Math.max(0, Math.round(input.quantity));
+  const existing = await db.execute({ sql: `SELECT quantity FROM master_inventory WHERE variant_id = ?`, args: [input.variantId] });
+  const before = existing.rows[0] ? numberValue(existing.rows[0].quantity) : null;
+  await db.execute({
+    sql: `INSERT INTO master_inventory (variant_id, quantity, anchored_at, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(variant_id) DO UPDATE SET quantity = excluded.quantity, anchored_at = excluded.anchored_at, updated_at = excluded.updated_at`,
+    args: [input.variantId, quantity, now, now],
+  });
+  await recordInventoryLedgerEntry({ variantId: input.variantId, inventory: "master", changeType: "manual_edit", actor: input.actor, quantityBefore: before, quantityAfter: quantity, reference: "recount" });
+  return { before, after: quantity };
 }
 
 export type AlertCandidate = Omit<InventoryAlert, "id" | "firstSeenAt" | "lastSeenAt">;

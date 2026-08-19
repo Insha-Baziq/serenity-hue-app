@@ -1,14 +1,9 @@
-import { InventoryWorkspace } from "@/components/inventory-workspace";
-import { getInventory } from "@/lib/repository";
+import { ChannelInventoryWorkspace } from "@/components/channel-inventory-workspace";
+import { getChannelInventory } from "@/lib/repository";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProductsPage() {
-  const inventory = await getInventory();
-  const products = inventory.products.map(({ mapping, mappingConfidence, ...product }) => {
-    void mapping;
-    void mappingConfidence;
-    return product;
-  });
-  return <InventoryWorkspace initialInventory={{ products, sync: inventory.sync }} />;
+  const inventory = await getChannelInventory();
+  return <ChannelInventoryWorkspace initial={inventory} />;
 }
