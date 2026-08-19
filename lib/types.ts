@@ -39,6 +39,8 @@ export type ChannelInventoryRow = {
   master: number | null;
   shopify: number;
   tiktok: number | null;
+  sold7d: number;
+  sold30d: number;
   leadTime: string;
   packagingType: string;
 };

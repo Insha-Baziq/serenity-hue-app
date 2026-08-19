@@ -544,20 +544,32 @@ const LEDGER_TONES = ["blush", "smoke", "taupe", "amber", "rose"] as const;
 /** The three-inventory view: master (in-app) + fetched Shopify and TikTok display levels per variant. */
 export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
   const db = await getTursoClient();
-  const [variantsResult, masterResult, tiktokResult, syncedResult] = await Promise.all([
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [variantsResult, masterResult, tiktokResult, syncedResult, salesResult] = await Promise.all([
     db.execute(`SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity, v.lead_time_days, v.packaging_type
                 FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`),
     db.execute(`SELECT variant_id, quantity FROM master_inventory`),
     db.execute(`SELECT variant_id, SUM(available_quantity) AS qty FROM channel_inventory WHERE channel = 'tiktok' AND variant_id IS NOT NULL GROUP BY variant_id`),
     db.execute(`SELECT MAX(synced_at) AS synced_at FROM channel_inventory WHERE channel = 'tiktok'`),
+    db.execute({
+      sql: `SELECT oi.variant_id,
+              SUM(CASE WHEN o.source_created_at >= ? THEN oi.quantity ELSE 0 END) AS sold_7d,
+              SUM(oi.quantity) AS sold_30d
+            FROM order_items oi JOIN orders o ON o.id = oi.order_id
+            WHERE o.source_created_at >= ? AND oi.variant_id IS NOT NULL GROUP BY oi.variant_id`,
+      args: [sevenDaysAgo, thirtyDaysAgo],
+    }),
   ]);
 
   const masterByVariant = new Map(masterResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
   const tiktokByVariant = new Map(tiktokResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.qty)]));
+  const soldByVariant = new Map(salesResult.rows.map((row) => [stringValue(row.variant_id), { sold7d: numberValue(row.sold_7d), sold30d: numberValue(row.sold_30d) }]));
 
   const rows: ChannelInventoryRow[] = variantsResult.rows.map((row, index) => {
     const variantId = stringValue(row.id);
     const leadTimeDays = nullableNumber(row.lead_time_days);
+    const sales = soldByVariant.get(variantId) ?? { sold7d: 0, sold30d: 0 };
     return {
       variantId,
       productId: stringValue(row.product_id),
@@ -568,6 +580,8 @@ export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
       master: masterByVariant.has(variantId) ? masterByVariant.get(variantId)! : null,
       shopify: numberValue(row.available_quantity),
       tiktok: tiktokByVariant.has(variantId) ? tiktokByVariant.get(variantId)! : null,
+      sold7d: sales.sold7d,
+      sold30d: sales.sold30d,
       leadTime: leadTimeDays ? `${leadTimeDays} days` : "—",
       packagingType: stringValue(row.packaging_type) || "Not set",
     };
