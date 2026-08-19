@@ -31,6 +31,7 @@ export type InventoryChannel = "master" | "shopify" | "tiktok";
 
 export type ChannelInventoryRow = {
   variantId: string;
+  productId: string;
   product: string;
   variant: string;
   sku: string;
@@ -38,8 +39,6 @@ export type ChannelInventoryRow = {
   master: number | null;
   shopify: number;
   tiktok: number | null;
-  sold7d: number;
-  sold30d: number;
   leadTime: string;
   packagingType: string;
 };
