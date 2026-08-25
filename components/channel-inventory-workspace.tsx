@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Minus, Plus, RefreshCw, Save, Search } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ProductArt } from "@/components/product-art";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { relativeTime } from "@/lib/format";
 import type { ChannelInventoryRow, ChannelInventorySnapshot, InventoryChannel } from "@/lib/types";
 
@@ -50,20 +51,21 @@ function consistent(values: string[]) {
   return unique.length === 0 ? "—" : unique.length === 1 ? unique[0] : "Varies";
 }
 
+function productHref(productId: string) {
+  const routeId = productId.split("/").filter(Boolean).pop() || productId;
+  return `/inventory/products/${encodeURIComponent(routeId)}`;
+}
+
 export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInventorySnapshot }) {
+  const router = useRouter();
   const [channel, setChannel] = useState<InventoryChannel>("master");
-  const [rows, setRows] = useState(initial.rows);
-  const [drafts, setDrafts] = useState<Record<string, number>>({});
-  const [selectedId, setSelectedId] = useState("");
+  const rows = initial.rows;
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
-
-  const masterOf = (row: ChannelInventoryRow) => (row.variantId in drafts ? drafts[row.variantId] : row.master);
-  const dirtyCount = useMemo(() => rows.filter((row) => row.variantId in drafts && drafts[row.variantId] !== (row.master ?? 0)).length, [drafts, rows]);
+  const [tiktokProductCount, setTikTokProductCount] = useState(initial.tiktokProductCount);
 
   const allGroups = useMemo(() => {
     const map = new Map<string, ChannelInventoryRow[]>();
@@ -90,37 +92,17 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
   const pageEnd = Math.min(pageStart + pageSize, groups.length);
   const visible = groups.slice(pageStart, pageEnd);
   const pageItems = getPageItems(currentPage, totalPages);
-  const selected = allGroups.find((group) => group.productId === selectedId);
 
   function sumMaster(variants: ChannelInventoryRow[]): number | null {
-    const set = variants.filter((variant) => masterOf(variant) !== null);
-    return set.length === 0 ? null : set.reduce((total, variant) => total + (masterOf(variant) ?? 0), 0);
+    const set = variants.filter((variant) => variant.master !== null);
+    return set.length === 0 ? null : set.reduce((total, variant) => total + (variant.master ?? 0), 0);
   }
   function sumTiktok(variants: ChannelInventoryRow[]): number | null {
     const set = variants.filter((variant) => variant.tiktok !== null);
-    return set.length === 0 ? null : set.reduce((total, variant) => total + (variant.tiktok ?? 0), 0);
-  }
-
-  function editMaster(row: ChannelInventoryRow, next: number) {
-    setDrafts((current) => ({ ...current, [row.variantId]: Math.max(0, next) }));
-    setNotice("");
-  }
-
-  async function saveMaster() {
-    const updates = rows.filter((row) => row.variantId in drafts && drafts[row.variantId] !== (row.master ?? 0)).map((row) => ({ variantId: row.variantId, quantity: drafts[row.variantId] }));
-    if (updates.length === 0) return;
-    setSaving(true);
-    try {
-      const response = await fetch("/api/inventory/master", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ updates }) });
-      if (!response.ok) throw new Error("save failed");
-      setRows((current) => current.map((row) => (row.variantId in drafts ? { ...row, master: drafts[row.variantId] } : row)));
-      setDrafts({});
-      setNotice(`Saved ${updates.length} master ${updates.length === 1 ? "change" : "changes"}.`);
-    } catch {
-      setNotice("Could not save — check your connection and try again.");
-    } finally {
-      setSaving(false);
-    }
+    const productLevel = variants.filter((variant) => variant.tiktokProductLevel !== null).reduce((total, variant) => total + (variant.tiktokProductLevel ?? 0), 0);
+    return set.length === 0 && variants.every((variant) => variant.tiktokProductLevel === null)
+      ? null
+      : set.reduce((total, variant) => total + (variant.tiktok ?? 0), 0) + productLevel;
   }
 
   async function refreshTikTok() {
@@ -130,7 +112,13 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
       const response = await fetch("/api/inventory/refresh-tiktok", { method: "POST" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.message || "refresh failed");
-      setNotice(`Fetched ${data.skus} TikTok SKUs · ${data.matched} matched to products. Reload to see updated levels.`);
+      const removed = typeof data.removed === "number" ? ` · ${data.removed} stale rows removed` : "";
+      const unmatched = Array.isArray(data.unmatchedProducts) ? data.unmatchedProducts : [];
+      const unresolved = unmatched.length === 0
+        ? " Every live TikTok listing maps to one Shopify product."
+        : ` Listings needing a Shopify-product mapping: ${unmatched.map((product: { productTitle?: unknown }) => typeof product.productTitle === "string" ? product.productTitle : "Unnamed TikTok listing").join("; ")}.`;
+      if (typeof data.products === "number") setTikTokProductCount(data.products);
+      setNotice(`Fetched ${data.products ?? "all"} live TikTok products · ${data.skus} SKUs · ${data.matched} variant-level matches${removed}.${unresolved} Reload to see updated levels.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "TikTok refresh failed");
     } finally {
@@ -157,12 +145,6 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
           <h1>Stock control — <span className="ci-title-swap">{activeName}</span></h1>
           <div className="live-caption"><span className="live-dot" aria-hidden="true" />{channelMeta}</div>
         </div>
-        {dirtyCount > 0 && (
-          <div className="header-actions">
-            <Button variant="ghost" onClick={() => { setDrafts({}); setNotice(""); }}>Discard</Button>
-            <Button variant="primary" onClick={saveMaster} disabled={saving}><Save size={16} />{saving ? "Saving…" : `Save ${dirtyCount} change${dirtyCount === 1 ? "" : "s"}`}</Button>
-          </div>
-        )}
       </header>
 
       <div className="ci-switch" role="tablist" aria-label="Choose inventory">
@@ -180,7 +162,7 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
         <div className="inventory-toolbar">
           <label className="search-field search-field--inventory"><Search size={18} strokeWidth={1.8} aria-hidden="true" /><span className="sr-only">Search products or variants</span><Input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search product or variant" /></label>
           {channel === "tiktok" && <Button variant="outline" size="compact" onClick={refreshTikTok} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />{refreshing ? "Fetching…" : "Refresh from TikTok"}</Button>}
-          <span className="ci-count">{groups.length} {groups.length === 1 ? "product" : "products"}</span>
+          <span className="ci-count">{channel === "tiktok" ? `${tiktokProductCount} live TikTok listings · ${groups.length} Shopify products` : `${groups.length} ${groups.length === 1 ? "product" : "products"}`}</span>
         </div>
         <div className="inventory-scroll">
           <table className="inventory-table ci-table">
@@ -200,16 +182,30 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
                 const master = sumMaster(group.variants);
                 const shopify = group.variants.reduce((total, variant) => total + variant.shopify, 0);
                 const tiktok = sumTiktok(group.variants);
-                const edited = group.variants.some((variant) => variant.variantId in drafts && drafts[variant.variantId] !== (variant.master ?? 0));
                 return (
-                  <tr key={group.productId} className={`ci-row${edited ? " ci-row--edited" : ""}${selectedId === group.productId ? " is-selected" : ""}`} tabIndex={0} onClick={() => setSelectedId(group.productId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(group.productId); } }}>
-                    <td className="inventory-product ci-product"><ProductArt tone={group.imageTone} size="small" /><span><strong>{group.product}</strong><small>{group.variants.length === 1 ? "Single variant · View" : `${group.variants.length} variants · View breakdown`}</small></span></td>
+                  <tr
+                    key={group.productId}
+                    className="ci-row"
+                    role="link"
+                    tabIndex={0}
+                    aria-label={`Open ${group.product}`}
+                    onClick={(event) => {
+                      if ((event.target as HTMLElement).closest("a, button, input, [role=button]")) return;
+                      router.push(productHref(group.productId));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      router.push(productHref(group.productId));
+                    }}
+                  >
+                    <td className="inventory-product ci-product"><Link className="ci-product-link" href={productHref(group.productId)}><ProductArt tone={group.imageTone} size="small" /><span><strong>{group.product}</strong><small>{group.variants.length === 1 ? "Single variant · Open product" : `${group.variants.length} variants · Open product`}</small></span></Link></td>
                     {qtyCell(master, channel === "master", true)}
                     {qtyCell(shopify, channel === "shopify", false)}
                     {qtyCell(tiktok, channel === "tiktok", false)}
                     <td className="ci-muted">{group.leadTime}</td>
                     <td className="ci-muted">{group.packaging}</td>
-                    <td className="row-action"><ChevronRight size={18} aria-hidden="true" /></td>
+                    <td className="row-action"><Link href={productHref(group.productId)} aria-label={`Open ${group.product}`}><ChevronRight size={18} aria-hidden="true" /></Link></td>
                   </tr>
                 );
               })}
@@ -234,104 +230,8 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
           </div>
         </footer>
       </div>
-
-      <Sheet open={Boolean(selected)} onOpenChange={(open) => !open && setSelectedId("")}>
-        <SheetContent className="ci-sheet" aria-describedby="ci-sheet-description">
-          {selected && <ProductDetail group={selected} masterOf={masterOf} sumMaster={sumMaster} sumTiktok={sumTiktok} onEdit={editMaster} />}
-        </SheetContent>
-      </Sheet>
     </section>
   );
-}
-
-function ProductDetail({ group, masterOf, sumMaster, sumTiktok, onEdit }: {
-  group: Group;
-  masterOf: (row: ChannelInventoryRow) => number | null;
-  sumMaster: (variants: ChannelInventoryRow[]) => number | null;
-  sumTiktok: (variants: ChannelInventoryRow[]) => number | null;
-  onEdit: (row: ChannelInventoryRow, next: number) => void;
-}) {
-  const master = sumMaster(group.variants);
-  const shopify = group.variants.reduce((total, variant) => total + variant.shopify, 0);
-  const tiktok = sumTiktok(group.variants) ?? 0;
-  const sold7d = group.variants.reduce((total, variant) => total + variant.sold7d, 0);
-  const sold30d = group.variants.reduce((total, variant) => total + variant.sold30d, 0);
-  const dailyRate = Math.max(sold7d / 7, sold30d / 30);
-  const daysCover = master && master > 0 && dailyRate > 0 ? Math.ceil(master / dailyRate) : null;
-  const shown = shopify + tiktok;
-  const remaining = master === null ? null : master - shown;
-  const status = master === null ? { cls: "unset", label: "Master not set" }
-    : remaining !== null && remaining < 0 ? { cls: "risk", label: "Oversell risk" }
-    : tiktok <= 3 ? { cls: "low", label: "TikTok selling out" }
-    : { cls: "ok", label: "Healthy" };
-  const total = master ?? shown;
-  const pct = (value: number) => (total > 0 ? Math.max(0, Math.min(100, (value / total) * 100)) : 0);
-
-  return (
-    <div className="ci-detail" aria-label={`Inventory detail for ${group.product}`}>
-      <div className="ci-detail__header">
-        <ProductArt tone={group.imageTone} />
-        <div>
-          <p className="workspace-kicker">Product stock</p>
-          <SheetTitle asChild><h2>{group.product}</h2></SheetTitle>
-          <p className="ci-detail__sub">{group.variants.length} {group.variants.length === 1 ? "variant" : "variants"} · <span className={`ci-chip ci-chip--${status.cls}`}><i />{status.label}</span></p>
-        </div>
-      </div>
-      <SheetDescription id="ci-sheet-description" className="sr-only">Per-variant stock and analytics for {group.product}.</SheetDescription>
-
-      <div className="ci-metrics">
-        <Metric label="Master" value={master ?? "—"} accent="master" />
-        <Metric label="Shopify" value={shopify} accent="shopify" />
-        <Metric label="TikTok" value={tiktok} accent="tiktok" />
-        <Metric label="Sold 7d" value={sold7d || "—"} />
-        <Metric label="Sold 30d" value={sold30d || "—"} />
-        <Metric label="Days cover" value={daysCover ?? "—"} suffix={daysCover ? "days" : ""} />
-      </div>
-
-      {master !== null && (
-        <section className="ci-alloc">
-          <div className="ci-alloc__head"><h3>Allocation of physical stock</h3><span>{shown} of {master} placed</span></div>
-          <div className="ci-alloc__bar">
-            <span className="ci-alloc__seg ci-alloc__seg--shopify" style={{ width: `${pct(shopify)}%` }} title={`Shopify ${shopify}`} />
-            <span className="ci-alloc__seg ci-alloc__seg--tiktok" style={{ width: `${pct(tiktok)}%` }} title={`TikTok ${tiktok}`} />
-            {remaining !== null && remaining >= 0 && <span className="ci-alloc__seg ci-alloc__seg--rest" style={{ width: `${pct(remaining)}%` }} title={`Unallocated ${remaining}`} />}
-          </div>
-          <div className="ci-alloc__legend">
-            <span><i className="ci-dot ci-dot--shopify" />Shopify {shopify}</span>
-            <span><i className="ci-dot ci-dot--tiktok" />TikTok {tiktok}</span>
-            <span><i className="ci-dot ci-dot--rest" />{remaining !== null && remaining < 0 ? `Over by ${Math.abs(remaining)}` : `Unallocated ${remaining ?? 0}`}</span>
-          </div>
-        </section>
-      )}
-
-      <section className="ci-variants">
-        <div className="ci-variants__head"><h3>Variant breakdown</h3><span>Master is editable</span></div>
-        {group.variants.map((variant) => (
-          <article key={variant.variantId} className="ci-variant">
-            <div className="ci-variant__name"><strong>{variant.variant && variant.variant !== "Default Title" ? variant.variant : "Default variant"}</strong><small>{variant.sku || "No SKU"}</small></div>
-            <div className="ci-variant__stepper">
-              <span className="ci-variant__label">Master</span>
-              <span className="ci-stepper">
-                <button type="button" aria-label="Decrease" onClick={() => onEdit(variant, (masterOf(variant) ?? 0) - 1)}><Minus size={14} /></button>
-                <input key={`${variant.variantId}-${variant.master}`} inputMode="numeric" value={masterOf(variant) ?? 0} onChange={(event) => onEdit(variant, Number(event.target.value.replace(/\D/g, "")) || 0)} />
-                <button type="button" aria-label="Increase" onClick={() => onEdit(variant, (masterOf(variant) ?? 0) + 1)}><Plus size={14} /></button>
-              </span>
-            </div>
-            <dl className="ci-variant__meta">
-              <div><dt>Shopify</dt><dd>{variant.shopify}</dd></div>
-              <div><dt>TikTok</dt><dd>{variant.tiktok ?? "—"}</dd></div>
-              <div><dt>Sold 7d</dt><dd>{variant.sold7d || "—"}</dd></div>
-              <div><dt>Lead time</dt><dd>{variant.leadTime}</dd></div>
-            </dl>
-          </article>
-        ))}
-      </section>
-    </div>
-  );
-}
-
-function Metric({ label, value, suffix, accent }: { label: string; value: number | string; suffix?: string; accent?: "master" | "shopify" | "tiktok" }) {
-  return <div className={`ci-metric${accent ? ` ci-metric--${accent}` : ""}`}><span className="ci-metric__label">{label}</span><strong className="ci-metric__value">{value}</strong>{suffix && <small>{suffix}</small>}</div>;
 }
 
 function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {

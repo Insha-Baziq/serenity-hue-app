@@ -16,7 +16,7 @@ type EmployeeColumnId = "email" | "status" | "joined" | "lastSeen";
 
 const filters: { label: string; value: EmployeeFilter }[] = [
   { label: "Everyone", value: "all" },
-  { label: "Active now", value: "active" },
+  { label: "Online now", value: "active" },
   { label: "Offline", value: "offline" },
 ];
 
@@ -133,7 +133,7 @@ export function EmployeesWorkspace({ initialEmployees }: { initialEmployees: Emp
         </div>
 
         <div className="mobile-record-list mobile-employees-list" aria-label="Employees">
-          {employees.map((employee) => <button className="mobile-record mobile-employee-card" key={employee.id} type="button" onClick={() => selectEmployee(employee)}><span className="mobile-record__header"><span className="employee-person"><span className="employee-avatar">{getInitials(employee.name)}</span><span><strong>{employee.name}</strong><small>{employee.email}</small></span></span><EmployeeStatus status={employee.status} /></span><span className="mobile-employee-card__footer"><span>Joined {formatDate(employee.createdAt)}</span><span>{employee.lastSeenAt ? `Active ${relativeTime(employee.lastSeenAt)}` : "No recent activity"}</span></span></button>)}
+          {employees.map((employee) => <button className="mobile-record mobile-employee-card" key={employee.id} type="button" onClick={() => selectEmployee(employee)}><span className="mobile-record__header"><span className="employee-person"><span className="employee-avatar">{getInitials(employee.name)}</span><span><strong>{employee.name}</strong><small>{employee.email}</small></span></span><EmployeeStatus status={employee.status} /></span><span className="mobile-employee-card__footer"><span>Joined {formatDate(employee.createdAt)}</span><span>{employee.lastSeenAt ? `Last active ${relativeTime(employee.lastSeenAt)}` : "No recent activity"}</span></span></button>)}
         </div>
         {employees.length === 0 && <div className="table-empty">No employees match this search or filter.</div>}
       </div>
@@ -152,11 +152,11 @@ function EmployeeRow({ employee, visibleColumns, onSelect }: { employee: Employe
 }
 
 function EmployeeDetails({ employee }: { employee: Employee }) {
-  return <div className="employee-details"><div className="employee-detail-header"><span className="employee-avatar employee-avatar--large">{getInitials(employee.name)}</span><div><p className="workspace-kicker">Workspace member</p><SheetTitle asChild><h2>{employee.name}</h2></SheetTitle><p>{employee.email}</p></div></div><SheetDescription id="employee-sheet-description" className="sr-only">Access details for {employee.name}.</SheetDescription><div className="employee-detail-status"><EmployeeStatus status={employee.status} /><span>{employee.status === "active" ? "Currently signed in" : "Not currently signed in"}</span></div><section className="employee-detail-section"><h3>Account details</h3><div className="employee-detail-list"><span><small>Joined workspace</small><strong>{formatDate(employee.createdAt)}</strong></span><span><small>Last active</small><strong>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</strong></span><span><small>Access</small><strong>Workspace member</strong></span></div></section><div className="employee-detail-note"><CheckCircle2 size={17} strokeWidth={1.8} /><p>Account access is securely managed for this workspace.</p></div></div>;
+  return <div className="employee-details"><div className="employee-detail-header"><span className="employee-avatar employee-avatar--large">{getInitials(employee.name)}</span><div><p className="workspace-kicker">Workspace member</p><SheetTitle asChild><h2>{employee.name}</h2></SheetTitle><p>{employee.email}</p></div></div><SheetDescription id="employee-sheet-description" className="sr-only">Access details for {employee.name}.</SheetDescription><div className="employee-detail-status"><EmployeeStatus status={employee.status} /><span>{employee.status === "active" ? "Online now" : "Offline"}</span></div><section className="employee-detail-section"><h3>Account details</h3><div className="employee-detail-list"><span><small>Joined workspace</small><strong>{formatDate(employee.createdAt)}</strong></span><span><small>Last active</small><strong>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</strong></span><span><small>Access</small><strong>Workspace member</strong></span></div></section><div className="employee-detail-note"><CheckCircle2 size={17} strokeWidth={1.8} /><p>Account access is securely managed for this workspace.</p></div></div>;
 }
 
 function EmployeeStatus({ status }: { status: Employee["status"] }) {
-  return <span className={`employee-status employee-status--${status}`}><i aria-hidden="true" />{status === "active" ? "Active" : "Offline"}</span>;
+  return <span className={`employee-status employee-status--${status}`}><i aria-hidden="true" />{status === "active" ? "Online" : "Offline"}</span>;
 }
 
 function getInitials(name: string) {

@@ -1,7 +1,7 @@
 export type Channel = "shopify" | "tiktok";
 export type MappingStatus = "confirmed" | "review" | "unmapped";
 export type PaymentStatus = "paid" | "pending" | "refunded";
-export type FulfillmentStatus = "fulfilled" | "unfulfilled" | "partial";
+export type FulfillmentStatus = "fulfilled" | "unfulfilled" | "partial" | "cancelled";
 
 export type ProductInventory = {
   id: string;
@@ -39,6 +39,7 @@ export type ChannelInventoryRow = {
   master: number | null;
   shopify: number;
   tiktok: number | null;
+  tiktokProductLevel: number | null;
   sold7d: number;
   sold30d: number;
   leadTime: string;
@@ -48,7 +49,107 @@ export type ChannelInventoryRow = {
 export type ChannelInventorySnapshot = {
   rows: ChannelInventoryRow[];
   tiktokSyncedAt: string | null;
+  tiktokProductCount: number;
   sync: SyncSnapshot;
+};
+
+export type PhysicalInventoryItem = {
+  id: string;
+  title: string;
+  variantLabel: string;
+  quantity: number;
+  quantityKnown: boolean;
+  variantCount: number;
+  packagingType: string;
+  reorderPoint: number;
+  leadTimeDays: number | null;
+  imageUrl: string | null;
+  imageTone: "blush" | "smoke" | "taupe" | "amber" | "rose";
+  variants: PhysicalInventoryVariant[];
+};
+
+export type PhysicalInventoryVariant = {
+  id: string;
+  title: string;
+  sku: string;
+  quantity: number;
+  quantityKnown: boolean;
+};
+
+export type PhysicalProductDetail = PhysicalInventoryItem & {
+  description: string;
+  sourceLabel: string;
+  variants: PhysicalInventoryVariant[];
+};
+
+export type PhysicalInventoryAdjustment = {
+  variantId: string;
+  quantity: number;
+};
+
+export type PhysicalChannel = "shopify" | "tiktok";
+
+export type PhysicalListingMappingStatus = "confirmed" | "review" | "unmapped";
+
+export type PhysicalChannelListingComponent = {
+  id: string;
+  physicalVariantId: string;
+  itemId: string;
+  itemTitle: string;
+  variantTitle: string;
+  quantityPerSale: number;
+};
+
+export type PhysicalChannelListing = {
+  id: string;
+  channel: PhysicalChannel;
+  externalProductId: string;
+  externalVariantId: string | null;
+  title: string;
+  variantTitle: string;
+  imageUrl: string | null;
+  listingUrl: string | null;
+  channelQuantity: number | null;
+  kind: "individual" | "bundle" | "unknown";
+  masterProductId: string | null;
+  masterProductTitle: string | null;
+  mappingStatus: PhysicalListingMappingStatus;
+  sourceNote: string;
+  components: PhysicalChannelListingComponent[];
+};
+
+export type ProductDetailVariant = {
+  id: string;
+  title: string;
+  master: number | null;
+  shopify: number;
+  tiktok: number | null;
+  sold7d: number;
+  sold30d: number;
+  dailySalesRate: number;
+  daysCover: number | null;
+};
+
+export type ProductDetail = {
+  id: string;
+  title: string;
+  handle: string;
+  imageUrl: string | null;
+  variants: ProductDetailVariant[];
+  totals: {
+    master: number | null;
+    shopify: number;
+    tiktok: number | null;
+    sold7d: number;
+    sold30d: number;
+    dailySalesRate: number;
+    daysCover: number | null;
+  };
+  shopifySyncedAt: string | null;
+  tiktokSyncedAt: string | null;
+  tiktokProductLevel: number | null;
+  sync: SyncSnapshot;
+  ledger: InventoryLedgerEntry[];
 };
 
 export type InventoryLedgerEntry = {
@@ -118,6 +219,7 @@ export type Parcel2GoMatchMethod = "order_reference" | "customer_email" | "custo
 export type Parcel2GoDelivery = {
   id: string;
   orderLineId: string;
+  sourceReferences: string[];
   courier: string;
   service: string;
   status: string;
@@ -132,6 +234,7 @@ export type Parcel2GoDelivery = {
 export type Parcel2GoShipmentOption = {
   id: string;
   orderLineId: string;
+  sourceReferences: string[];
   courier: string;
   service: string;
   status: string;
@@ -151,6 +254,7 @@ export type Order = {
   address: string[];
   payment: PaymentStatus;
   fulfillment: FulfillmentStatus;
+  cancelledAt: string | null;
   createdAt: string;
   subtotal: number;
   shipping: number;
@@ -158,6 +262,28 @@ export type Order = {
   total: number;
   items: OrderLineItem[];
   deliveries: Parcel2GoDelivery[];
+};
+
+export type OrdersPageResult = {
+  orders: Order[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type CustomerType = "repeat" | "one-time" | "guest";
+
+export type Customer = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  channels: Channel[];
+  orders: number;
+  totalSpent: number;
+  lastOrderAt: string;
+  type: CustomerType;
 };
 
 export type SyncSnapshot = {

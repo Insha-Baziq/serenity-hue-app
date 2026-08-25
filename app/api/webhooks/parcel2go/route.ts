@@ -1,6 +1,4 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { hasParcel2GoCredentials } from "@/lib/parcel2go";
-import { importRecentParcel2GoShipments } from "@/lib/parcel2go-import";
 import { recordParcel2GoWebhook } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -64,12 +62,7 @@ export async function POST(request: Request) {
   if (!hasMatchingSignature(payload, secret)) return Response.json({ message: "Invalid Parcel2Go webhook signature" }, { status: 401 });
 
   const isNew = await recordParcel2GoWebhook({ externalEventId: payload.Id, topic: payload.Type });
-  if (isNew && hasParcel2GoCredentials()) {
-    try {
-      await importRecentParcel2GoShipments();
-    } catch {
-      // The verified event is retained; the five-minute reconciliation will retry the delivery refresh.
-    }
-  }
+  // Reconciliation claims this received event only after a complete channel
+  // sync. Webhooks remain bounded and can be retried without doing network IO.
   return Response.json({ ok: true, duplicate: !isNew });
 }

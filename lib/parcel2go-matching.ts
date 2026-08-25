@@ -31,8 +31,26 @@ function phoneDigits(value: string | undefined) {
 }
 
 function referenceKeys(value: string) {
-  const key = value.toLocaleLowerCase().replace(/\s+/g, "").trim();
-  return new Set([key, key.replace(/^#/, "")]);
+  const text = value.toLocaleLowerCase().trim();
+  if (!text) return new Set<string>();
+
+  const compact = text.replace(/\s+/g, "");
+  const alphaNumeric = text.replace(/[^a-z0-9]/g, "");
+  const keys = new Set([text, compact, compact.replace(/^#/, ""), alphaNumeric]);
+  const shopifyGid = text.match(/gid:\/\/shopify\/order\/(\d+)/i)?.[1];
+  if (shopifyGid) keys.add(shopifyGid);
+
+  // Parcel2Go can prefix an imported checkout reference with the marketplace
+  // name. Extract only a clearly labelled Shopify/TikTok order ID, rather
+  // than treating unrelated numbers such as a postcode as an order number.
+  const channelReference = text.match(/\b(?:shopify|tiktok(?:\s*shop)?)\b(?:\s+(?:order|reference|order\s*(?:id|number|no\.?)))?\s*[:#-]?\s*(#?[a-z0-9-]{4,})/i)?.[1];
+  if (channelReference) {
+    keys.add(channelReference.replace(/^#/, ""));
+    keys.add(channelReference.replace(/[^a-z0-9]/g, ""));
+  }
+
+  keys.delete("");
+  return keys;
 }
 
 function textIsInAddress(address: string, value: string | undefined) {
@@ -60,9 +78,9 @@ function matchingReferenceOrder(shipment: Parcel2GoShipment, orders: Parcel2GoOr
   const references = new Set(shipment.importedReferences.flatMap((reference) => [...referenceKeys(reference)]));
   if (references.size === 0) return undefined;
   const matches = orders.filter((order) => {
-    const sourceOrderId = order.sourceOrderId.toLocaleLowerCase().replace(/\s+/g, "").trim();
-    const orderNumber = referenceKeys(order.orderNumber);
-    return references.has(sourceOrderId) || [...orderNumber].some((key) => references.has(key));
+    const sourceOrderKeys = referenceKeys(order.sourceOrderId);
+    const orderNumberKeys = referenceKeys(order.orderNumber);
+    return [...sourceOrderKeys, ...orderNumberKeys].some((key) => references.has(key));
   });
   return matches.length === 1 ? matches[0] : undefined;
 }

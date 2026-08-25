@@ -1,6 +1,7 @@
 import { createTikTokOAuthState } from "@/lib/repository";
 import { hasTikTokAppCredentials, hashTikTokOAuthState, tiktokAuthorizationUrl } from "@/lib/tiktok";
 import { requireApiSession } from "@/lib/auth-guard";
+import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,8 @@ function stateCookie(value: string, maxAge: number) {
 
 export async function GET(request: Request) {
   if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
+  const limit = takeRateLimit(request, { name: "tiktok-authorize", limit: 10, windowMs: 10 * 60 * 1000 });
+  if (!limit.allowed) return rateLimitedResponse(limit.retryAfterSeconds);
   if (!hasTikTokAppCredentials()) {
     return Response.json({ message: "TikTok app credentials are not configured" }, { status: 503 });
   }

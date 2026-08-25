@@ -1,12 +1,17 @@
 import Image from "next/image";
+import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/login-form";
+import { getCurrentSession } from "@/lib/auth-guard";
 
 export const metadata = {
   title: "Sign in | Serenity Hue Operations",
   description: "Sign in to the Serenity Hue operations workspace.",
 };
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  const session = await getCurrentSession();
+  if (session?.user) redirect("/overview");
+
   return (
     <main className="login-shell">
       <section className="login-art" aria-label="Serenity Hue beauty campaign">

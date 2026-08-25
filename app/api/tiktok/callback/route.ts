@@ -1,5 +1,6 @@
 import { consumeTikTokOAuthState, saveTikTokConnection } from "@/lib/repository";
 import { exchangeTikTokAuthorizationCode, hashTikTokOAuthState } from "@/lib/tiktok";
+import { getCanonicalAppUrl } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +27,7 @@ function redirectToOrders(status: "connected" | "error", origin: string) {
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const origin = url.origin;
+  const origin = getCanonicalAppUrl();
   const code = url.searchParams.get("code")?.trim() ?? "";
   const state = url.searchParams.get("state")?.trim() ?? "";
   const error = url.searchParams.get("error")?.trim() ?? "";

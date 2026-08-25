@@ -3,6 +3,16 @@ node_modules/
 .env*
 !.env.example
 data/
+*.db
+*.db-shm
+*.db-wal
+db
+db-wal
+tmp/
+.agents/
+.codex/
+.impeccable/
+.playwright-mcp/
 *.tsbuildinfo
 
 .next-dev*.log

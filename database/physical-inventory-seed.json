@@ -1,0 +1,110 @@
+{
+  "version": "individual-items.ods-v2",
+  "sourceLabel": "individual items.ods · Sheet1",
+  "items": [
+    {
+      "id": "physical-snow-lift-eye-serum",
+      "title": "Snow Lift Peptide Under/Hooded Eye Serum",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/15102332666241",
+      "description": "A cooling peptide eye serum formulated to support the appearance of dark circles, puffiness, and fine lines.",
+      "variants": ["Default Title"]
+    },
+    {
+      "id": "physical-long-lash-serum",
+      "title": "Encapsulated Complex Peptide Long Lash Serum",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/15234511339905",
+      "description": "A peptide lash serum for a fuller, stronger-looking lash line.",
+      "variants": ["Default Title"]
+    },
+    {
+      "id": "physical-perfume-beginning-20ml",
+      "title": "Serenity Hue Perfume - The Beginning",
+      "packaging": "Large Pouch",
+      "shopifyProductId": "gid://shopify/Product/15353460261249",
+      "description": "The Beginning is the 20ml fragrance from the Serenity Hue perfume collection.",
+      "variants": ["20ml"]
+    },
+    {
+      "id": "physical-vitamin-c-30ml",
+      "title": "Serenity Hue Lab Twist Vitamin C Serum",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/15454478369153",
+      "description": "A 30ml vitamin C and astaxanthin serum designed to brighten and provide antioxidant support.",
+      "variants": ["30ml"]
+    },
+    {
+      "id": "physical-brow-follicle-bioactivator",
+      "title": "Brow Follicle BioActivator",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/15331335373185",
+      "description": "A targeted brow treatment made to support fuller-looking brows.",
+      "variants": ["Default Title"]
+    },
+    {
+      "id": "physical-brow-pomade",
+      "title": "Brow Pomade",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/7500171935933",
+      "description": "A 10g brow pomade available in seven shades for defined, natural-looking brows.",
+      "variants": ["Black", "Cool Grey", "Light Blonde", "Light Brown", "Neutral Brown", "Warm Auburn", "Warm Brown"]
+    },
+    {
+      "id": "physical-brow-lamination-clay-10g",
+      "title": "Brow Lamination Clay",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/7500155977917",
+      "description": "A 10g brow lamination clay for flexible shaping and controlled hold.",
+      "variants": ["10g"]
+    },
+    {
+      "id": "physical-brow-baking-powder-5g",
+      "title": "Brow Baking Powder",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/7500101157053",
+      "description": "A 5g brow baking powder for setting and finishing brow products.",
+      "variants": ["5g"]
+    },
+    {
+      "id": "physical-fuel-bake-35g",
+      "title": "Fuel & Bake Brow Baking Powder",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/7077488263357",
+      "description": "A 35g professional brow baking powder from the Fuel & Bake range.",
+      "variants": ["35g"]
+    },
+    {
+      "id": "physical-fuel-lamination-clay-35g",
+      "title": "Fuel & Lamination Clay",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/7077490950333",
+      "description": "A 35g professional brow lamination clay from the Fuel & Lamination range.",
+      "variants": ["35g"]
+    },
+    {
+      "id": "physical-fuel-tinting-mud",
+      "title": "Fuel & Tint Brow Tinting Mud",
+      "packaging": "Small Pouch",
+      "shopifyProductId": "gid://shopify/Product/15493718049153",
+      "description": "A 35g brow tinting mud, counted separately by its Warm Brown and Black shades.",
+      "variants": ["Warm Brown", "Black"]
+    },
+    {
+      "id": "physical-custom-pouch",
+      "title": "Custom-Made Serenity Hue Pouch",
+      "packaging": null,
+      "shopifyProductId": null,
+      "description": "Reusable Serenity Hue pouch used to package individual products and selected bundles.",
+      "variants": ["Default Title"]
+    },
+    {
+      "id": "physical-brow-spoolie",
+      "title": "Brow Spoolie",
+      "packaging": null,
+      "shopifyProductId": null,
+      "description": "Individual brow spoolie used with brow product applications and selected bundles.",
+      "variants": ["Default Title"]
+    }
+  ]
+}

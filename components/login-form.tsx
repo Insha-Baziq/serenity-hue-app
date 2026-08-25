@@ -19,20 +19,24 @@ export function LoginForm() {
     setError("");
     setPending(true);
 
-    const result = await authClient.signIn.email({
-      email: email.trim(),
-      password,
-      rememberMe,
-    });
+    try {
+      const result = await authClient.signIn.email({
+        email: email.trim(),
+        password,
+        rememberMe,
+      });
 
-    if (result.error) {
-      setError(result.error.message || "Those details were not recognised. Try again.");
+      if (result.error) {
+        setError(result.error.message || "Those details were not recognised. Try again.");
+        return;
+      }
+
+      router.replace("/orders");
+    } catch {
+      setError("We could not sign you in right now. Check your connection and try again.");
+    } finally {
       setPending(false);
-      return;
     }
-
-    router.replace("/orders");
-    router.refresh();
   }
 
   return (

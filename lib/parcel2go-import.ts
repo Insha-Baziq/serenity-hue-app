@@ -53,14 +53,15 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
     await db.execute({
       sql: `INSERT INTO shipments (
               id, provider, external_order_line_id, order_id, match_method, transaction_id, courier, service, source, status,
-              paid_at, collection_date, estimated_delivery_at, tracking_url, last_synced_at, created_at, updated_at
-            ) VALUES (?, 'parcel2go', ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              source_references_json, paid_at, collection_date, estimated_delivery_at, tracking_url, last_synced_at, created_at, updated_at
+            ) VALUES (?, 'parcel2go', ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider, external_order_line_id) DO UPDATE SET
               transaction_id = excluded.transaction_id,
               courier = excluded.courier,
               service = excluded.service,
               source = excluded.source,
               status = excluded.status,
+              source_references_json = excluded.source_references_json,
               paid_at = excluded.paid_at,
               collection_date = excluded.collection_date,
               estimated_delivery_at = excluded.estimated_delivery_at,
@@ -75,6 +76,7 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
         shipment.service,
         shipment.source ?? null,
         shipment.status,
+        JSON.stringify(shipment.importedReferences),
         shipment.paidAt ?? null,
         shipment.collectionDate ?? null,
         shipment.estimatedDeliveryAt ?? null,

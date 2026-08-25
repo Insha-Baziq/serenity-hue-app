@@ -1,5 +1,12 @@
 PRAGMA foreign_keys = ON;
 
+-- Versioned migrations are recorded explicitly. Runtime requests never infer
+-- migration state from the existence of a single table.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   shopify_product_id TEXT UNIQUE,
@@ -50,6 +57,7 @@ CREATE TABLE IF NOT EXISTS packaging_materials (
   quantity INTEGER NOT NULL DEFAULT 0,
   reorder_point INTEGER NOT NULL DEFAULT 0,
   lead_time_days INTEGER,
+  active INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -86,6 +94,8 @@ CREATE TABLE IF NOT EXISTS orders (
   tax_amount INTEGER NOT NULL DEFAULT 0,
   financial_status TEXT NOT NULL DEFAULT 'pending',
   fulfillment_status TEXT NOT NULL DEFAULT 'unfulfilled',
+  cancelled_at TEXT,
+  source_shop_id TEXT,
   source_created_at TEXT NOT NULL,
   source_updated_at TEXT,
   imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -93,6 +103,9 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 CREATE INDEX IF NOT EXISTS orders_source_created_at_idx ON orders(source, source_created_at DESC);
+CREATE INDEX IF NOT EXISTS orders_created_id_idx ON orders(source_created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS orders_source_updated_at_idx ON orders(source, source_updated_at DESC);
+CREATE INDEX IF NOT EXISTS orders_source_shop_updated_at_idx ON orders(source, source_shop_id, source_updated_at DESC);
 CREATE INDEX IF NOT EXISTS orders_fulfillment_status_idx ON orders(fulfillment_status);
 
 CREATE TABLE IF NOT EXISTS order_items (
@@ -100,6 +113,8 @@ CREATE TABLE IF NOT EXISTS order_items (
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   variant_id TEXT REFERENCES variants(id) ON DELETE SET NULL,
   source_line_item_id TEXT,
+  source_product_id TEXT,
+  source_variant_id TEXT,
   title TEXT NOT NULL,
   variant_title TEXT,
   sku TEXT,
@@ -110,11 +125,81 @@ CREATE TABLE IF NOT EXISTS order_items (
 );
 
 CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS order_items_order_source_variant_idx ON order_items(order_id, source_variant_id);
+
+-- Full-text order search replaces unindexed case-folded substring scans over
+-- orders and a correlated line-item subquery.
+CREATE VIRTUAL TABLE IF NOT EXISTS order_search USING fts5(
+  order_id UNINDEXED,
+  order_number,
+  customer_name,
+  customer_email,
+  line_items
+);
+
+CREATE TRIGGER IF NOT EXISTS order_search_orders_insert AFTER INSERT ON orders BEGIN
+  INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+  VALUES (new.rowid, new.id, new.order_number, COALESCE(new.customer_name, ''), COALESCE(new.customer_email, ''),
+    COALESCE((SELECT group_concat(COALESCE(title, '') || ' ' || COALESCE(sku, ''), ' ') FROM order_items WHERE order_id = new.id), ''));
+END;
+CREATE TRIGGER IF NOT EXISTS order_search_orders_update AFTER UPDATE ON orders BEGIN
+  DELETE FROM order_search WHERE rowid = old.rowid;
+  INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+  VALUES (new.rowid, new.id, new.order_number, COALESCE(new.customer_name, ''), COALESCE(new.customer_email, ''),
+    COALESCE((SELECT group_concat(COALESCE(title, '') || ' ' || COALESCE(sku, ''), ' ') FROM order_items WHERE order_id = new.id), ''));
+END;
+CREATE TRIGGER IF NOT EXISTS order_search_orders_delete AFTER DELETE ON orders BEGIN
+  DELETE FROM order_search WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS order_search_items_insert AFTER INSERT ON order_items BEGIN
+  DELETE FROM order_search WHERE rowid = (SELECT rowid FROM orders WHERE id = new.order_id);
+  INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+  SELECT o.rowid, o.id, o.order_number, COALESCE(o.customer_name, ''), COALESCE(o.customer_email, ''),
+    COALESCE((SELECT group_concat(COALESCE(title, '') || ' ' || COALESCE(sku, ''), ' ') FROM order_items WHERE order_id = o.id), '')
+  FROM orders o WHERE o.id = new.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS order_search_items_update AFTER UPDATE ON order_items BEGIN
+  DELETE FROM order_search WHERE rowid = (SELECT rowid FROM orders WHERE id = new.order_id);
+  INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+  SELECT o.rowid, o.id, o.order_number, COALESCE(o.customer_name, ''), COALESCE(o.customer_email, ''),
+    COALESCE((SELECT group_concat(COALESCE(title, '') || ' ' || COALESCE(sku, ''), ' ') FROM order_items WHERE order_id = o.id), '')
+  FROM orders o WHERE o.id = new.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS order_search_items_delete AFTER DELETE ON order_items BEGIN
+  DELETE FROM order_search WHERE rowid = (SELECT rowid FROM orders WHERE id = old.order_id);
+  INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+  SELECT o.rowid, o.id, o.order_number, COALESCE(o.customer_name, ''), COALESCE(o.customer_email, ''),
+    COALESCE((SELECT group_concat(COALESCE(title, '') || ' ' || COALESCE(sku, ''), ' ') FROM order_items WHERE order_id = o.id), '')
+  FROM orders o WHERE o.id = old.order_id;
+END;
+
+-- TikTok after-sales events are line-level and can arrive separately from the
+-- order-status event. Keeping the latest status for each immutable event/line
+-- identity makes cancellation and return restoration idempotent.
+CREATE TABLE IF NOT EXISTS tiktok_after_sales_line_items (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL CHECK (event_type IN ('cancel', 'return')),
+  event_id TEXT NOT NULL,
+  order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  source_line_item_id TEXT NOT NULL,
+  source_variant_id TEXT,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  status TEXT NOT NULL,
+  return_type TEXT,
+  source_updated_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (event_type, event_id, source_line_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_after_sales_order_idx
+  ON tiktok_after_sales_line_items(order_id, event_type, status, source_updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS shipments (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL CHECK (provider IN ('parcel2go')),
   external_order_line_id TEXT NOT NULL,
+  source_references_json TEXT NOT NULL DEFAULT '[]',
   order_id TEXT REFERENCES orders(id) ON DELETE SET NULL,
   match_method TEXT CHECK (match_method IN ('order_reference', 'customer_email', 'customer_phone', 'delivery_address')),
   transaction_id TEXT,
@@ -175,6 +260,7 @@ CREATE TABLE IF NOT EXISTS channel_inventory (
   id TEXT PRIMARY KEY,
   variant_id TEXT REFERENCES variants(id) ON DELETE SET NULL,
   channel TEXT NOT NULL CHECK (channel IN ('shopify', 'tiktok')),
+  shop_id TEXT,
   external_product_id TEXT,
   external_sku_id TEXT,
   warehouse_id TEXT,
@@ -199,6 +285,154 @@ CREATE TABLE IF NOT EXISTS inventory_ledger (
 );
 CREATE INDEX IF NOT EXISTS inventory_ledger_created_idx ON inventory_ledger(created_at DESC);
 CREATE INDEX IF NOT EXISTS inventory_ledger_variant_idx ON inventory_ledger(variant_id, created_at DESC);
+
+-- Canonical physical catalogue. This is intentionally independent from the
+-- Shopify mirror above: channel listings (including bundles) will map to these
+-- rows later, rather than defining what can be counted as stock.
+CREATE TABLE IF NOT EXISTS physical_inventory_items (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  variant_label TEXT NOT NULL DEFAULT '',
+  description TEXT,
+  shopify_product_id TEXT,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  quantity_known INTEGER NOT NULL DEFAULT 0,
+  packaging_type TEXT,
+  reorder_point INTEGER NOT NULL DEFAULT 0,
+  lead_time_days INTEGER,
+  source_label TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS physical_inventory_items_active_title_idx ON physical_inventory_items(active, title, variant_label);
+
+CREATE TABLE IF NOT EXISTS physical_inventory_variants (
+  id TEXT PRIMARY KEY,
+  physical_item_id TEXT NOT NULL REFERENCES physical_inventory_items(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  sku TEXT,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  quantity_known INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(physical_item_id, title)
+);
+
+CREATE INDEX IF NOT EXISTS physical_inventory_variants_item_idx ON physical_inventory_variants(physical_item_id, sort_order, title);
+
+CREATE TABLE IF NOT EXISTS physical_inventory_ledger (
+  id TEXT PRIMARY KEY,
+  physical_item_id TEXT NOT NULL REFERENCES physical_inventory_items(id) ON DELETE CASCADE,
+  change_type TEXT NOT NULL CHECK (change_type IN ('initial_import', 'manual_edit', 'sale', 'reconcile_fix', 'bundle_deduct')),
+  actor TEXT NOT NULL,
+  quantity_before INTEGER,
+  quantity_after INTEGER NOT NULL,
+  quantity_delta INTEGER NOT NULL,
+  reference TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS physical_inventory_ledger_item_created_idx ON physical_inventory_ledger(physical_item_id, created_at DESC);
+
+-- Idempotent physical-stock applications. Each channel event is expanded into
+-- one row per physical variant, so a bundle can safely deduct several exact
+-- components while a repeated sync cannot deduct twice.
+CREATE TABLE IF NOT EXISTS physical_inventory_applications (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL CHECK (source IN ('shopify', 'tiktok')),
+  event_type TEXT NOT NULL CHECK (event_type IN ('sale', 'refund', 'cancel')),
+  source_event_id TEXT NOT NULL,
+  order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  order_line_item_id TEXT,
+  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
+  quantity_delta INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source, event_type, source_event_id, physical_variant_id)
+);
+
+CREATE INDEX IF NOT EXISTS physical_inventory_applications_order_idx ON physical_inventory_applications(order_id, created_at DESC);
+
+-- Holds Shopify's authoritative, line-level refund events. Keeping the raw
+-- identity here lets a later sync restore precisely the components that were
+-- deducted for that order, without title matching or double restoration.
+CREATE TABLE IF NOT EXISTS shopify_refund_line_items (
+  id TEXT PRIMARY KEY,
+  refund_id TEXT NOT NULL,
+  order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  source_line_item_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  restocked INTEGER NOT NULL DEFAULT 0,
+  restock_type TEXT,
+  processed_at TEXT,
+  imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(refund_id, source_line_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS shopify_refund_line_items_order_idx ON shopify_refund_line_items(order_id, processed_at DESC);
+
+-- The cutover guard intentionally baselines historical orders once. New
+-- orders can then be applied while later refunds for applied orders are still
+-- allowed through the immutable application rows above.
+CREATE TABLE IF NOT EXISTS physical_inventory_order_state (
+  order_id TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+  sale_state TEXT NOT NULL CHECK (sale_state IN ('baseline', 'applied', 'needs_mapping')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Channel listings are intentionally separate from the physical catalogue. A
+-- listing may be a standalone product, a variant, or a bundle composed of
+-- several physical variants.
+CREATE TABLE IF NOT EXISTS physical_channel_listings (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL CHECK (channel IN ('shopify', 'tiktok')),
+  external_product_id TEXT NOT NULL,
+  external_variant_id TEXT,
+  title TEXT NOT NULL,
+  variant_title TEXT NOT NULL DEFAULT '',
+  image_url TEXT,
+  listing_url TEXT,
+  channel_quantity INTEGER,
+  listing_kind TEXT NOT NULL DEFAULT 'unknown' CHECK (listing_kind IN ('individual', 'bundle', 'unknown')),
+  mapping_status TEXT NOT NULL DEFAULT 'unmapped' CHECK (mapping_status IN ('confirmed', 'review', 'unmapped')),
+  source_note TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(channel, external_product_id, external_variant_id)
+);
+
+CREATE INDEX IF NOT EXISTS physical_channel_listings_channel_active_idx ON physical_channel_listings(channel, active, title);
+
+-- A channel product can be associated with one master product for product
+-- level organisation. This never replaces the exact variant-level component
+-- map below, which is the only mapping used for stock deductions.
+CREATE TABLE IF NOT EXISTS physical_channel_product_links (
+  channel TEXT NOT NULL CHECK (channel IN ('shopify', 'tiktok')),
+  external_product_id TEXT NOT NULL,
+  physical_item_id TEXT NOT NULL REFERENCES physical_inventory_items(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (channel, external_product_id)
+);
+
+CREATE INDEX IF NOT EXISTS physical_channel_product_links_item_idx ON physical_channel_product_links(physical_item_id);
+
+CREATE TABLE IF NOT EXISTS physical_listing_components (
+  id TEXT PRIMARY KEY,
+  listing_id TEXT NOT NULL REFERENCES physical_channel_listings(id) ON DELETE CASCADE,
+  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
+  quantity_per_sale INTEGER NOT NULL CHECK (quantity_per_sale > 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(listing_id, physical_variant_id)
+);
+
+CREATE INDEX IF NOT EXISTS physical_listing_components_listing_idx ON physical_listing_components(listing_id);
 
 CREATE TABLE IF NOT EXISTS inventory_order_applications (
   order_id TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
@@ -260,6 +494,8 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   UNIQUE (provider, external_event_id)
 );
 
+CREATE INDEX IF NOT EXISTS webhook_events_status_received_idx ON webhook_events(status, received_at);
+
 CREATE TABLE IF NOT EXISTS tiktok_oauth_states (
   id TEXT PRIMARY KEY,
   state_hash TEXT NOT NULL UNIQUE,
@@ -293,6 +529,20 @@ CREATE TABLE IF NOT EXISTS tiktok_import_state (
   backfill_completed_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Orders, cancellations, and returns have independent per-shop clocks. A
+-- shared cursor can skip a late after-sales event for an older order.
+CREATE TABLE IF NOT EXISTS tiktok_sync_cursors (
+  connection_id TEXT NOT NULL REFERENCES tiktok_connections(id) ON DELETE CASCADE,
+  shop_id TEXT NOT NULL,
+  stream TEXT NOT NULL CHECK (stream IN ('orders', 'after_sales_cancel', 'after_sales_return')),
+  cursor_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (connection_id, shop_id, stream)
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_sync_cursors_stream_updated_idx
+  ON tiktok_sync_cursors(stream, updated_at DESC);
 
 -- Better Auth staff accounts and sessions.
 CREATE TABLE IF NOT EXISTS "user" (

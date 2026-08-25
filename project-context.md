@@ -1,6 +1,6 @@
 # Serenity Hue Operations — Project Context
 
-Last updated: 18 August 2026
+Last updated: 23 August 2026
 
 This file is the working handoff for the Serenity Hue internal operations app. Read it before making product, data-model, integration, or UI decisions.
 
@@ -17,6 +17,77 @@ The goal is to give the client one reliable place to:
 - eventually identify low stock and reorder risk from sales velocity and lead times.
 
 The client previously had a static HTML dashboard generated with Claude. It was fragile and relied on scheduled scripts plus AfterShip/Dropbox files. The replacement app must be functional, direct, and deliberately modest in scope rather than recreate every speculative feature.
+
+## Latest authoritative implementation status — 23 August 2026
+
+This section supersedes older “local-only”, “pending deployment”, and “not yet wired” statements elsewhere in this historical handoff where they conflict.
+
+- The canonical physical catalogue, variant-aware stock editor, Shopify/TikTok channel listing views, and mapping dialogs are deployed at `/inventory/products`.
+- Listings have exactly two types: **Individual** and **Bundle**. A bundle may contain the same physical variant more than once or multiple different physical variants. Channel listings map directly to the exact physical variants and quantities consumed per sale; they never map Shopify to TikTok.
+- Mapping is variant-aware. A channel variant can map to its matching master shade/size. If TikTok has deliberately listed each shade as a separate product, each product maps to the matching physical variant. A bundle with shade-dependent components must be mapped to the appropriate shade(s), never to every variant of a product.
+- Shopify listing identity is maintained by Shopify product/variant IDs, not titles. Renaming a Shopify product updates the existing row on sync; it does not create a duplicate mapping row. TikTok source links use the seller-management search URL because the API product ID is not a valid public `shop.tiktok.com/view/product/...` ID.
+- Shopify product and TikTok product rows have a **View source** link. For TikTok it opens Seller Center product management pre-filled with the API product ID; a seller login is expected.
+- Shopify’s current read-only app scopes are: `read_all_orders`, `read_customers`, `read_inventory`, `read_orders`, `read_products`, and `read_returns`. No Shopify write scope is required for the current inventory reconciliation.
+
+### Shopify master-stock reconciliation — deployed and tested
+
+- `orders.cancelled_at`, `physical_inventory_applications`, `physical_inventory_order_state`, and `shopify_refund_line_items` provide the durable Shopify order/reversal trail.
+- The first reconciliation after enabling this implementation records existing Shopify orders as a **baseline**. Historic orders do not change newly counted physical stock.
+- For later Shopify orders, every line must have a confirmed physical recipe before any master stock is changed. The app resolves through Shopify’s stable variant ID, expands a bundle recipe into its exact components, applies one idempotent immutable application per physical variant, updates the physical variant count, recalculates its parent total, and writes the physical ledger.
+- A Shopify refund restores the exact physical components consumed by the original sale. A Shopify cancellation restores only the remaining unrefunded components. The process is idempotent, so repeated syncs cannot deduct or restore twice.
+- TikTok master-stock reconciliation is now deployed alongside Shopify. New TikTok orders deduct the mapped physical components; terminal cancellations and completed physical returns restore only the affected quantity, with idempotent application rows preventing duplicate or out-of-order sync effects. Refund-only cases intentionally do not restore stock because the buyer keeps the item. Live TikTok end-to-end order testing still requires a seller-authorized connection with the after-sales scope enabled.
+- Temporary test stock was deliberately seeded in production at **100 units per physical variant** (20 variants) with the note `Temporary Shopify inventory test baseline: 100 units per variant`. This is not a final client stock count.
+- Live end-to-end test completed: Shopify order **#1232** (one Brow Pomade variant, £5.00, payment due later) imported after sync and changed Brow Pomade master total from **700 to 699**. After the client cancelled the order and synced again, it returned to **700**; Shopify’s own inventory also reflected the cancellation.
+- The Orders UI now uses the cancellation timestamp as the final operational state. A cancelled order shows **Cancelled** in the fulfilment column/filter and **No payment due** instead of an obsolete Pending payment label. Its detail timeline ends at **Cancelled**, rather than showing a fulfilled state. This was verified on desktop and phone-sized layouts for #1232.
+- Latest production deployment for this work: `dpl_H7cqtuhYdJCbnmg1bwu5tBdHuynS`, aliased to `https://serenity-hue-operations.vercel.app`.
+
+### Client-provided physical stock counts — applied 23 August 2026
+
+The client supplied the actual warehouse counts below. They were written through the authenticated production inventory controls with the note `Client-provided actual physical stock quantities (23 Aug 2026)` and verified on the Products and Packaging pages:
+
+| Production row | Quantity applied |
+| --- | ---: |
+| Brow Follicle BioActivator | 800 |
+| Encapsulated Complex Peptide Long Lash Serum (client: Lash Serums) | 1,000 |
+| Snow Lift Peptide Under/Hooded Eye Serum (client: Under Eye Serum) | 1,000 |
+| Serenity Hue Lab Twist Vitamin C Serum (client: Vit C) | 60 |
+| Serenity Hue Perfume - The Beginning (client: Perfume) | 700 |
+| Custom-Made Serenity Hue Pouch (client: Pouches) | 300 |
+| Brow Spoolie (client: Spookiest, interpreted as Spoolies) | 8,000 |
+| Brow Pomade — all seven colour variants | 200 each; 1,400 total |
+| Brow Lamination Clay, 10g | 100 |
+| Brow Baking Powder, 5g | 600 |
+| Fuel & Tint Brow Tinting Mud — Warm Brown | 5,000 |
+| Fuel & Tint Brow Tinting Mud — Black | 5,000 |
+| Small Pouch packaging | 500 |
+| Large Pouch packaging | 300 |
+
+The client’s `File and Brow Baking Powder Large 10g` row was not applied because no matching 10g physical product exists in the catalogue. The closest catalogue row is `Fuel & Bake Brow Baking Powder`, but it is a separate **35g** product and must not be assumed to mean the client’s 10g item. Its temporary test quantity remains unchanged until the client clarifies the intended product.
+
+### Performance optimization pass — deployed 23 August 2026
+
+Audit finding: the app is not slow because of data volume (≈229 local orders, 38 variants, 107 TikTok SKUs, 1 MB DB). It was slow because pages made many **sequential Turso round trips**, re-seeded data **on read**, and cached nothing. Two batches were implemented and deployed together.
+
+Production deployment for this work: `dpl_DqPDiT2ToCkQwKFQKM5Jybj2E4mp`, aliased to `https://serenity-hue-operations.vercel.app`. Validation gate (`npm run typecheck && npm run lint && npm run build`) passed; lint shows only the two known raw-image warnings. Both batches preserve existing logic — no reconciliation, ledger, mapping, or auth behaviour changed.
+
+**Batch A — inventory-page re-seed (was the dominant cost).** `/inventory/products` used to re-run `ensurePhysicalChannelListings()` on every view (~60 unconditional `INSERT…ON CONFLICT` upserts), and it ran twice per load (Shopify + TikTok) sequentially — ~130 statements per page view. Now (`lib/repository.ts`):
+
+- `ensurePhysicalChannelListings()` computes a cheap **signature** of its exact inputs (products/variants counts + `MAX(updated_at)`/`last_synced_at` + summed quantities; TikTok `channel_inventory` count/`synced_at`/quantity; the seed-version constants) stored in `inventory_settings` under `physical_channel_listings_signature`. If the signature is unchanged it returns immediately — no writes. It rebuilds only after a sync/refresh actually changes those inputs. The importer always bumps `updated_at`/`last_synced_at`/`synced_at`, so any real change is detected. `TIKTOK_LISTING_SEED_VERSION` must be bumped whenever `TIKTOK_LISTING_SEED` changes.
+- When a rebuild does run, all upserts (and the physical seed's deletes/inserts) apply in a single atomic `db.batch(..., "write")` — one round trip, all-or-nothing.
+- Both ensure functions dedupe concurrent callers via an in-flight promise, so the products page now loads its three datasets with `Promise.all` and the seed still runs exactly once.
+- The seed's `ON CONFLICT` clauses never touch `mapping_status`, `listing_kind`, or the mapping tables (`physical_listing_components`, `physical_channel_product_links`), so a skipped or repeated rebuild cannot lose a manual mapping. First load after deploy does one rebuild (signature key absent), upserting existing rows as no-ops, then stays fast.
+
+**Batch B — Orders list server-side pagination/search (#5).** The Orders page previously loaded up to 500 orders with all items/shipments/events on every visit and did search/filter/sort/pagination in the browser. Now it is server-driven:
+
+- `lib/orders-query.ts` (new) — shared, dependency-free `OrdersQuery` type, `parseOrdersQuery`, `ordersQueryToParams`, and `ORDERS_PAGE_SIZES`; used by the page, the export route, and the workspace so parameter names/defaults/URL shape agree.
+- `getOrdersPage(query)` — SQL `WHERE` (built by `buildOrdersFilter`) + `COUNT` + `LIMIT/OFFSET`, hydrating only the current page's items/deliveries. Search matches order number, customer, email, and line-item title/SKU (via `EXISTS` on `order_items`), with `ESCAPE '\'` so typed `%`/`_` are literal. Channel and fulfilment (cancelled/partial/fulfilled/unfulfilled) derivations mirror the old client filter exactly; date range is a rolling window. `getOrders()` (still used by Overview) was refactored onto the shared `hydrateOrders` helper and is unchanged in behaviour.
+- `app/(operations)/orders/page.tsx` awaits `searchParams` (a Promise in Next 16) and passes the page/total/query to the workspace.
+- `components/orders-workspace.tsx` is URL-driven: debounced search, filters/pagination push URL params, `useTransition` pending state; search box syncs to the URL on back/forward via render-time state adjustment (no effect). Column picker and detail sheet remain client-only.
+- `GET /api/orders/export` (session-guarded, `getOrdersForExport`) streams **all** rows matching the current filters as CSV, so export still covers the full filtered set, not one page.
+
+**Deferred perf items** (discussed, not built): **#4 in-app caching** (`unstable_cache` + tag invalidation on every mutation/sync) — safe next step; **#6 Turso embedded replica** (local read replica) — biggest infra win but needs read-after-write testing before production.
+
+Note: a full **signed-in browser click-through was not performed** for Batch B because local/production login credentials were not available in the session; the SQL filter/pagination/export semantics were verified directly against the local database instead. A signed-in production pass of Orders (search, channel tabs, fulfilment filter, date range, 25/40/50 paging, CSV export, order detail sheet) is still recommended.
 
 ## Agreed product decisions
 
@@ -43,7 +114,7 @@ The client previously had a static HTML dashboard generated with Claude. It was 
 - The current app groups variants by product on the Products page, but the product detail sheet shows the individual variant distribution.
 - Packaging materials are separate operational inventory (pouches, boxes, etc.), not a section at the bottom of the Products page.
 - Lead time and stock-cover calculations are useful future alert inputs, but the user asked not to clutter the current Inventory UI with attention cards, top-level alerts, or analytics.
-- TikTok mapping is not currently a visible product-management feature. Do not add mapping cards, filters, columns, or invented TikTok status indicators until there is a real TikTok integration and an agreed workflow.
+- Channel mapping is a visible product-management workflow: Shopify and TikTok listings map independently to the canonical physical variants. Never create a channel-to-channel mapping as the source of truth, and never auto-map a listing when its size, shade, or components are ambiguous.
 
 ## Current state of the app
 
@@ -55,30 +126,32 @@ npm run dev
 
 Primary local URLs:
 
-Every route under `app/(operations)/` is gated: the operations layout calls `getCurrentSession()` and redirects to `/login` when there is no valid Better Auth session. The root route `/` also redirects to `/login`.
+Every route under `app/(operations)/` is gated: the operations layout calls `getCurrentSession()` and redirects to `/login` when there is no valid Better Auth session. The root route `/` checks the session and redirects authenticated staff to `/overview`; unauthenticated visitors go to `/login`. The local change is validated but has not yet been deployed.
 
 | Route | Current behaviour |
 | --- | --- |
-| `/login` | Sign-in screen (public). Split-panel layout: campaign portrait + email/password form via Better Auth. |
+| `/login` | Sign-in screen (public). Split-panel layout: campaign portrait + email/password form via Better Auth. Authenticated visitors redirect to `/overview` rather than seeing the form again (local, pending deployment). |
 | `/overview` | Live overview workspace: order/channel summary, inventory counts (units on hand, live/low/out-of-stock variants, packaging types), recent orders, sync status, and a **Sync now** button. No longer a placeholder. |
 | `/orders` | Live Shopify (and authorized TikTok) orders table and order detail sheet. |
 | `/employees` | Staff list (name, email, status, last seen) with a create-employee form. |
 | `/inventory` | Redirects to `/inventory/products`. |
-| `/inventory/products` | Product-level inventory table with variant detail sheet. |
+| `/inventory/products` | Canonical physical catalogue plus Shopify and TikTok listing-mapping views. |
 | `/inventory/packaging` | Separate packaging materials table. |
 
 `/overview` is served by the `[section]` dynamic route, which `notFound()`s for any section other than `overview`. Routes such as `/analytics`, `/products`, `/sync-health`, and `/settings` are deliberately not part of the current navigation or feature scope.
 
 ### Sidebar
 
-The desktop sidebar contains:
+The desktop sidebar now uses the shadcn Sidebar composition (provider, header, content, grouped menu, footer, nested menu, and collapse rail), customised to retain Serenity Hue’s existing Avenir Next typography, dark plum/magenta palette, logo, and navigation. This local change is validated but pending deployment. It supports a persistent expanded/collapsed preference and the `Ctrl/Cmd+B` shortcut.
+
+The navigation contains:
 
 1. Overview
 2. Orders
 3. Employees
 4. Inventory — an expandable item with **Products** and **Packaging** sub-pages
 
-A **Sign out** control sits at the bottom of the sidebar and calls `authClient.signOut()`. The mobile bottom navigation exposes Overview, Orders, Employees, Products, and Packaging.
+A **Sign out** control sits at the bottom of the sidebar and calls `authClient.signOut()`. The existing mobile bottom navigation remains, exposing Overview, Orders, Employees, Products, and Packaging.
 
 The old Operations section, Sync health, and Settings navigation entries were removed at the user’s request.
 
@@ -86,7 +159,7 @@ The old Operations section, Sync health, and Settings navigation entries were re
 
 Implemented features:
 
-- `/employees` lists Better Auth users joined to their sessions: name, email, `active`/`offline` status (any unexpired session), and last-seen time (`components/employees-workspace.tsx`).
+- `/employees` lists Better Auth users joined to their sessions: name, email, live `Online`/`Offline` presence, and last-active time (`components/employees-workspace.tsx`). A user is Online only when a session was updated within the last five minutes; session expiry alone never makes someone appear online. Successful page/API authentication touches the user’s session timestamp so the current user shows `Online` and `just now` while working.
 - The create-employee form posts to `POST /api/employees`, which requires a valid session, validates name/email/password, and calls `createEmployee()` in `lib/repository.ts` to insert a `user` + credential `account` row with a hashed password.
 - There is no self-service sign-up in the UI; new staff are created by an already-authenticated user, or bootstrapped from `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` on first request (see Authentication below).
 
@@ -228,6 +301,7 @@ Key behaviour:
 - `ensureAuthDatabase()` runs on session checks. If `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` are set and no matching user exists, it bootstraps a single admin `user` + credential `account`. Remove those env values after the first admin exists.
 - `trustedOrigins` includes the resolved app URL, the Vercel production URL, and localhost. The cookie prefix is `serenity-hue`.
 - The operations layout redirects unauthenticated visitors to `/login`; API routes that mutate data (e.g. `POST /api/employees`) call `requireApiSession()` and return 401 without a session.
+- A checked **Remember me** option creates a persistent Better Auth session for 30 days. The root and login routes now respect that existing session: `/` and `/login` redirect authenticated staff to `/overview` (local, pending deployment).
 - `proxy.ts` no longer issues a Basic Auth challenge — it is a pass-through, and its matcher excludes `/login`, `/api/auth`, `/api/jobs/reconcile`, `/api/webhooks/parcel2go`, and the TikTok callback/webhook routes. `INTERNAL_APP_USERNAME` / `INTERNAL_APP_PASSWORD` remain only as a documented temporary fallback and are not the active mechanism.
 
 ## Data model
@@ -408,6 +482,22 @@ The client keeps TikTok stock **deliberately low** as an algorithm play: low dis
 
 TikTok SKUs carry **no `seller_sku`** (confirmed 19 Aug 2026 — all 107 TikTok SKUs returned empty). So Shopify↔TikTok↔master matching cannot use SKU codes. It must use an app-maintained mapping (extend `channel_mappings`) plus name-based matching, analyst-reviewed. TikTok also has many **duplicate/relisted** products and ~20 **bundles**; bundles deduct multiple master lines via `bundle_components`. The client's master Excel structure determines the master table shape — obtain it before finalizing the schema.
 
+### Canonical internal catalogue and bundle mapping — confirmed 21 Aug 2026
+
+The Products page should ultimately be a canonical internal catalogue of **physical products/variants**, with each stock item represented once. Shopify and TikTok products are channel listings, not the master record:
+
+```text
+Shopify or TikTok listing → one or more internal physical variants → master quantity
+```
+
+- A normal listing maps to one internal physical variant with multiplier `1`.
+- A bundle listing maps to multiple component variants and quantities through `bundle_components` (for example, Brow Serum ×1 + Under-Eye Serum ×1).
+- Selling a bundle records the original channel order/listing for traceability, then decrements the underlying physical master variants — not an invented separate bundle quantity.
+- Do not build Shopify↔TikTok product-to-product mappings as the primary model. Both channels map independently to the canonical internal variants, allowing unlimited channel-specific bundles, relists, product names, and deliberate display-stock differences.
+- A genuinely pre-assembled, separately counted product is the only exception; it may be modelled as its own physical master item when the client explicitly confirms that stock is held separately.
+
+This is an agreed modelling direction; the current Phase 1 screen still groups imported Shopify variants and does not yet provide the mapping-management workflow or sale-driven master decrements.
+
 ### Audit ledger (required)
 
 Every inventory change on all three inventories writes one **immutable, append-only** row (reuse/extend `stock_movements`). Never update or delete a ledger row. Each row captures: timestamp, actor (staff user via Better Auth, or `system: shopify sale` / `system: tiktok sale`), which inventory (master/shopify/tiktok), product, change type (`manual_edit` | `sale` | `allocation_push` | `reconcile_fix` | `bundle_deduct`), before→after snapshot, delta, source reference (order id for sales), and result (ok/failed for channel pushes). Two views: per-product history timeline, and a global filterable activity feed.
@@ -423,6 +513,73 @@ Three views selected by a prominent switch: **Master · Shopify · TikTok**. The
 ### Verified working (19 Aug 2026)
 
 TikTok product read + write scopes are live on the production token (`seller.product.basic`, `seller.product.write`, plus order/authorization scopes). A local read via the Turso CLI confirmed 56 TikTok products / 107 SKUs / 2,575 units. Shopify holds 38 variants / 2,168 units. Only one product (copper peptide) currently matches across channels — consistent with the intentional-divergence strategy. Diagnostic endpoint `GET /api/tiktok/inventory-check` exists (session-guarded, read-only).
+
+TikTok SKUs have **no `seller_sku`** — matching relies on `channel_mappings` (product-level, from the legacy TikTok Listing Map) plus name-based review. TikTok has many duplicate/relisted products and ~20 bundles; Shopify sells no lip range (TikTok-only).
+
+### Catalogue direction — physical stock first (21 Aug 2026, implemented locally; pending production migration/deployment)
+
+The Products page now reads from a **canonical physical catalogue**, separate from the Shopify-derived tables. The original `master-inf.xlsx` was discovered to be AfterShip-derived and bundle-contaminated, so it must not seed this catalogue. The client supplied `individual items.ods` (Sheet1) as the authoritative starting list: 13 individual product groups, with variants grouped under their parent product rather than listed as separate product rows. Quantities are unknown because they are maintained on paper, so each new row begins as **Not counted** rather than zero. The reset is explicit and one-time via `physical_inventory_seed_version`; Shopify and TikTok snapshots are preserved for later enrichment/mapping. The physical catalogue has its own append-only quantity audit table and an authenticated edit endpoint; it must be included in the database schema migration before the next production deploy.
+
+The Products table is now rebuilt on the shared shadcn-style `Card` and `Table` primitives used by Orders, Customers, and Employees. It includes the reusable **Columns** picker and each row opens `/inventory/products/[productId]`. The new detail page uses the Serenity Hue palette and fonts, shows the source Shopify image where an individual source product is available, a curated product description, packaging/count metadata, and a variant-distribution table with its own Columns picker. `physical_inventory_variants` is the new child table: shade/size variants are counted below one physical product, so a pomade shade is not a separate product record. The canonical seed was advanced to `individual-items.ods-v2` to create the variant rows. This is currently local-only and still requires a reviewed Turso schema migration/deployment; do not imply it is live.
+
+The product detail page was rebuilt against the client-supplied reference screenshot on 21 August 2026 and was reviewed through a signed-in local browser screenshot loop. Its required desktop structure is: top application bar, back control + breadcrumb, a left-side product title/shade/description/factual detail list, a wide horizontal product image on the right, horizontal tabs, then a split lower area with the variant-distribution table on the left and a `Channel mappings / Coming soon` empty-state panel on the right. Use Serenity Hue’s Iowan Old Style/Avenir Next pairing and plum/rose palette, preserve shared shadcn `Tabs`, `Card`, and `Table` primitives, and do not revert to the earlier vertical card-and-image-rail layout.
+
+No catalogue detail value may be invented for presentation. In particular, the prior inferred Brow Pomade SKU prefix and generated per-shade SKUs were removed; absent source SKUs render as `—`. The detail page has no standalone search bar, notifications, help control, or account avatar/name because those controls do not exist on the other operations pages. The variants tab and its table are both labelled **Variants**, and the desktop table must fit without an internal horizontal scrollbar. Product imagery is intrinsic and must retain its natural aspect ratio; never letterbox, blend, or crop it. The desktop image is capped responsively at `min(420px, 22vw)` so it ends roughly at the left-hand status row rather than making the hero excessively tall; the media frame shrinks to the displayed image rather than forcing a ratio. A missing-image state may use its own minimum height. The detail page uses restrained, reduced-motion-safe CSS motion to make it feel responsive: a single page/section entrance, tactile controls and table-row feedback, and a very small non-geometric product-image hover response. Do not add decorative or continuous animation.
+
+The resulting model is: `channel listing / bundle -> one or more physical inventory items -> master quantity`. A bundle is never a master stock item unless it is later confirmed as separately preassembled. Colour-specific brow bundles must map to the matching pomade shade, not every shade. The two master-sheet pomade placeholders with no pulled quantity are not seeded.
+
+### Physical count updates — implemented locally (22 Aug 2026; pending production deployment)
+
+Physical inventory is changed through one variant-aware **Update inventory** sheet. It is available from one physical product’s **Variants** table and from the physical catalogue after selecting one or more products. For a bulk update, the sheet groups selected products as collapsed expandable rows, so staff open only the product whose child variants they need to count. There are no separate set/add modes and no required reason selector: every known variant opens with its current count already in the field, while an uncounted variant stays blank (`—`). Compact **− / +** controls sit directly beside each field and adjust the proposed final count; staff can also type the final count. Blank rows stay unchanged, negative counts are rejected, and each variant can only appear once in a save.
+
+`PATCH /api/inventory/physical` is session-guarded and validates the entire batch. `applyPhysicalInventoryAdjustments()` writes variant quantities atomically, updates the parent product’s cached total/known state, and appends a physical-inventory ledger entry for each counted or changed variant. The ledger reference records the optional note and variant id; it does not alter Shopify or TikTok quantities. The product catalogue now includes selection checkboxes and a bulk action for any selected subset. All product rows are collapsed by default; their chevron opens an inline variant breakdown, an update action for that one product, and a link to the full detail page. Both the list and detail page update in place after a successful save.
+
+This was reviewed in a freshly signed-in local browser session using Playwright: catalogue selection, a two-product bulk review, an individual seven-variant product sheet, and a full temporary-row save from 0 → 3. The simplified follow-up UI was also reviewed: inline expansion/collapse and the single ± count control with no reason selector. The temporary QA inventory row, its audit row, and temporary QA account were removed after verification; client inventory remained unchanged. `npm run typecheck`, `npm run lint` (two existing raw-image warnings only), and `npm run build` passed.
+
+### Master product maintenance — implemented and deployed (23 Aug 2026)
+
+The master product detail page now supports **Edit name** and **Add variant**. New variants are created with no counted stock (`0`, unknown) so staff must count them explicitly before they affect the parent total. Product names are unique among active master products.
+
+**Delete** is available only when the product has no channel mapping. The UI disables it and explains the requirement when mappings exist; the session-guarded `DELETE /api/inventory/physical/products/[productId]` route repeats the check against both product-level links and variant component mappings, then soft-deletes the item (`active=0`) so history is retained. Product-name edits use `PATCH` and variant creation uses `POST` on the same route. The live deployment is `dpl_GChKeuThQbjAPzNQvddGfUdbsEsb`.
+
+Variants now have row-level **Edit** and delete controls. Variant renames/SKU edits use `PATCH /api/inventory/physical/variants/[variantId]`; deletion uses `DELETE` on that route, is blocked when the exact variant is mapped, and keeps at least one variant per product. Variant removal is soft (`active=0`) so physical-count history remains intact. The additive variant archive-column migration runs automatically on the first production database connection after deploy.
+
+### Channel listing mapping — implemented locally (22 Aug 2026; pending production migration/deployment)
+
+The Products page now has three prominent inventory views: **Master inventory**, **Shopify inventory**, and **TikTok inventory**. The two channel views use recognisable Shopify and TikTok marks and show the real channel listings in a searchable table. Each row shows the platform-reported listing quantity, whether the listing is a single item or bundle, a compact **View mapping** action, its mapping state, and an action to edit the mapping. **View mapping** opens a dialog with the mapped physical components and per-sale multipliers, preventing multi-item bundles from making the table rows tall. Shopify quantities come from its imported variant inventory; TikTok quantities aggregate TikTok's fetched live SKU quantities by exact TikTok product id. Neither value is derived from the physical mapping. TikTok has an authenticated **Refresh TikTok quantities** control; an unavailable local TikTok connection renders `Not fetched`, never a made-up zero.
+
+The editor is a session-guarded shadcn sheet with a searchable catalogue of individual physical variants. Staff can select one or more components, set each per-sale quantity with direct ± controls or a numeric field, remove a component, save a mapping, or clear it. `physical_channel_listings` stores the channel listing identity and `physical_listing_components` stores the durable one-to-many mapping; `PATCH /api/inventory/physical-mappings` validates and saves the full mapping atomically. Manual edits are preserved when the app reloads its initial channel-listing seed.
+
+Initial mappings were made from current Shopify product pages and the recorded seller-authorised TikTok listing audit at `docs/live-tiktok-shopify-crosswalk-2026-08-21.md`: 38 Shopify variants and 24 active TikTok listings. Direct products and explicitly described bundles are mapped to their real physical components. Listings whose exact component/shade/size cannot be proved are intentionally marked **Needs review** or **Not mapped** rather than guessed (six current TikTok listings, including shade-unspecified pomade/brow bundles, Fuel & Tint without a shade, and the uncertain TikTok baking-powder size). These mappings are the foundation for later sale-driven master decrements; the decrement hook itself is not yet enabled.
+
+The workflow was reviewed in a signed-in local browser using Playwright: Master, Shopify, and TikTok views render; the editor search finds the matching physical variants; and an unchanged All-Day Hold & Grow mapping saved and reloaded with its four components intact. `npm run typecheck`, `npm run lint`, and `npm run build` must be rerun before any deployment.
+
+### Previous build status — Phase 1 shipped and deployed (as of 20 Aug 2026)
+
+The three-inventory control is **built, deployed to production, and live** at `/inventory/products`. What exists in code now:
+
+- **Schema** (`database/schema.sql`, auto-applied on boot): `master_inventory` (per-variant physical count), `channel_inventory` (cached fetched Shopify/TikTok levels), `inventory_ledger` (immutable append-only audit trail — never updated/deleted).
+- **Repository** (`lib/repository.ts`): `getChannelInventory()` (three-inventory view: master + Shopify from `variants.available_quantity` + TikTok from `channel_inventory`, plus sold 7d/30d, lead time, packaging), `setMasterQuantity()` / `setMasterQuantities()` (batch, audit-logged), `recordInventoryLedgerEntry()`.
+- **TikTok inventory** (`lib/tiktok-inventory.ts`): `fetchTikTokInventory()` (read products/SKUs/warehouse qty) and `storeTikTokInventory()` (caches into `channel_inventory`, backfills `channel_mappings.external_variant_id`).
+- **API routes**: `POST /api/inventory/master` (batch master save, session-guarded, staff-attributed), `POST /api/inventory/refresh-tiktok` (fetch + cache live TikTok levels), `GET /api/tiktok/inventory-check` (diagnostic).
+- **UI** (`components/channel-inventory-workspace.tsx` + `.ci-*` styles in `app/globals.css`): the Products page. Three-channel switch (Master / Shopify / TikTok) with real platform logos and per-channel colour theming so staff cannot push to the wrong channel. One summarized row per product (summed Master/Shopify/TikTok, lead time, packaging). Clicking a row opens a **detail sheet** with product analytics (master/shopify/tiktok totals, sold 7d/30d, days of cover), an **allocation bar** (how physical stock is split across channels, with over-allocation warning), and a **per-variant breakdown** with editable master steppers. Master edits stage as local drafts; header **Save/Discard** commits all drafts in one batch (recording to the ledger only on Save). Pagination 25/40/50. The audit ledger is written server-side but NOT surfaced in the UI (client asked to keep it backend-only for now).
+- **Master seeded from the client's Dropbox master Excel** (`Master Inventory - Serenity Hue.xlsx`, "Master Inventory" sheet): 32 variants matched by `Shopify Variant ID`, 1,750 units loaded into production `master_inventory`, each recorded in the ledger as `Import from Excel`. Source column used: `Current Shopify Qty (units)`.
+
+Channel sub-labels are plain ("Physical stock" / "Shopify stock" / "TikTok stock") — the earlier "scarcity level" wording was removed at the client's request.
+
+### Not yet built (Phase 2 and open items)
+
+- **Editable channel levels + push to platforms.** Shopify/TikTok columns are currently READ-ONLY (fetched). Phase 2 = edit the TikTok/Shopify display level in the app and push it out. TikTok write is ready (`seller.product.write` granted); **Shopify needs the `write_inventory` scope added to the custom app** before Shopify writes work. Must be edit → review → push, audit-logged, partial-failure surfaced per channel.
+- **Sale-driven master decrement.** The rule "every sale on either channel deducts master by 1" is specified but NOT yet wired — needs to hook order webhooks / the reconciliation import, apply once per order via `inventory_order_applications` (baseline anchor so only sales after a master recount deduct), and handle bundle multipliers via `bundle_components`.
+- **TikTok column population in production:** requires clicking "Refresh from TikTok" on the TikTok tab (works only in production where TikTok creds exist); not yet auto-run on schedule.
+- **Repeatable master import** (in-app upload of the Excel/CSV for future recounts) — currently a one-time CLI seed.
+- **Oversell-resolution policy** (last-unit race): default recommendation is keep the TikTok order / cancel the unfulfilled Shopify order (TikTok penalizes seller cancellations), never cancel a shipped order, human confirms. Not built.
+
+### Deployment / access notes for this work
+
+- Production DB is Turso `serenity-hue-operations-uk` (Ireland). The Turso CLI is authenticated inside WSL at `~/.turso/turso` (account `insha-khan`); use `turso db show serenity-hue-operations-uk --url` + `turso db tokens create …` to read/write production directly.
+- Deploys via `npx vercel --prod --yes` from the repo (project linked in `.vercel/`). Live at `https://serenity-hue-operations.vercel.app`.
+- Validation gate before every deploy: `npm run typecheck && npm run lint && npm run build` (all must pass).
 
 ## Current non-goals
 

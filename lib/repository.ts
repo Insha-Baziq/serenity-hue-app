@@ -1,10 +1,15 @@
 import "server-only";
 
+import { createHash, randomUUID } from "node:crypto";
 import { getTursoClient } from "@/lib/turso";
+import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
+import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import { hashPassword } from "better-auth/crypto";
-import type { ChannelInventoryRow, ChannelInventorySnapshot, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, Order, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, ProductInventory, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { OrdersQuery } from "@/lib/orders-query";
 
 type SqlValue = string | number | null;
+type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
@@ -32,12 +37,17 @@ function toMapping(value: string): ProductInventory["mapping"] {
   return value === "review" || value === "unmapped" ? value : "confirmed";
 }
 
-function toFulfillment(value: string): Order["fulfillment"] {
+function toFulfillment(value: string, cancelledAt: string): Order["fulfillment"] {
+  if (cancelledAt) return "cancelled";
   return value === "fulfilled" || value === "partial" ? value : "unfulfilled";
 }
 
 function toPayment(value: string): Order["payment"] {
   return value === "refunded" || value === "pending" ? value : "paid";
+}
+
+function toInventoryChannel(value: string): InventoryLedgerEntry["inventory"] {
+  return value === "shopify" || value === "tiktok" ? value : "master";
 }
 
 function optionalString(value: unknown) {
@@ -58,7 +68,7 @@ async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
   const db = await getTursoClient();
   const placeholders = orderIds.map(() => "?").join(", ");
   const shipments = await db.execute({
-    sql: `SELECT id, order_id, external_order_line_id, courier, service, status, paid_at, collection_date, estimated_delivery_at, tracking_url, match_method
+    sql: `SELECT id, order_id, external_order_line_id, source_references_json, courier, service, status, paid_at, collection_date, estimated_delivery_at, tracking_url, match_method
           FROM shipments WHERE order_id IN (${placeholders}) AND provider = 'parcel2go' ORDER BY last_synced_at DESC`,
     args: orderIds,
   });
@@ -70,6 +80,7 @@ async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
     const delivery: Parcel2GoDelivery = {
       id: shipmentId,
       orderLineId: stringValue(shipment.external_order_line_id),
+      sourceReferences: stringArray(shipment.source_references_json),
       courier: stringValue(shipment.courier) || "Parcel2Go courier",
       service: stringValue(shipment.service) || "Service details unavailable",
       status: stringValue(shipment.status) || "booked",
@@ -106,25 +117,91 @@ async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
   return deliveriesByOrderId;
 }
 
-export async function getOrders(): Promise<Order[]> {
-  const db = await getTursoClient();
-  const result = await db.execute(`
-    SELECT id, source, source_order_id, order_number, customer_name, customer_email, customer_phone, shipping_address_json,
-           financial_status, fulfillment_status, source_created_at,
-           subtotal_amount, shipping_amount, tax_amount, total_amount
-    FROM orders ORDER BY source_created_at DESC LIMIT 500
-  `);
+const ORDERS_BASE_COLUMNS = `o.id, o.source, o.source_order_id, o.order_number, o.customer_name, o.customer_email,
+  o.customer_phone, o.shipping_address_json, o.financial_status, o.fulfillment_status, o.cancelled_at,
+  o.source_created_at, o.subtotal_amount, o.shipping_amount, o.tax_amount, o.total_amount`;
 
-  if (result.rows.length === 0) return [];
-  const deliveriesByOrderId = await getParcel2GoDeliveriesForOrders(result.rows.map((row) => stringValue(row.id)).filter(Boolean));
+type QueryRows = Awaited<ReturnType<DatabaseClient["execute"]>>["rows"];
 
-  return Promise.all(result.rows.map(async (row) => {
-    const id = stringValue(row.id);
-    const itemsResult = await db.execute({
-      sql: `SELECT id, title, variant_title, sku, quantity, unit_price_amount, image_url
-            FROM order_items WHERE order_id = ? ORDER BY rowid`,
-      args: [id],
+/** Escapes LIKE wildcards so a user-typed % or _ matches literally (ESCAPE '\'). */
+function escapeLike(term: string) {
+  return term.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+/**
+ * Builds the shared WHERE clause for the Orders list. This mirrors the previous
+ * in-browser filter exactly: substring search over order number, customer,
+ * email and line-item title/SKU; channel; fulfilment (same cancelled / partial /
+ * fulfilled / unfulfilled derivation as the UI); and a rolling date window.
+ */
+function buildOrdersFilter(query: OrdersQuery): { where: string; args: SqlValue[] } {
+  const clauses: string[] = [];
+  const args: SqlValue[] = [];
+
+  const text = query.q.trim().toLowerCase();
+  if (text) {
+    const terms = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+    if (terms.length) {
+      clauses.push("o.rowid IN (SELECT rowid FROM order_search WHERE order_search MATCH ?)");
+      args.push(terms.map((term) => `${term}*`).join(" AND "));
+    } else {
+      // Keep punctuation-only searches literal rather than sending invalid FTS
+      // syntax. This is uncommon and preserves the previous behaviour.
+      const like = `%${escapeLike(text)}%`;
+      clauses.push("(lower(o.order_number) LIKE ? ESCAPE '\\' OR lower(o.customer_name) LIKE ? ESCAPE '\\' OR lower(o.customer_email) LIKE ? ESCAPE '\\')");
+      args.push(like, like, like);
+    }
+  }
+
+  if (query.channel === "tiktok") clauses.push("o.source = 'tiktok'");
+  else if (query.channel === "shopify") clauses.push("o.source <> 'tiktok'");
+
+  const notCancelled = "(o.cancelled_at IS NULL OR o.cancelled_at = '')";
+  if (query.fulfillment === "cancelled") clauses.push("o.cancelled_at IS NOT NULL AND o.cancelled_at <> ''");
+  else if (query.fulfillment === "fulfilled") clauses.push(`${notCancelled} AND o.fulfillment_status = 'fulfilled'`);
+  else if (query.fulfillment === "partial") clauses.push(`${notCancelled} AND o.fulfillment_status = 'partial'`);
+  else if (query.fulfillment === "unfulfilled") clauses.push(`${notCancelled} AND o.fulfillment_status NOT IN ('fulfilled', 'partial')`);
+
+  if (query.dateRange !== "all") {
+    const days = Number(query.dateRange);
+    clauses.push("o.source_created_at >= ?");
+    args.push(new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString());
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return { where, args };
+}
+
+/** Expands base order rows with their line items and Parcel2Go deliveries. */
+async function hydrateOrders(db: DatabaseClient, rows: QueryRows): Promise<Order[]> {
+  if (rows.length === 0) return [];
+  const orderIds = rows.map((row) => stringValue(row.id)).filter(Boolean);
+  const [deliveriesByOrderId, itemsResult] = await Promise.all([
+    getParcel2GoDeliveriesForOrders(orderIds),
+    db.execute({
+      sql: `SELECT order_id, id, title, variant_title, sku, quantity, unit_price_amount, image_url
+            FROM order_items WHERE order_id IN (${orderIds.map(() => "?").join(", ")}) ORDER BY order_id, rowid`,
+      args: orderIds,
+    }),
+  ]);
+  const itemsByOrderId = new Map<string, Order["items"]>();
+  for (const item of itemsResult.rows) {
+    const orderId = stringValue(item.order_id);
+    const items = itemsByOrderId.get(orderId) ?? [];
+    items.push({
+      id: stringValue(item.id),
+      title: stringValue(item.title),
+      variant: stringValue(item.variant_title),
+      sku: stringValue(item.sku),
+      quantity: numberValue(item.quantity),
+      unitPrice: numberValue(item.unit_price_amount),
+      imageTone: "blush" as const,
     });
+    itemsByOrderId.set(orderId, items);
+  }
+
+  return rows.map((row) => {
+    const id = stringValue(row.id);
     const source = stringValue(row.source);
     const sourceOrderId = stringValue(row.source_order_id);
     return {
@@ -138,39 +215,172 @@ export async function getOrders(): Promise<Order[]> {
       phone: stringValue(row.customer_phone),
       address: stringArray(row.shipping_address_json),
       payment: toPayment(stringValue(row.financial_status)),
-      fulfillment: toFulfillment(stringValue(row.fulfillment_status)),
+      fulfillment: toFulfillment(stringValue(row.fulfillment_status), stringValue(row.cancelled_at)),
+      cancelledAt: stringValue(row.cancelled_at) || null,
       createdAt: stringValue(row.source_created_at),
       subtotal: numberValue(row.subtotal_amount),
       shipping: numberValue(row.shipping_amount),
       tax: numberValue(row.tax_amount),
       total: numberValue(row.total_amount),
-      items: itemsResult.rows.map((item) => ({
-        id: stringValue(item.id),
-        title: stringValue(item.title),
-        variant: stringValue(item.variant_title),
-        sku: stringValue(item.sku),
-        quantity: numberValue(item.quantity),
-        unitPrice: numberValue(item.unit_price_amount),
-        imageTone: "blush" as const,
-      })),
+      items: itemsByOrderId.get(id) ?? [],
       deliveries: deliveriesByOrderId.get(id) ?? [],
     } satisfies Order;
-  }));
+  });
+}
+
+export async function getOrders(): Promise<Order[]> {
+  const db = await getTursoClient();
+  const result = await db.execute(`SELECT ${ORDERS_BASE_COLUMNS} FROM orders o ORDER BY o.source_created_at DESC LIMIT 500`);
+  return hydrateOrders(db, result.rows);
+}
+
+/**
+ * Server-side filtered + paginated Orders list. One COUNT gives the true total,
+ * and only the current page's rows are hydrated with items/deliveries — so the
+ * list no longer ships all 500 orders to the browser on every load.
+ */
+export async function getOrdersPage(query: OrdersQuery): Promise<OrdersPageResult> {
+  const db = await getTursoClient();
+  const { where, args } = buildOrdersFilter(query);
+  const pageSize = query.pageSize;
+
+  const countResult = await db.execute({ sql: `SELECT COUNT(*) AS total FROM orders o ${where}`, args });
+  const total = numberValue(countResult.rows[0]?.total);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, query.page), totalPages);
+  const offset = (page - 1) * pageSize;
+
+  const pageResult = await db.execute({
+    sql: `SELECT ${ORDERS_BASE_COLUMNS} FROM orders o ${where} ORDER BY o.source_created_at DESC LIMIT ? OFFSET ?`,
+    args: [...args, pageSize, offset],
+  });
+  const orders = await hydrateOrders(db, pageResult.rows);
+  return { orders, total, page, pageSize, totalPages };
+}
+
+/** Every row matching the current filters, shaped for the CSV export. */
+export async function getOrdersForExport(query: OrdersQuery): Promise<string[][]> {
+  const db = await getTursoClient();
+  const { where, args } = buildOrdersFilter(query);
+  const result = await db.execute({
+    sql: `SELECT o.order_number, o.source, o.customer_name, o.financial_status, o.fulfillment_status,
+            o.cancelled_at, o.source_created_at, o.total_amount
+          FROM orders o ${where} ORDER BY o.source_created_at DESC`,
+    args,
+  });
+  return result.rows.map((row) => [
+    stringValue(row.order_number),
+    stringValue(row.source) === "tiktok" ? "tiktok" : "shopify",
+    stringValue(row.customer_name) || "Guest customer",
+    toPayment(stringValue(row.financial_status)),
+    toFulfillment(stringValue(row.fulfillment_status), stringValue(row.cancelled_at)),
+    stringValue(row.source_created_at),
+    (numberValue(row.total_amount) / 100).toFixed(2),
+  ]);
+}
+
+export async function getCustomers(): Promise<Customer[]> {
+  const db = await getTursoClient();
+  const result = await db.execute(`
+    WITH normalised AS (
+      SELECT id, source, customer_name, customer_email, customer_phone, total_amount, source_created_at,
+        lower(trim(COALESCE(customer_email, ''))) AS email,
+        replace(replace(replace(replace(replace(replace(COALESCE(customer_phone, ''), ' ', ''), '+', ''), '-', ''), '(', ''), ')', ''), '.', '') AS phone
+      FROM orders
+    ), identified AS (
+      SELECT *, CASE
+        WHEN email <> '' THEN 'email:' || email
+        WHEN phone <> '' THEN 'phone:' || phone
+        ELSE 'order:' || id
+      END AS identity
+      FROM normalised
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY identity ORDER BY source_created_at DESC, id DESC) AS row_number
+      FROM identified
+    ), aggregates AS (
+      SELECT identity, COUNT(*) AS orders, SUM(total_amount) AS total_spent,
+             MAX(source_created_at) AS last_order_at, GROUP_CONCAT(DISTINCT source) AS channels
+      FROM identified
+      GROUP BY identity
+    )
+    SELECT a.identity, a.orders, a.total_spent, a.last_order_at, a.channels,
+           r.customer_name, r.email, r.phone
+    FROM aggregates a
+    JOIN ranked r ON r.identity = a.identity AND r.row_number = 1
+    ORDER BY a.last_order_at DESC
+  `);
+  return result.rows.map((row) => {
+    const identity = stringValue(row.identity);
+    const email = stringValue(row.email);
+    const phone = stringValue(row.phone);
+    const orders = numberValue(row.orders);
+    const channels = stringValue(row.channels).split(",").flatMap((channel) => channel === "tiktok" || channel === "shopify" ? [channel] : []) as Channel[];
+    return {
+      id: `customer:${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
+      name: stringValue(row.customer_name).trim() || "Unnamed customer",
+      email,
+      phone,
+      channels,
+      orders,
+      totalSpent: numberValue(row.total_spent),
+      lastOrderAt: stringValue(row.last_order_at),
+      type: orders > 1 ? "repeat" : !email && !phone ? "guest" : "one-time",
+    };
+  });
+}
+
+/** Streams matching orders in stable keyset batches so large exports stay bounded. */
+export async function* streamOrdersForExport(query: OrdersQuery): AsyncGenerator<string[]> {
+  const db = await getTursoClient();
+  const { where, args } = buildOrdersFilter(query);
+  let cursorCreatedAt: string | undefined;
+  let cursorId: string | undefined;
+
+  for (;;) {
+    const cursorClause = cursorCreatedAt && cursorId
+      ? "(o.source_created_at < ? OR (o.source_created_at = ? AND o.id < ?))"
+      : "";
+    const sql = `SELECT o.id, o.order_number, o.source, o.customer_name, o.financial_status, o.fulfillment_status,
+             o.cancelled_at, o.source_created_at, o.total_amount
+      FROM orders o
+      ${where || "WHERE 1 = 1"}${cursorClause ? ` AND ${cursorClause}` : ""}
+      ORDER BY o.source_created_at DESC, o.id DESC
+      LIMIT 500`;
+    const result = await db.execute({
+      sql,
+      args: cursorClause ? [...args, cursorCreatedAt!, cursorCreatedAt!, cursorId!] : args,
+    });
+    if (!result.rows.length) return;
+    for (const row of result.rows) {
+      yield [
+        stringValue(row.order_number),
+        stringValue(row.source) === "tiktok" ? "tiktok" : "shopify",
+        stringValue(row.customer_name) || "Guest customer",
+        toPayment(stringValue(row.financial_status)),
+        toFulfillment(stringValue(row.fulfillment_status), stringValue(row.cancelled_at)),
+        stringValue(row.source_created_at),
+        (numberValue(row.total_amount) / 100).toFixed(2),
+      ];
+    }
+    const last = result.rows[result.rows.length - 1];
+    cursorCreatedAt = stringValue(last.source_created_at);
+    cursorId = stringValue(last.id);
+  }
 }
 
 export async function getEmployees(): Promise<Employee[]> {
   const db = await getTursoClient();
-  const now = new Date().toISOString();
+  const onlineSince = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const result = await db.execute({
     sql: `SELECT u.id, u.name, u.email, u.image, u.createdAt,
                  MAX(s.updatedAt) AS last_seen_at,
-                 CASE WHEN MAX(CASE WHEN s.expiresAt > ? THEN 1 ELSE 0 END) = 1
+                 CASE WHEN MAX(CASE WHEN s.updatedAt > ? THEN 1 ELSE 0 END) = 1
                       THEN 'active' ELSE 'offline' END AS status
           FROM "user" AS u
           LEFT JOIN "session" AS s ON s.userId = u.id
           GROUP BY u.id, u.name, u.email, u.image, u.createdAt
           ORDER BY u.createdAt DESC`,
-    args: [now],
+    args: [onlineSince],
   });
 
   return result.rows.map((row) => ({
@@ -188,26 +398,33 @@ export async function createEmployee(input: { name: string; email: string; passw
   const db = await getTursoClient();
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
-  const existing = await db.execute({ sql: `SELECT id FROM "user" WHERE lower(email) = ? LIMIT 1`, args: [email] });
-  if (existing.rows.length > 0) throw new Error("EMPLOYEE_ALREADY_EXISTS");
-
   const now = new Date().toISOString();
   const userId = `user_${crypto.randomUUID()}`;
   const accountId = `account_${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(input.password);
-
-  await db.execute({
-    sql: `INSERT INTO "user" (id, name, email, emailVerified, image, createdAt, updatedAt)
-          VALUES (?, ?, ?, 0, NULL, ?, ?)`,
-    args: [userId, name, email, now, now],
-  });
-  await db.execute({
-    sql: `INSERT INTO "account"
-            (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-             accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
-          VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
-    args: [accountId, userId, userId, passwordHash, now, now],
-  });
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({ sql: `SELECT id FROM "user" WHERE lower(email) = ? LIMIT 1`, args: [email] });
+    if (existing.rows.length > 0) throw new Error("EMPLOYEE_ALREADY_EXISTS");
+    await transaction.execute({
+      sql: `INSERT INTO "user" (id, name, email, emailVerified, image, createdAt, updatedAt)
+            VALUES (?, ?, ?, 0, NULL, ?, ?)`,
+      args: [userId, name, email, now, now],
+    });
+    await transaction.execute({
+      sql: `INSERT INTO "account"
+              (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
+               accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
+            VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+      args: [accountId, userId, userId, passwordHash, now, now],
+    });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
 
   return { id: userId, name, email, createdAt: now, status: "offline" };
 }
@@ -215,7 +432,7 @@ export async function createEmployee(input: { name: string; email: string; passw
 export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipmentOption[]> {
   const db = await getTursoClient();
   const result = await db.execute(`
-    SELECT id, external_order_line_id, courier, service, status, collection_date, estimated_delivery_at
+    SELECT id, external_order_line_id, source_references_json, courier, service, status, collection_date, estimated_delivery_at
     FROM shipments
     WHERE provider = 'parcel2go' AND order_id IS NULL
     ORDER BY COALESCE(collection_date, updated_at) DESC
@@ -224,6 +441,7 @@ export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipment
   return result.rows.map((shipment) => ({
     id: stringValue(shipment.id),
     orderLineId: stringValue(shipment.external_order_line_id),
+    sourceReferences: stringArray(shipment.source_references_json),
     courier: stringValue(shipment.courier) || "Parcel2Go courier",
     service: stringValue(shipment.service) || "Service details unavailable",
     status: stringValue(shipment.status) || "booked",
@@ -234,25 +452,32 @@ export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipment
 
 export async function linkParcel2GoShipment(orderId: string, shipmentId: string) {
   const db = await getTursoClient();
-  const [orderResult, shipmentResult] = await Promise.all([
-    db.execute({ sql: "SELECT id FROM orders WHERE id = ? LIMIT 1", args: [orderId] }),
-    db.execute({ sql: "SELECT order_id FROM shipments WHERE id = ? AND provider = 'parcel2go' LIMIT 1", args: [shipmentId] }),
-  ]);
-  if (orderResult.rows.length === 0) throw new Error("Order not found");
-  const shipment = shipmentResult.rows[0];
-  if (!shipment) throw new Error("Parcel2Go delivery not found");
-  const linkedOrderId = optionalString(shipment.order_id);
-  if (linkedOrderId && linkedOrderId !== orderId) throw new Error("This Parcel2Go delivery is already linked to another order");
-  await db.execute({ sql: "UPDATE shipments SET order_id = ?, updated_at = ? WHERE id = ?", args: [orderId, new Date().toISOString(), shipmentId] });
+  const transaction = await db.transaction("write");
+  try {
+    const orderResult = await transaction.execute({ sql: "SELECT id FROM orders WHERE id = ? LIMIT 1", args: [orderId] });
+    if (orderResult.rows.length === 0) throw new Error("Order not found");
+    const shipmentResult = await transaction.execute({ sql: "SELECT order_id FROM shipments WHERE id = ? AND provider = 'parcel2go' LIMIT 1", args: [shipmentId] });
+    const shipment = shipmentResult.rows[0];
+    if (!shipment) throw new Error("Parcel2Go delivery not found");
+    const linkedOrderId = optionalString(shipment.order_id);
+    if (linkedOrderId && linkedOrderId !== orderId) throw new Error("This Parcel2Go delivery is already linked to another order");
+    await transaction.execute({ sql: "UPDATE shipments SET order_id = ?, updated_at = ? WHERE id = ?", args: [orderId, new Date().toISOString(), shipmentId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
 }
 
 export async function recordParcel2GoWebhook(input: { externalEventId: string; topic: string }) {
   const db = await getTursoClient();
   const result = await db.execute({
     sql: `INSERT INTO webhook_events (id, provider, external_event_id, topic, received_at, processed_at, status)
-          VALUES (?, 'parcel2go', ?, ?, ?, ?, 'processed')
+          VALUES (?, 'parcel2go', ?, ?, ?, NULL, 'received')
           ON CONFLICT(provider, external_event_id) DO NOTHING`,
-    args: [`parcel2go:${input.externalEventId}`, input.externalEventId, input.topic, new Date().toISOString(), new Date().toISOString()],
+    args: [`parcel2go:${input.externalEventId}`, input.externalEventId, input.topic, new Date().toISOString()],
   });
   return result.rowsAffected > 0;
 }
@@ -306,8 +531,8 @@ export async function saveTikTokConnection(input: {
       id,
       input.openId ?? null,
       input.userType ?? null,
-      input.accessToken,
-      input.refreshToken,
+      encryptTikTokToken(input.accessToken),
+      encryptTikTokToken(input.refreshToken),
       input.accessTokenExpiresAt ?? null,
       input.refreshTokenExpiresAt ?? null,
       JSON.stringify(input.grantedScopes ?? []),
@@ -339,17 +564,31 @@ export async function getActiveTikTokConnections(): Promise<TikTokConnection[]> 
     WHERE status = 'active'
     ORDER BY updated_at DESC
   `);
-  return result.rows.map((row) => ({
-    id: stringValue(row.id),
-    shopId: optionalString(row.shop_id),
-    shopCipher: optionalString(row.shop_cipher),
-    openId: optionalString(row.open_id),
-    accessToken: stringValue(row.access_token),
-    refreshToken: stringValue(row.refresh_token),
-    accessTokenExpiresAt: optionalString(row.access_token_expires_at),
-    refreshTokenExpiresAt: optionalString(row.refresh_token_expires_at),
-    grantedScopes: stringArray(row.granted_scopes),
-  })).filter((connection) => Boolean(connection.id && connection.accessToken && connection.refreshToken));
+  const legacyTokenUpdates: Array<{ sql: string; args: SqlValue[] }> = [];
+  const connections = result.rows.map((row) => {
+    const id = stringValue(row.id);
+    const accessToken = decryptTikTokToken(stringValue(row.access_token));
+    const refreshToken = decryptTikTokToken(stringValue(row.refresh_token));
+    if (accessToken.needsEncryption || refreshToken.needsEncryption) {
+      legacyTokenUpdates.push({
+        sql: `UPDATE tiktok_connections SET access_token = ?, refresh_token = ?, updated_at = ? WHERE id = ?`,
+        args: [encryptTikTokToken(accessToken.value), encryptTikTokToken(refreshToken.value), new Date().toISOString(), id],
+      });
+    }
+    return {
+      id,
+      shopId: optionalString(row.shop_id),
+      shopCipher: optionalString(row.shop_cipher),
+      openId: optionalString(row.open_id),
+      accessToken: accessToken.value,
+      refreshToken: refreshToken.value,
+      accessTokenExpiresAt: optionalString(row.access_token_expires_at),
+      refreshTokenExpiresAt: optionalString(row.refresh_token_expires_at),
+      grantedScopes: stringArray(row.granted_scopes),
+    };
+  }).filter((connection) => Boolean(connection.id && connection.accessToken && connection.refreshToken));
+  if (legacyTokenUpdates.length) await db.batch(legacyTokenUpdates, "write");
+  return connections;
 }
 
 export async function hasActiveTikTokConnection() {
@@ -364,18 +603,21 @@ export async function updateTikTokConnectionTokens(input: {
   refreshToken: string;
   accessTokenExpiresAt?: string;
   refreshTokenExpiresAt?: string;
+  grantedScopes?: string[];
 }) {
   const db = await getTursoClient();
   await db.execute({
     sql: `UPDATE tiktok_connections
           SET access_token = ?, refresh_token = ?, access_token_expires_at = ?, refresh_token_expires_at = ?,
+              granted_scopes = COALESCE(?, granted_scopes),
               status = 'active', updated_at = ?
           WHERE id = ?`,
     args: [
-      input.accessToken,
-      input.refreshToken,
+      encryptTikTokToken(input.accessToken),
+      encryptTikTokToken(input.refreshToken),
       input.accessTokenExpiresAt ?? null,
       input.refreshTokenExpiresAt ?? null,
+      input.grantedScopes ? JSON.stringify(input.grantedScopes) : null,
       new Date().toISOString(),
       input.id,
     ],
@@ -410,6 +652,36 @@ export async function markTikTokBackfillCompleted() {
   });
 }
 
+export type TikTokSyncStream = "orders" | "after_sales_cancel" | "after_sales_return";
+
+export async function getTikTokSyncCursor(input: { connectionId: string; shopId: string; stream: TikTokSyncStream }) {
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: `SELECT cursor_at FROM tiktok_sync_cursors
+          WHERE connection_id = ? AND shop_id = ? AND stream = ? LIMIT 1`,
+    args: [input.connectionId, input.shopId, input.stream],
+  });
+  return optionalString(result.rows[0]?.cursor_at);
+}
+
+export async function advanceTikTokSyncCursor(input: {
+  connectionId: string;
+  shopId: string;
+  stream: TikTokSyncStream;
+  cursorAt: string;
+}) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO tiktok_sync_cursors (connection_id, shop_id, stream, cursor_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(connection_id, shop_id, stream) DO UPDATE SET
+            cursor_at = CASE WHEN excluded.cursor_at > tiktok_sync_cursors.cursor_at THEN excluded.cursor_at ELSE tiktok_sync_cursors.cursor_at END,
+            updated_at = excluded.updated_at`,
+    args: [input.connectionId, input.shopId, input.stream, input.cursorAt, now],
+  });
+}
+
 export async function getLatestTikTokOrderUpdatedAt() {
   const db = await getTursoClient();
   const result = await db.execute("SELECT MAX(source_updated_at) AS latest FROM orders WHERE source = 'tiktok'");
@@ -421,11 +693,23 @@ export async function recordTikTokWebhook(input: { externalEventId: string; topi
   const now = new Date().toISOString();
   const result = await db.execute({
     sql: `INSERT INTO webhook_events (id, provider, external_event_id, topic, received_at, processed_at, status)
-          VALUES (?, 'tiktok', ?, ?, ?, ?, 'processed')
+          VALUES (?, 'tiktok', ?, ?, ?, NULL, 'received')
           ON CONFLICT(provider, external_event_id) DO NOTHING`,
-    args: [`tiktok:${input.externalEventId}`, input.externalEventId, input.topic, now, now],
+    args: [`tiktok:${input.externalEventId}`, input.externalEventId, input.topic, now],
   });
   return result.rowsAffected > 0;
+}
+
+export async function markWebhookEventsProcessed(input: { before: string; providers?: Array<"tiktok" | "parcel2go"> }) {
+  const db = await getTursoClient();
+  const providers = input.providers ?? ["tiktok", "parcel2go"];
+  if (!providers.length) return;
+  const placeholders = providers.map(() => "?").join(", ");
+  await db.execute({
+    sql: `UPDATE webhook_events SET status = 'processed', processed_at = ?
+          WHERE status = 'received' AND received_at <= ? AND provider IN (${placeholders})`,
+    args: [new Date().toISOString(), input.before, ...providers],
+  });
 }
 
 function shopifyOrderAdminUrl(sourceOrderId: string) {
@@ -435,11 +719,31 @@ function shopifyOrderAdminUrl(sourceOrderId: string) {
   return `https://${storeDomain}/admin/orders/${orderId}`;
 }
 
+export async function getPackagingInventory(): Promise<PackagingMaterial[]> {
+  const db = await getTursoClient();
+  const result = await db.execute(`
+    SELECT id, title, quantity, reorder_point, lead_time_days, updated_at
+    FROM packaging_materials
+    WHERE active = 1
+    ORDER BY title
+  `);
+  return result.rows.map((row) => ({
+    id: stringValue(row.id),
+    title: stringValue(row.title),
+    quantity: numberValue(row.quantity),
+    reorderPoint: numberValue(row.reorder_point),
+    leadTimeDays: nullableNumber(row.lead_time_days),
+    updatedBy: "Operations",
+    updatedAt: stringValue(row.updated_at),
+  }));
+}
+
+/** @deprecated The legacy Shopify-mirror view. Use physical inventory readers instead. */
 export async function getInventory(): Promise<InventorySnapshot> {
   const db = await getTursoClient();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const [variantsResult, packagingResult, salesResult, alertsResult, movementsResult] = await Promise.all([
+  const [variantsResult, packagingResult, salesResult, alertsResult, movementsResult, sync] = await Promise.all([
     db.execute(`
       SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity,
         v.reorder_point, v.lead_time_days, v.packaging_type, v.units_per_box,
@@ -449,7 +753,7 @@ export async function getInventory(): Promise<InventorySnapshot> {
       JOIN products p ON p.id = v.product_id
       ORDER BY p.title, v.title
     `),
-    db.execute(`SELECT id, title, quantity, reorder_point, lead_time_days, updated_at FROM packaging_materials ORDER BY title`),
+    db.execute(`SELECT id, title, quantity, reorder_point, lead_time_days, updated_at FROM packaging_materials WHERE active = 1 ORDER BY title`),
     db.execute({
       sql: `SELECT oi.variant_id,
               SUM(CASE WHEN o.source_created_at >= ? THEN oi.quantity ELSE 0 END) AS sold_7d,
@@ -470,6 +774,7 @@ export async function getInventory(): Promise<InventorySnapshot> {
                 LEFT JOIN products p ON p.id = v.product_id
                 LEFT JOIN packaging_materials pm ON pm.id = sm.packaging_material_id
                 ORDER BY sm.created_at DESC LIMIT 8`),
+    getLatestSync(),
   ]);
 
   const soldByVariant = new Map(salesResult.rows.map((row) => [stringValue(row.variant_id), {
@@ -536,21 +841,954 @@ export async function getInventory(): Promise<InventorySnapshot> {
     createdAt: stringValue(row.created_at),
   }));
 
-  return { products, packaging, alerts, recentMovements, sync: await getLatestSync() };
+  return { products, packaging, alerts, recentMovements, sync };
+}
+
+function packagingQuantity(value: number) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("Packaging quantity must be a whole number of zero or more");
+  return value;
+}
+
+function packagingTitle(value: string) {
+  const title = value.trim();
+  if (title.length < 2) throw new Error("Packaging name must be at least 2 characters");
+  if (title.length > 80) throw new Error("Packaging name must be 80 characters or fewer");
+  return title;
+}
+
+export async function createPackagingMaterial(input: { title: string; quantity: number }) {
+  const db = await getTursoClient();
+  const title = packagingTitle(input.title);
+  const quantity = packagingQuantity(input.quantity);
+  const existing = await db.execute({ sql: "SELECT id FROM packaging_materials WHERE lower(title) = lower(?) AND active = 1 LIMIT 1", args: [title] });
+  if (existing.rows[0]) throw new Error("PACKAGING_ALREADY_EXISTS");
+  const id = `packaging_${randomUUID()}`;
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO packaging_materials (id, title, quantity, reorder_point, lead_time_days, active, updated_at)
+          VALUES (?, ?, ?, 0, NULL, 1, ?)`,
+    args: [id, title, quantity, now],
+  });
+  return { id, title, quantity };
+}
+
+export async function updatePackagingMaterial(input: { id: string; title: string; quantity: number; actor: string }) {
+  const db = await getTursoClient();
+  const title = packagingTitle(input.title);
+  const quantity = packagingQuantity(input.quantity);
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const existing = await transaction.execute({ sql: "SELECT title, quantity FROM packaging_materials WHERE id = ? AND active = 1 LIMIT 1", args: [input.id] });
+    const row = existing.rows[0];
+    if (!row) throw new Error("PACKAGING_NOT_FOUND");
+    const duplicate = await transaction.execute({ sql: "SELECT id FROM packaging_materials WHERE lower(title) = lower(?) AND id <> ? AND active = 1 LIMIT 1", args: [title, input.id] });
+    if (duplicate.rows[0]) throw new Error("PACKAGING_ALREADY_EXISTS");
+    const previousTitle = stringValue(row.title);
+    const previousQuantity = numberValue(row.quantity);
+    await transaction.execute({ sql: "UPDATE packaging_materials SET title = ?, quantity = ?, updated_at = ? WHERE id = ?", args: [title, quantity, now, input.id] });
+    if (previousTitle !== title) {
+      await transaction.execute({ sql: "UPDATE variants SET packaging_type = ? WHERE packaging_type = ?", args: [title, previousTitle] });
+      await transaction.execute({ sql: "UPDATE physical_inventory_items SET packaging_type = ? WHERE packaging_type = ?", args: [title, previousTitle] });
+      await transaction.execute({ sql: "UPDATE bundle_components SET packaging_type = ? WHERE packaging_type = ?", args: [title, previousTitle] });
+    }
+    if (previousQuantity !== quantity) {
+      await transaction.execute({
+        sql: `INSERT INTO stock_movements (id, packaging_material_id, quantity_delta, reason, actor_name, source, reference_id, created_at)
+              VALUES (?, ?, ?, 'manual_edit', ?, 'manual', ?, ?)`,
+        args: [randomUUID(), input.id, quantity - previousQuantity, input.actor, `packaging:${input.id}`, now],
+      });
+    }
+    await transaction.commit();
+    return { before: previousQuantity, after: quantity };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
+
+export async function deletePackagingMaterial(input: { id: string; actor: string }) {
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const existing = await transaction.execute({ sql: "SELECT title FROM packaging_materials WHERE id = ? AND active = 1 LIMIT 1", args: [input.id] });
+    if (!existing.rows[0]) throw new Error("PACKAGING_NOT_FOUND");
+    const title = stringValue(existing.rows[0].title);
+    await transaction.execute({ sql: "UPDATE packaging_materials SET active = 0, updated_at = ? WHERE id = ?", args: [now, input.id] });
+    await transaction.execute({ sql: "UPDATE variants SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
+    await transaction.execute({ sql: "UPDATE physical_inventory_items SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
+    await transaction.execute({ sql: "UPDATE bundle_components SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
+    await transaction.commit();
+    return { title };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
 }
 
 const LEDGER_TONES = ["blush", "smoke", "taupe", "amber", "rose"] as const;
+
+/** Canonical physical stock only. Shopify and TikTok listings are intentionally excluded. */
+export async function getPhysicalInventory(): Promise<PhysicalInventoryItem[]> {
+  const db = await getTursoClient();
+  const [result, variantResult] = await Promise.all([db.execute(`SELECT pi.id, pi.title, pi.variant_label, pi.quantity, pi.quantity_known, pi.packaging_type, pi.reorder_point, pi.lead_time_days,
+                                          p.image_url,
+                                          COUNT(piv.id) AS variant_count,
+                                          SUM(piv.quantity) AS variant_quantity,
+                                          MIN(piv.quantity_known) AS variants_known
+                                   FROM physical_inventory_items pi
+                                   LEFT JOIN physical_inventory_variants piv ON piv.physical_item_id = pi.id AND piv.active = 1
+                                   LEFT JOIN products p ON p.shopify_product_id = pi.shopify_product_id
+                                   WHERE pi.active = 1
+                                   GROUP BY pi.id
+                                   ORDER BY pi.title, pi.variant_label`), db.execute(`SELECT piv.id, piv.physical_item_id, piv.title, piv.sku, piv.quantity, piv.quantity_known
+                                                                                     FROM physical_inventory_variants piv
+                                                                                     JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+                                                                                     WHERE pi.active = 1 AND piv.active = 1
+                                                                                     ORDER BY piv.physical_item_id, piv.sort_order, piv.title`)]);
+  const variantsByItem = new Map<string, { id: string; title: string; sku: string; quantity: number; quantityKnown: boolean }[]>();
+  for (const variant of variantResult.rows) {
+    const itemId = stringValue(variant.physical_item_id);
+    const itemVariants = variantsByItem.get(itemId) ?? [];
+    itemVariants.push({ id: stringValue(variant.id), title: stringValue(variant.title), sku: stringValue(variant.sku), quantity: numberValue(variant.quantity), quantityKnown: numberValue(variant.quantity_known) === 1 });
+    variantsByItem.set(itemId, itemVariants);
+  }
+  return result.rows.map((row, index) => ({
+    id: stringValue(row.id),
+    title: stringValue(row.title),
+    variantLabel: stringValue(row.variant_label),
+    quantity: numberValue(row.variant_count) > 0 ? numberValue(row.variant_quantity) : numberValue(row.quantity),
+    quantityKnown: numberValue(row.variant_count) > 0 ? numberValue(row.variants_known) === 1 : numberValue(row.quantity_known) === 1,
+    variantCount: numberValue(row.variant_count),
+    packagingType: stringValue(row.packaging_type) || "Not set",
+    reorderPoint: numberValue(row.reorder_point),
+    leadTimeDays: nullableNumber(row.lead_time_days),
+    imageUrl: stringValue(row.image_url) || null,
+    imageTone: LEDGER_TONES[index % LEDGER_TONES.length],
+    variants: variantsByItem.get(stringValue(row.id)) ?? [],
+  }));
+}
+
+export async function getPhysicalProductDetail(id: string): Promise<PhysicalProductDetail | null> {
+  const db = await getTursoClient();
+  const item = await db.execute({
+    sql: `SELECT pi.id, pi.title, pi.variant_label, pi.description, pi.quantity, pi.quantity_known, pi.packaging_type, pi.reorder_point, pi.lead_time_days, pi.source_label,
+                 p.image_url
+          FROM physical_inventory_items pi
+          LEFT JOIN products p ON p.shopify_product_id = pi.shopify_product_id
+          WHERE pi.id = ? AND pi.active = 1`,
+    args: [id],
+  });
+  const row = item.rows[0];
+  if (!row) return null;
+  const variants = await db.execute({ sql: "SELECT id, title, sku, quantity, quantity_known FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 ORDER BY sort_order, title", args: [id] });
+  const variantRows = variants.rows.map((variant) => ({ id: stringValue(variant.id), title: stringValue(variant.title), sku: stringValue(variant.sku), quantity: numberValue(variant.quantity), quantityKnown: numberValue(variant.quantity_known) === 1 }));
+  return {
+    id: stringValue(row.id),
+    title: stringValue(row.title),
+    variantLabel: stringValue(row.variant_label),
+    quantity: variantRows.reduce((total, variant) => total + variant.quantity, 0),
+    quantityKnown: variantRows.length > 0 && variantRows.every((variant) => variant.quantityKnown),
+    variantCount: variantRows.length,
+    packagingType: stringValue(row.packaging_type) || "Not set",
+    reorderPoint: numberValue(row.reorder_point),
+    leadTimeDays: nullableNumber(row.lead_time_days),
+    imageUrl: stringValue(row.image_url) || null,
+    imageTone: "blush",
+    description: stringValue(row.description) || "No product description has been added yet.",
+    sourceLabel: stringValue(row.source_label) || "Individual catalogue",
+    variants: variantRows,
+  };
+}
+
+export async function updatePhysicalProduct(input: { itemId: string; title: string }) {
+  const db = await getTursoClient();
+  const title = input.title.trim();
+  const transaction = await db.transaction("write");
+  try {
+    const item = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
+    if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE lower(title) = lower(?) AND id <> ? AND active = 1", args: [title, input.itemId] });
+    if (duplicate.rows[0]) throw new Error("A master product with this name already exists");
+    await transaction.execute({ sql: "UPDATE physical_inventory_items SET title = ?, updated_at = ? WHERE id = ?", args: [title, new Date().toISOString(), input.itemId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalProductDetail(input.itemId);
+}
+
+export async function addPhysicalInventoryVariant(input: { itemId: string; title: string; sku?: string | null }) {
+  const db = await getTursoClient();
+  const title = input.title.trim();
+  const sku = input.sku?.trim() || null;
+  const transaction = await db.transaction("write");
+  try {
+    const item = await transaction.execute({ sql: "SELECT id, variant_label FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
+    if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_variants WHERE physical_item_id = ? AND lower(title) = lower(?) AND active = 1", args: [input.itemId, title] });
+    if (duplicate.rows[0]) throw new Error("A variant with this name already exists");
+    const sortOrder = await transaction.execute({ sql: "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort_order FROM physical_inventory_variants WHERE physical_item_id = ?", args: [input.itemId] });
+    const variantId = `${input.itemId}-variant-${randomUUID()}`;
+    const now = new Date().toISOString();
+    await transaction.execute({
+      sql: "INSERT INTO physical_inventory_variants (id, physical_item_id, title, sku, quantity, quantity_known, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)",
+      args: [variantId, input.itemId, title, sku, numberValue(sortOrder.rows[0]?.next_sort_order), now, now],
+    });
+    const countResult = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ?", args: [input.itemId] });
+    const count = numberValue(countResult.rows[0]?.variant_count);
+    const previousLabel = stringValue(item.rows[0].variant_label);
+    const label = count === 1 ? title : /shades?$/i.test(previousLabel) ? `${count} shades` : `${count} variants`;
+    await transaction.execute({ sql: "UPDATE physical_inventory_items SET variant_label = ?, quantity_known = 0, updated_at = ? WHERE id = ?", args: [label, now, input.itemId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalProductDetail(input.itemId);
+}
+
+export async function updatePhysicalInventoryVariant(input: { variantId: string; title: string; sku?: string | null }) {
+  const db = await getTursoClient();
+  const title = input.title.trim();
+  const sku = input.sku?.trim() || null;
+  const transaction = await db.transaction("write");
+  let itemId = "";
+  try {
+    const variant = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [input.variantId] });
+    if (!variant.rows[0]) throw new Error("Physical inventory variant not found");
+    itemId = stringValue(variant.rows[0].physical_item_id);
+    const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_variants WHERE physical_item_id = ? AND lower(title) = lower(?) AND id <> ? AND active = 1", args: [itemId, title, input.variantId] });
+    if (duplicate.rows[0]) throw new Error("A variant with this name already exists");
+    const now = new Date().toISOString();
+    await transaction.execute({ sql: "UPDATE physical_inventory_variants SET title = ?, sku = ?, updated_at = ? WHERE id = ?", args: [title, sku, now, input.variantId] });
+    const count = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1", args: [itemId] });
+    if (numberValue(count.rows[0]?.variant_count) === 1) await transaction.execute({ sql: "UPDATE physical_inventory_items SET variant_label = ?, updated_at = ? WHERE id = ?", args: [title, now, itemId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalProductDetail(itemId);
+}
+
+export async function deletePhysicalInventoryVariant(variantId: string) {
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  let itemId = "";
+  try {
+    const variant = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [variantId] });
+    if (!variant.rows[0]) throw new Error("Physical inventory variant not found");
+    itemId = stringValue(variant.rows[0].physical_item_id);
+    const mappings = await transaction.execute({ sql: "SELECT COUNT(*) AS mapping_count FROM physical_listing_components WHERE physical_variant_id = ?", args: [variantId] });
+    if (numberValue(mappings.rows[0]?.mapping_count) > 0) throw new Error("Remove this variant's channel mappings before deleting it");
+    const remaining = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1", args: [itemId] });
+    if (numberValue(remaining.rows[0]?.variant_count) <= 1) throw new Error("A product must keep at least one variant");
+    const now = new Date().toISOString();
+    await transaction.execute({ sql: "UPDATE physical_inventory_variants SET active = 0, updated_at = ? WHERE id = ?", args: [now, variantId] });
+    await transaction.execute({ sql: "UPDATE physical_inventory_items SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0), quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END, variant_label = ?, updated_at = ? WHERE id = ?", args: [itemId, itemId, `${numberValue(remaining.rows[0]?.variant_count) - 1} variants`, now, itemId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalProductDetail(itemId);
+}
+
+export async function deletePhysicalProduct(itemId: string) {
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  try {
+    const item = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id = ? AND active = 1", args: [itemId] });
+    if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    const componentMappings = await transaction.execute({
+      sql: "SELECT COUNT(*) AS mapping_count FROM physical_listing_components c JOIN physical_inventory_variants v ON v.id = c.physical_variant_id WHERE v.physical_item_id = ?",
+      args: [itemId],
+    });
+    const productMappings = await transaction.execute({ sql: "SELECT COUNT(*) AS mapping_count FROM physical_channel_product_links WHERE physical_item_id = ?", args: [itemId] });
+    if (numberValue(componentMappings.rows[0]?.mapping_count) > 0 || numberValue(productMappings.rows[0]?.mapping_count) > 0) {
+      throw new Error("Remove this product's channel mappings before deleting it");
+    }
+    await transaction.execute({ sql: "UPDATE physical_inventory_items SET active = 0, updated_at = ? WHERE id = ?", args: [new Date().toISOString(), itemId] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
+
+type PhysicalInventoryAdjustmentResult = {
+  variantId: string;
+  itemId: string;
+  before: number;
+  after: number;
+  quantityKnown: true;
+};
+
+/**
+ * Applies a reviewed physical count at the variant level. The parent item is
+ * kept in sync solely as a cached total; its variants remain the source of truth.
+ */
+export async function applyPhysicalInventoryAdjustments(input: {
+  adjustments: PhysicalInventoryAdjustment[];
+  note: string;
+  actor: string;
+}): Promise<{ changes: PhysicalInventoryAdjustmentResult[] }> {
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  const changes: PhysicalInventoryAdjustmentResult[] = [];
+  const itemIds = new Set<string>();
+
+  try {
+    for (const adjustment of input.adjustments) {
+      const variant = await transaction.execute({
+        sql: `SELECT piv.id, piv.physical_item_id, piv.quantity, piv.quantity_known
+              FROM physical_inventory_variants piv
+              JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+              WHERE piv.id = ? AND pi.active = 1`,
+        args: [adjustment.variantId],
+      });
+      const row = variant.rows[0];
+      if (!row) throw new Error("One of the selected variants no longer exists");
+
+      const before = numberValue(row.quantity);
+      const after = adjustment.quantity;
+      if (!Number.isSafeInteger(after) || after < 0) throw new Error("Inventory cannot be negative");
+
+      const itemId = stringValue(row.physical_item_id);
+      const wasKnown = numberValue(row.quantity_known) === 1;
+      if (before !== after || !wasKnown) {
+        await transaction.execute({
+          sql: "UPDATE physical_inventory_variants SET quantity = ?, quantity_known = 1, updated_at = ? WHERE id = ?",
+          args: [after, now, adjustment.variantId],
+        });
+        await transaction.execute({
+          sql: `INSERT INTO physical_inventory_ledger (id, physical_item_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [randomUUID(), itemId, "manual_edit", input.actor, before, after, after - before, `${input.note ? `${input.note} · ` : ""}variant:${adjustment.variantId}`, now],
+        });
+      }
+      itemIds.add(itemId);
+      changes.push({ variantId: adjustment.variantId, itemId, before, after, quantityKnown: true });
+    }
+
+    for (const itemId of itemIds) {
+      await transaction.execute({
+        sql: `UPDATE physical_inventory_items
+              SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ?), 0),
+                  quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND quantity_known = 0) THEN 0 ELSE 1 END,
+                  updated_at = ?
+              WHERE id = ?`,
+        args: [itemId, itemId, now, itemId],
+      });
+    }
+
+    await transaction.commit();
+    return { changes };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
+
+type PhysicalListingSeed = {
+  id: string;
+  channel: PhysicalChannel;
+  externalProductId: string;
+  title: string;
+  kind: "individual" | "bundle" | "unknown";
+  mappingStatus: PhysicalListingMappingStatus;
+  note: string;
+};
+
+// This is the seller-authorised live TikTok audit from 21 August. It is a
+// catalogue snapshot, not a guess based on similarly named Shopify products.
+const TIKTOK_LISTING_SEED: PhysicalListingSeed[] = [
+  { id: "tiktok:1729881618337077866", channel: "tiktok", externalProductId: "1729881618337077866", title: "20% THD Vitamin C + Astaxanthin Serum 30ml", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: exact 30ml serum match." },
+  { id: "tiktok:1729828280298478186", channel: "tiktok", externalProductId: "1729828280298478186", title: "Lash Serum & Brow Kit", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: image verifies both products." },
+  { id: "tiktok:1729787169768774250", channel: "tiktok", externalProductId: "1729787169768774250", title: "Lash & Perfume Bundle", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: description names both products." },
+  { id: "tiktok:1729787210817837674", channel: "tiktok", externalProductId: "1729787210817837674", title: "Under Eye Serum & Perfume", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: description names both products." },
+  { id: "tiktok:1729787213774363242", channel: "tiktok", externalProductId: "1729787213774363242", title: "The Beginning Perfume 2 x 20ml", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: explicit two-pack." },
+  { id: "tiktok:1729787173784296042", channel: "tiktok", externalProductId: "1729787173784296042", title: "The Beginning Perfume 20ml", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: explicit 20ml Eau de Parfum." },
+  { id: "tiktok:1729775874675612266", channel: "tiktok", externalProductId: "1729775874675612266", title: "Summer Bundle", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: description names both serums, BioActivator, pouch, and five spoolies." },
+  { id: "tiktok:1729692906874051178", channel: "tiktok", externalProductId: "1729692906874051178", title: "Fuel + Tint Brow Tinting Mud 35g", kind: "individual", mappingStatus: "review", note: "The physical catalogue counts Warm Brown and Black separately; TikTok colour/SKU detail is not sufficient to pick one." },
+  { id: "tiktok:1729638607145638506", channel: "tiktok", externalProductId: "1729638607145638506", title: "Lash Serum + Under Eye Serum Duo", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: corrected from the earlier Glow up Bundle match." },
+  { id: "tiktok:1729638563661519466", channel: "tiktok", externalProductId: "1729638563661519466", title: "2 x Peptide SnowLift Eye Serum 8ml", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: explicit two-pack." },
+  { id: "tiktok:1729635949953849962", channel: "tiktok", externalProductId: "1729635949953849962", title: "2 x Eyelash Growth Serum", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: explicit two-pack." },
+  { id: "tiktok:1729587772809255530", channel: "tiktok", externalProductId: "1729587772809255530", title: "Eyelash Growth Serum", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: Serenity Hue Pro Lash Serum." },
+  { id: "tiktok:1729511153129593450", channel: "tiktok", externalProductId: "1729511153129593450", title: "Peptide SnowLift Eye Serum 8ml", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: same peptide eye serum." },
+  { id: "tiktok:1729456593869835882", channel: "tiktok", externalProductId: "1729456593869835882", title: "Brow Lamination Clay 35g", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: exact salon-size 35g clay." },
+  { id: "tiktok:1729456591670054506", channel: "tiktok", externalProductId: "1729456591670054506", title: "Large Extra Hold Brow Primer", kind: "individual", mappingStatus: "review", note: "TikTok calls this 10g while the earlier Shopify relation was 35g. Size must be confirmed." },
+  { id: "tiktok:1729427557085843050", channel: "tiktok", externalProductId: "1729427557085843050", title: "Reusable Double-Sided Facial Cleaning Towel", kind: "individual", mappingStatus: "unmapped", note: "Confirmed channel item, but it is not in the approved physical catalogue." },
+  { id: "tiktok:1729429043083185770", channel: "tiktok", externalProductId: "1729429043083185770", title: "Brow Shape, Hold & Grow Duo", kind: "bundle", mappingStatus: "review", note: "Each TikTok SKU is imported as a separate shade; map each shade to its physical pomade variant." },
+  { id: "tiktok:1729427787512581738", channel: "tiktok", externalProductId: "1729427787512581738", title: "Pouch + 5 Brow Spoolies", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: explicit five spoolies and pouch." },
+  { id: "tiktok:1729427558490148458", channel: "tiktok", externalProductId: "1729427558490148458", title: "All-Day Hold & Grow Lamination Duo", kind: "bundle", mappingStatus: "confirmed", note: "Live TikTok audit: Brow Baking Powder, Brow Lamination Clay, and five spoolies." },
+  { id: "tiktok:1729427559489572458", channel: "tiktok", externalProductId: "1729427559489572458", title: "Brow Growth & Hold Kit", kind: "bundle", mappingStatus: "review", note: "Each TikTok SKU is imported as a separate shade; map each shade to its physical pomade variant." },
+  { id: "tiktok:1729401004979949162", channel: "tiktok", externalProductId: "1729401004979949162", title: "Extra Hold Brow Primer", kind: "individual", mappingStatus: "review", note: "It is Brow Baking Powder, but TikTok does not state its size." },
+  { id: "tiktok:1729401002070871658", channel: "tiktok", externalProductId: "1729401002070871658", title: "Brow Treatment Pomade (7 shades)", kind: "individual", mappingStatus: "review", note: "Each TikTok SKU is imported as a separate shade; map each shade to its physical pomade variant." },
+  { id: "tiktok:1729401004890426986", channel: "tiktok", externalProductId: "1729401004890426986", title: "Day Rescue Treatment Clear Matte Gel", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: 10g Brow Lamination Clay rescue formula." },
+  { id: "tiktok:1729401004657970794", channel: "tiktok", externalProductId: "1729401004657970794", title: "Brow Conditioning Gel / Follicle BioActivator", kind: "individual", mappingStatus: "confirmed", note: "Live TikTok audit: now called Brow Follicle BioActivator." },
+];
+
+// Bump this whenever TIKTOK_LISTING_SEED changes so the listing view rebuilds
+// from the new audit even when synced Shopify/TikTok quantities are unchanged.
+const TIKTOK_LISTING_SEED_VERSION = "2026-08-25-tiktok-sku-mapping";
+
+function listingIdForShopifyVariant(variantId: string) {
+  return `shopify:${variantId}`;
+}
+
+let physicalChannelListingsInFlight: Promise<DatabaseClient> | undefined;
+
+// The channel listing view is derived entirely from synced Shopify/TikTok data
+// plus the static TikTok audit. Re-running the ~60 upserts on every page view
+// was the dominant source of inventory-page latency, so we only rewrite when a
+// cheap signature of those exact inputs has actually changed (e.g. after a
+// sync or TikTok refresh). Manual mappings live in separate tables and in
+// columns the seed never overwrites, so a skipped reseed can never lose them.
+export async function ensurePhysicalChannelListings() {
+  if (physicalChannelListingsInFlight) return physicalChannelListingsInFlight;
+  physicalChannelListingsInFlight = runEnsurePhysicalChannelListings().finally(() => {
+    physicalChannelListingsInFlight = undefined;
+  });
+  return physicalChannelListingsInFlight;
+}
+
+// A deterministic fingerprint of every input the reseed reads. Any Shopify
+// import, rename, quantity change, or TikTok refresh moves one of these values
+// (the importer always bumps updated_at/last_synced_at/synced_at), so an equal
+// signature guarantees an identical rebuild and lets us skip it safely.
+async function channelListingsSignature(db: DatabaseClient) {
+  const result = await db.execute(`
+    SELECT
+      (SELECT COUNT(*) FROM products) AS p_count,
+      (SELECT COALESCE(MAX(updated_at), '') FROM products) AS p_updated,
+      (SELECT COUNT(*) FROM variants WHERE shopify_variant_id IS NOT NULL) AS v_count,
+      (SELECT COALESCE(MAX(updated_at), '') FROM variants) AS v_updated,
+      (SELECT COALESCE(MAX(last_synced_at), '') FROM variants) AS v_synced,
+      (SELECT COALESCE(SUM(available_quantity), 0) FROM variants) AS v_qty,
+      (SELECT COUNT(*) FROM channel_inventory WHERE channel = 'tiktok') AS t_count,
+      (SELECT COALESCE(MAX(synced_at), '') FROM channel_inventory WHERE channel = 'tiktok') AS t_synced,
+      (SELECT COALESCE(SUM(available_quantity), 0) FROM channel_inventory WHERE channel = 'tiktok') AS t_qty
+  `);
+  const row = result.rows[0] ?? {};
+  return [
+    "canonical-physical-inventory-v1",
+    TIKTOK_LISTING_SEED_VERSION,
+    process.env.SHOPIFY_STORE_DOMAIN?.trim() ? "shop" : "noshop",
+    numberValue(row.p_count), stringValue(row.p_updated),
+    numberValue(row.v_count), stringValue(row.v_updated), stringValue(row.v_synced), numberValue(row.v_qty),
+    numberValue(row.t_count), stringValue(row.t_synced), numberValue(row.t_qty),
+  ].join("|");
+}
+
+async function runEnsurePhysicalChannelListings() {
+  const db = await getTursoClient();
+  const signature = await channelListingsSignature(db);
+  const stored = await db.execute({ sql: "SELECT value FROM inventory_settings WHERE key = ?", args: ["physical_channel_listings_signature"] });
+  if (stringValue(stored.rows[0]?.value) === signature) return db;
+
+  const now = new Date().toISOString();
+  // The audit seed starts with one product-level TikTok row. A successful live
+  // SKU import expands multi-SKU products into variant rows below; this
+  // product-level quantity remains a safe fallback for products with one SKU.
+  const tiktokInventory = await db.execute(`
+    SELECT external_product_id, SUM(available_quantity) AS quantity
+    FROM channel_inventory
+    WHERE channel = 'tiktok' AND external_product_id IS NOT NULL
+    GROUP BY external_product_id
+  `);
+  const tiktokQuantityByProduct = new Map(tiktokInventory.rows.map((row) => [
+    stringValue(row.external_product_id),
+    numberValue(row.quantity),
+  ]));
+  const shopifyVariants = await db.execute(`
+    SELECT p.shopify_product_id, p.title AS product_title, p.handle, p.image_url,
+           v.shopify_variant_id, v.title AS variant_title, v.available_quantity
+    FROM products p JOIN variants v ON v.product_id = p.id
+    WHERE p.shopify_product_id IS NOT NULL AND v.shopify_variant_id IS NOT NULL
+  `);
+
+  // Build every upsert first, then apply them (plus the new signature) in one
+  // atomic batch — a single round trip instead of ~60 sequential writes.
+  const statements: Array<{ sql: string; args: SqlValue[] }> = [];
+  for (const row of shopifyVariants.rows) {
+    const externalProductId = stringValue(row.shopify_product_id);
+    const externalVariantId = stringValue(row.shopify_variant_id);
+    const title = stringValue(row.product_title);
+    const variantTitle = stringValue(row.variant_title);
+    const kind = /bundle|duo|kit|2 x|two[- ]?pack|5 spoolies/i.test(title) ? "bundle" : "individual";
+    const listingUrl = process.env.SHOPIFY_STORE_DOMAIN?.trim()
+      ? `https://${process.env.SHOPIFY_STORE_DOMAIN.trim().replace(/^https?:\/\//, "").replace(/\/$/, "")}/products/${stringValue(row.handle)}`
+      : null;
+    statements.push({
+      sql: `INSERT INTO physical_channel_listings
+              (id, channel, external_product_id, external_variant_id, title, variant_title, image_url, listing_url, channel_quantity, listing_kind, mapping_status, active, created_at, updated_at)
+            VALUES (?, 'shopify', ?, ?, ?, ?, ?, ?, ?, ?, 'unmapped', 1, ?, ?)
+            ON CONFLICT(channel, external_product_id, external_variant_id) DO UPDATE SET
+              title=excluded.title, variant_title=excluded.variant_title, image_url=excluded.image_url,
+              listing_url=excluded.listing_url, channel_quantity=excluded.channel_quantity,
+              active=1, updated_at=excluded.updated_at`,
+      args: [listingIdForShopifyVariant(externalVariantId), externalProductId, externalVariantId, title, variantTitle, optionalString(row.image_url) ?? null, listingUrl, numberValue(row.available_quantity), kind, now, now],
+    });
+  }
+
+  for (const listing of TIKTOK_LISTING_SEED) {
+    const channelQuantity = tiktokQuantityByProduct.get(listing.externalProductId) ?? null;
+    statements.push({
+      sql: `INSERT INTO physical_channel_listings
+              (id, channel, external_product_id, title, listing_url, channel_quantity, listing_kind, mapping_status, source_note, active, created_at, updated_at)
+            VALUES (?, 'tiktok', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              listing_url=CASE
+                WHEN listing_url IS NULL
+                  OR listing_url = ''
+                  OR listing_url LIKE 'https://shop.tiktok.com/view/product/%'
+                  OR listing_url LIKE 'https://seller-%/product/manage?search=%'
+                  OR listing_url LIKE 'https://seller-%/product/manage?search_content=%'
+                  THEN excluded.listing_url
+                ELSE listing_url
+              END,
+              channel_quantity=excluded.channel_quantity, source_note=excluded.source_note,
+              active=1, updated_at=excluded.updated_at`,
+      args: [listing.id, listing.externalProductId, listing.title, tiktokShopProductUrl(listing.externalProductId), channelQuantity, listing.kind, "unmapped", listing.note, now, now],
+    });
+  }
+
+  // Repair live TikTok rows created by an API refresh as well as rows from the
+  // static audit. Only replace URLs generated by the old code; a real URL
+  // returned by TikTok remains authoritative.
+  const invalidTikTokUrls = await db.execute(`
+    SELECT id, external_product_id
+    FROM physical_channel_listings
+    WHERE channel = 'tiktok' AND active = 1
+      AND (
+        listing_url IS NULL
+        OR listing_url = ''
+        OR listing_url LIKE 'https://shop.tiktok.com/view/product/%'
+        OR listing_url LIKE 'https://seller-%/product/manage?search=%'
+      )
+  `);
+  for (const row of invalidTikTokUrls.rows) {
+    const id = stringValue(row.id);
+    const productId = stringValue(row.external_product_id);
+    const listingUrl = tiktokShopProductUrl(productId);
+    if (!id || !listingUrl) continue;
+    statements.push({
+      sql: "UPDATE physical_channel_listings SET listing_url=?, updated_at=? WHERE id=?",
+      args: [listingUrl, now, id],
+    });
+  }
+
+  statements.push({
+    sql: `INSERT INTO inventory_settings (key, value, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    args: ["physical_channel_listings_signature", signature, now],
+  });
+  await db.batch(statements, "write");
+  return db;
+}
+
+/**
+ * Ensures the seeded TikTok listing view is current. The live importer then
+ * expands multi-SKU products into one mapping row per SKU.
+ */
+export async function refreshPhysicalTikTokListingQuantities() {
+  await ensurePhysicalChannelListings();
+}
+
+/**
+ * Refreshes TikTok display metadata and materializes live SKU variants by the
+ * platform product id. Product ids and SKU ids are the identities; titles,
+ * labels, URLs, and quantities are mutable display fields and must never be
+ * used to find or recreate an existing mapping.
+ */
+export async function updatePhysicalTikTokListingMetadata(updates: Array<{
+  externalProductId: string;
+  title: string;
+  listingUrl: string | null;
+  variants?: Array<{
+    externalVariantId: string;
+    variantTitle: string;
+    channelQuantity: number | null;
+  }>;
+}>) {
+  const db = await ensurePhysicalChannelListings();
+  const now = new Date().toISOString();
+  const validUpdates = [...new Map(updates
+    .filter((update) => Boolean(update.externalProductId))
+    .map((update) => [update.externalProductId, {
+      ...update,
+      variants: [...new Map((update.variants ?? [])
+        .filter((variant) => Boolean(variant.externalVariantId))
+        .map((variant) => [variant.externalVariantId, variant])).values()],
+    }])).values()];
+  if (!validUpdates.length) return;
+  const placeholders = validUpdates.map(() => "?").join(", ");
+  const existing = await db.execute({
+    sql: `SELECT id, external_product_id, external_variant_id, listing_kind FROM physical_channel_listings
+          WHERE channel = 'tiktok'
+            AND external_product_id IN (${placeholders})`,
+    args: validUpdates.map((update) => update.externalProductId),
+  });
+  const existingIdByKey = new Map(existing.rows.map((row) => [
+    `${stringValue(row.external_product_id)}\u0000${optionalString(row.external_variant_id) ?? ""}`,
+    stringValue(row.id),
+  ]));
+  const listingKindByProduct = new Map(existing.rows
+    .filter((row) => !optionalString(row.external_variant_id))
+    .map((row) => [stringValue(row.external_product_id), stringValue(row.listing_kind)]));
+  const statements: Array<{ sql: string; args: SqlValue[] }> = [];
+  for (const update of validUpdates) {
+    const baseListingId = existingIdByKey.get(`${update.externalProductId}\u0000`)
+      ?? `physical-tiktok-product:${update.externalProductId}`;
+    const variants = update.variants ?? [];
+    const hasMultipleVariants = variants.length > 1;
+    const listingKind = listingKindByProduct.get(update.externalProductId) === "bundle" || listingKindByProduct.get(update.externalProductId) === "individual"
+      ? listingKindByProduct.get(update.externalProductId)!
+      : "unknown";
+    statements.push({
+      sql: `INSERT INTO physical_channel_listings
+              (id, channel, external_product_id, external_variant_id, title, listing_url, listing_kind, mapping_status, active, created_at, updated_at)
+            VALUES (?, 'tiktok', ?, NULL, ?, ?, 'unknown', 'unmapped', ${hasMultipleVariants ? "0" : "1"}, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title, listing_url = COALESCE(excluded.listing_url, physical_channel_listings.listing_url),
+              active = ${hasMultipleVariants ? "0" : "1"},
+              updated_at = excluded.updated_at`,
+      args: [
+        baseListingId,
+        update.externalProductId,
+        update.title || `TikTok product ${update.externalProductId}`,
+        update.listingUrl,
+        now,
+        now,
+      ],
+    });
+
+    if (!hasMultipleVariants) continue;
+    const activeVariantIds = new Set(variants.map((variant) => variant.externalVariantId));
+    for (const variant of variants) {
+      const variantKey = `${update.externalProductId}\u0000${variant.externalVariantId}`;
+      const listingId = existingIdByKey.get(variantKey)
+        ?? `physical-tiktok-sku:${encodeURIComponent(update.externalProductId)}:${encodeURIComponent(variant.externalVariantId)}`;
+      statements.push({
+        sql: `INSERT INTO physical_channel_listings
+                (id, channel, external_product_id, external_variant_id, title, variant_title, listing_url, channel_quantity, listing_kind, mapping_status, source_note, active, created_at, updated_at)
+              VALUES (?, 'tiktok', ?, ?, ?, ?, ?, ?, ?, 'unmapped', ?, 1, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                variant_title = excluded.variant_title,
+                listing_url = COALESCE(excluded.listing_url, physical_channel_listings.listing_url),
+                channel_quantity = excluded.channel_quantity,
+                listing_kind = CASE WHEN physical_channel_listings.listing_kind = 'unknown' THEN excluded.listing_kind ELSE physical_channel_listings.listing_kind END,
+                active = 1,
+                updated_at = excluded.updated_at`,
+        args: [
+          listingId,
+          update.externalProductId,
+          variant.externalVariantId,
+          update.title || `TikTok product ${update.externalProductId}`,
+          variant.variantTitle || `SKU ${variant.externalVariantId}`,
+          update.listingUrl,
+          variant.channelQuantity,
+          listingKind,
+          "Map this TikTok SKU to its corresponding physical variant.",
+          now,
+          now,
+        ],
+      });
+    }
+
+    // The old product-level row represented the aggregate quantity. Once
+    // TikTok exposes multiple SKUs, keeping it active would make the UI show a
+    // misleading Default variant and could apply a non-shade-specific mapping.
+    statements.push({
+      sql: `UPDATE physical_channel_listings
+            SET active=0, updated_at=?
+            WHERE channel='tiktok' AND external_product_id=? AND external_variant_id IS NULL`,
+      args: [now, update.externalProductId],
+    });
+    statements.push({
+      sql: `UPDATE physical_channel_listings
+            SET active=0, updated_at=?
+            WHERE channel='tiktok' AND external_product_id=? AND external_variant_id IS NOT NULL
+              AND active=1 AND external_variant_id NOT IN (${[...activeVariantIds].map(() => "?").join(", ")})`,
+      args: [now, update.externalProductId, ...activeVariantIds],
+    });
+  }
+  if (statements.length) await db.batch(statements, "write");
+}
+
+export async function getPhysicalChannelListings(channel: PhysicalChannel): Promise<PhysicalChannelListing[]> {
+  const db = await ensurePhysicalChannelListings();
+  const result = await db.execute({
+    sql: `SELECT l.id, l.channel, l.external_product_id, l.external_variant_id, l.title, l.variant_title,
+                 l.image_url, l.listing_url, l.channel_quantity, l.listing_kind, l.mapping_status, l.source_note,
+                 product_link.physical_item_id AS master_product_id, master_item.title AS master_product_title,
+                 c.id AS component_id, c.physical_variant_id, c.quantity_per_sale, pi.id AS item_id,
+                 pi.title AS item_title, piv.title AS physical_variant_title
+          FROM physical_channel_listings l
+          LEFT JOIN physical_channel_product_links product_link
+            ON product_link.channel=l.channel AND product_link.external_product_id=l.external_product_id
+          LEFT JOIN physical_inventory_items master_item ON master_item.id=product_link.physical_item_id
+          LEFT JOIN physical_listing_components c ON c.listing_id=l.id
+          LEFT JOIN physical_inventory_variants piv ON piv.id=c.physical_variant_id
+          LEFT JOIN physical_inventory_items pi ON pi.id=piv.physical_item_id
+          WHERE l.channel=? AND l.active=1
+          ORDER BY l.title, l.variant_title, l.id`,
+    args: [channel],
+  });
+  const listings = new Map<string, PhysicalChannelListing>();
+  for (const row of result.rows) {
+    const id = stringValue(row.id);
+    let listing = listings.get(id);
+    if (!listing) {
+      const kind = stringValue(row.listing_kind);
+      const mappingValue = stringValue(row.mapping_status);
+      const mappingStatus: PhysicalListingMappingStatus = mappingValue === "confirmed" || mappingValue === "review" ? mappingValue : "unmapped";
+      listing = {
+        id,
+        channel: stringValue(row.channel) === "tiktok" ? "tiktok" : "shopify",
+        externalProductId: stringValue(row.external_product_id),
+        externalVariantId: optionalString(row.external_variant_id) ?? null,
+        title: stringValue(row.title),
+        variantTitle: stringValue(row.variant_title),
+        imageUrl: optionalString(row.image_url) ?? null,
+        listingUrl: optionalString(row.listing_url) ?? null,
+        channelQuantity: row.channel_quantity === null || row.channel_quantity === undefined ? null : numberValue(row.channel_quantity),
+        kind: kind === "bundle" || kind === "individual" ? kind : "unknown",
+        masterProductId: optionalString(row.master_product_id) ?? null,
+        masterProductTitle: optionalString(row.master_product_title) ?? null,
+        mappingStatus,
+        sourceNote: stringValue(row.source_note),
+        components: [],
+      };
+      listings.set(id, listing);
+    }
+    if (!listing) continue;
+    if (row.component_id) {
+      listing.components.push({
+        id: stringValue(row.component_id),
+        physicalVariantId: stringValue(row.physical_variant_id),
+        itemId: stringValue(row.item_id),
+        itemTitle: stringValue(row.item_title),
+        variantTitle: stringValue(row.physical_variant_title),
+        quantityPerSale: numberValue(row.quantity_per_sale),
+      });
+    }
+  }
+  return [...listings.values()];
+}
+
+export async function savePhysicalListingMappings(input: { mappings: Array<{ listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }>; listingKind?: "individual" | "bundle" }) {
+  const db = await ensurePhysicalChannelListings();
+  if (!input.mappings.length) throw new Error("At least one listing mapping is required");
+  if (new Set(input.mappings.map((mapping) => mapping.listingId)).size !== input.mappings.length) throw new Error("A listing can only be mapped once per save");
+
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  const productKeys = new Map<string, { channel: PhysicalChannel; externalProductId: string; kind: "individual" | "bundle" }>();
+  const channels = new Set<PhysicalChannel>();
+  let editedProductKey: { channel: PhysicalChannel; externalProductId: string } | null = null;
+  try {
+    for (const mapping of input.mappings) {
+      const listing = await transaction.execute({ sql: "SELECT id, channel, external_product_id, listing_kind FROM physical_channel_listings WHERE id=? AND active=1", args: [mapping.listingId] });
+      if (!listing.rows[0]) throw new Error("Channel listing not found");
+      const channel = stringValue(listing.rows[0].channel) === "tiktok" ? "tiktok" : "shopify";
+      const externalProductId = stringValue(listing.rows[0].external_product_id);
+      const kind = input.listingKind ?? stringValue(listing.rows[0].listing_kind);
+      if (kind !== "individual" && kind !== "bundle") throw new Error("This listing needs an Individual or Bundle type before it can be mapped");
+      if (input.listingKind) {
+        if (editedProductKey && (editedProductKey.channel !== channel || editedProductKey.externalProductId !== externalProductId)) {
+          throw new Error("Listings from one channel product must be saved together");
+        }
+        editedProductKey = { channel, externalProductId };
+      }
+      const components = mapping.components.filter((component) => component.physicalVariantId && Number.isSafeInteger(component.quantityPerSale) && component.quantityPerSale > 0);
+      if (components.length !== mapping.components.length) throw new Error("Every mapped item needs a positive whole-number quantity");
+      if (new Set(components.map((component) => component.physicalVariantId)).size !== components.length) throw new Error("A physical variant can only be mapped once per listing");
+      if (components.length > 12) throw new Error("A listing can include up to 12 physical components");
+      if (kind === "individual" && components.length > 1) throw new Error("An Individual listing can map to one physical variant only");
+
+      channels.add(channel);
+      productKeys.set(`${channel}:${externalProductId}`, { channel, externalProductId, kind });
+      const physicalItemIds = new Set<string>();
+      for (const component of components) {
+        const variant = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_inventory_variants WHERE id=?", args: [component.physicalVariantId] });
+        if (!variant.rows[0]) throw new Error("One selected physical variant no longer exists");
+        const physicalItemId = stringValue(variant.rows[0].physical_item_id);
+        if (kind === "bundle" && physicalItemIds.has(physicalItemId)) throw new Error("A Bundle listing can use one variant from each physical product. Use quantity for multiples of the same variant.");
+        physicalItemIds.add(physicalItemId);
+      }
+      await transaction.execute({ sql: "DELETE FROM physical_listing_components WHERE listing_id=?", args: [mapping.listingId] });
+      for (const component of components) {
+        await transaction.execute({
+          sql: `INSERT INTO physical_listing_components (id, listing_id, physical_variant_id, quantity_per_sale, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [randomUUID(), mapping.listingId, component.physicalVariantId, component.quantityPerSale, now, now],
+        });
+      }
+      await transaction.execute({
+        sql: "UPDATE physical_channel_listings SET mapping_status=?, updated_at=? WHERE id=?",
+        args: [components.length ? "confirmed" : "unmapped", now, mapping.listingId],
+      });
+    }
+    if (channels.size !== 1) throw new Error("Listings from one channel must be saved together");
+
+    if (input.listingKind && editedProductKey) {
+      const activeListings = await transaction.execute({
+        sql: "SELECT id FROM physical_channel_listings WHERE channel=? AND external_product_id=? AND active=1",
+        args: [editedProductKey.channel, editedProductKey.externalProductId],
+      });
+      const submittedIds = new Set(input.mappings.map((mapping) => mapping.listingId));
+      if (activeListings.rows.length !== submittedIds.size || activeListings.rows.some((row) => !submittedIds.has(stringValue(row.id)))) {
+        throw new Error("All variants of this channel product must be saved together when changing its listing type");
+      }
+      await transaction.execute({
+        sql: "UPDATE physical_channel_listings SET listing_kind=?, updated_at=? WHERE channel=? AND external_product_id=? AND active=1",
+        args: [input.listingKind, now, editedProductKey.channel, editedProductKey.externalProductId],
+      });
+    }
+
+    for (const { channel, externalProductId, kind } of productKeys.values()) {
+      if (kind === "bundle") {
+        await transaction.execute({ sql: "DELETE FROM physical_channel_product_links WHERE channel=? AND external_product_id=?", args: [channel, externalProductId] });
+        continue;
+      }
+      const mappedVariants = await transaction.execute({
+        sql: `SELECT DISTINCT piv.physical_item_id
+              FROM physical_channel_listings l
+              JOIN physical_listing_components c ON c.listing_id=l.id
+              JOIN physical_inventory_variants piv ON piv.id=c.physical_variant_id
+              WHERE l.channel=? AND l.external_product_id=? AND l.active=1`,
+        args: [channel, externalProductId],
+      });
+      const physicalItemIds = [...new Set(mappedVariants.rows.map((row) => stringValue(row.physical_item_id)))];
+      if (physicalItemIds.length > 1) throw new Error("All variants of an Individual listing must use the same physical product");
+      if (physicalItemIds.length === 1) {
+        await transaction.execute({
+          sql: `INSERT INTO physical_channel_product_links (channel, external_product_id, physical_item_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel, external_product_id) DO UPDATE SET physical_item_id=excluded.physical_item_id, updated_at=excluded.updated_at`,
+          args: [channel, externalProductId, physicalItemIds[0], now, now],
+        });
+      } else {
+        await transaction.execute({ sql: "DELETE FROM physical_channel_product_links WHERE channel=? AND external_product_id=?", args: [channel, externalProductId] });
+      }
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalChannelListings([...channels][0]);
+}
+
+export async function savePhysicalListingMapping(input: { listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }) {
+  return savePhysicalListingMappings({ mappings: [input] });
+}
+
+/** Saves the product-level association shown in the grouped channel catalogue. */
+export async function savePhysicalChannelProductLink(input: { channel: PhysicalChannel; externalProductId: string; physicalItemId: string | null }) {
+  const db = await ensurePhysicalChannelListings();
+  const product = await db.execute({
+    sql: "SELECT id FROM physical_channel_listings WHERE channel=? AND external_product_id=? AND active=1 LIMIT 1",
+    args: [input.channel, input.externalProductId],
+  });
+  if (!product.rows[0]) throw new Error("Channel product not found");
+
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    if (input.physicalItemId) {
+      const physicalItem = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id=? AND active=1", args: [input.physicalItemId] });
+      if (!physicalItem.rows[0]) throw new Error("The selected master product no longer exists");
+      await transaction.execute({
+        sql: `INSERT INTO physical_channel_product_links (channel, external_product_id, physical_item_id, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(channel, external_product_id) DO UPDATE SET physical_item_id=excluded.physical_item_id, updated_at=excluded.updated_at`,
+        args: [input.channel, input.externalProductId, input.physicalItemId, now, now],
+      });
+    } else {
+      await transaction.execute({ sql: "DELETE FROM physical_channel_product_links WHERE channel=? AND external_product_id=?", args: [input.channel, input.externalProductId] });
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return getPhysicalChannelListings(input.channel);
+}
+
+/** Clears every mapping relationship while preserving channel listings, inventory, and orders. */
+export async function clearAllChannelMappings() {
+  const db = await ensurePhysicalChannelListings();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    await transaction.execute("DELETE FROM physical_listing_components");
+    await transaction.execute("DELETE FROM physical_channel_product_links");
+    await transaction.execute("DELETE FROM channel_mappings");
+    await transaction.execute("DELETE FROM bundle_components");
+    await transaction.execute({ sql: "UPDATE physical_channel_listings SET mapping_status='unmapped', updated_at=?", args: [now] });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
 
 /** The three-inventory view: master (in-app) + fetched Shopify and TikTok display levels per variant. */
 export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
   const db = await getTursoClient();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const [variantsResult, masterResult, tiktokResult, syncedResult, salesResult] = await Promise.all([
+  const [variantsResult, masterResult, tiktokResult, tiktokProductResult, tiktokCountResult, syncedResult, salesResult, sync] = await Promise.all([
     db.execute(`SELECT v.id, v.product_id, p.title AS product, v.title AS variant, v.sku, v.available_quantity, v.lead_time_days, v.packaging_type
                 FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`),
     db.execute(`SELECT variant_id, quantity FROM master_inventory`),
     db.execute(`SELECT variant_id, SUM(available_quantity) AS qty FROM channel_inventory WHERE channel = 'tiktok' AND variant_id IS NOT NULL GROUP BY variant_id`),
+    db.execute(`
+      WITH mapped_products AS (
+        SELECT cm.external_product_id, MIN(v.product_id) AS product_id
+        FROM channel_mappings cm
+        JOIN variants v ON v.id = cm.variant_id
+        WHERE cm.channel = 'tiktok' AND cm.active = 1 AND cm.external_product_id IS NOT NULL
+        GROUP BY cm.external_product_id
+        HAVING COUNT(DISTINCT v.product_id) = 1
+      )
+      SELECT mp.product_id, SUM(ci.available_quantity) AS qty
+      FROM channel_inventory ci
+      JOIN mapped_products mp ON mp.external_product_id = ci.external_product_id
+      WHERE ci.channel = 'tiktok' AND ci.variant_id IS NULL
+      GROUP BY mp.product_id
+    `),
+    db.execute(`SELECT COUNT(DISTINCT external_product_id) AS product_count FROM channel_inventory WHERE channel = 'tiktok' AND external_product_id IS NOT NULL`),
     db.execute(`SELECT MAX(synced_at) AS synced_at FROM channel_inventory WHERE channel = 'tiktok'`),
     db.execute({
       sql: `SELECT oi.variant_id,
@@ -560,19 +1798,27 @@ export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
             WHERE o.source_created_at >= ? AND oi.variant_id IS NOT NULL GROUP BY oi.variant_id`,
       args: [sevenDaysAgo, thirtyDaysAgo],
     }),
+    getLatestSync(),
   ]);
 
   const masterByVariant = new Map(masterResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
   const tiktokByVariant = new Map(tiktokResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.qty)]));
+  const tiktokProductByProduct = new Map(tiktokProductResult.rows.map((row) => [stringValue(row.product_id), numberValue(row.qty)]));
   const soldByVariant = new Map(salesResult.rows.map((row) => [stringValue(row.variant_id), { sold7d: numberValue(row.sold_7d), sold30d: numberValue(row.sold_30d) }]));
 
+  const productLevelShown = new Set<string>();
   const rows: ChannelInventoryRow[] = variantsResult.rows.map((row, index) => {
     const variantId = stringValue(row.id);
+    const productId = stringValue(row.product_id);
     const leadTimeDays = nullableNumber(row.lead_time_days);
     const sales = soldByVariant.get(variantId) ?? { sold7d: 0, sold30d: 0 };
+    const tiktokProductLevel = tiktokProductByProduct.has(productId) && !productLevelShown.has(productId)
+      ? tiktokProductByProduct.get(productId)!
+      : null;
+    productLevelShown.add(productId);
     return {
       variantId,
-      productId: stringValue(row.product_id),
+      productId,
       product: stringValue(row.product),
       variant: stringValue(row.variant),
       sku: stringValue(row.sku),
@@ -580,6 +1826,7 @@ export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
       master: masterByVariant.has(variantId) ? masterByVariant.get(variantId)! : null,
       shopify: numberValue(row.available_quantity),
       tiktok: tiktokByVariant.has(variantId) ? tiktokByVariant.get(variantId)! : null,
+      tiktokProductLevel,
       sold7d: sales.sold7d,
       sold30d: sales.sold30d,
       leadTime: leadTimeDays ? `${leadTimeDays} days` : "—",
@@ -587,7 +1834,173 @@ export async function getChannelInventory(): Promise<ChannelInventorySnapshot> {
     };
   });
 
-  return { rows, tiktokSyncedAt: stringValue(syncedResult.rows[0]?.synced_at) || null, sync: await getLatestSync() };
+  return {
+    rows,
+    tiktokSyncedAt: stringValue(syncedResult.rows[0]?.synced_at) || null,
+    tiktokProductCount: numberValue(tiktokCountResult.rows[0]?.product_count),
+    sync,
+  };
+}
+
+/** Loads one product from the persisted Shopify/TikTok snapshots and its audit history. */
+export async function getProductDetail(productId: string): Promise<ProductDetail | null> {
+  const db = await getTursoClient();
+  const productResult = await db.execute({
+    sql: `SELECT id, title, handle, image_url
+          FROM products
+          WHERE id = ? OR shopify_product_id = ? OR handle = ? OR shopify_product_id LIKE ?
+          LIMIT 1`,
+    args: [productId, productId, productId, `%/${productId}`],
+  });
+  const productRow = productResult.rows[0];
+  if (!productRow) return null;
+  const canonicalProductId = stringValue(productRow.id);
+
+  const [variantsResult, tiktokSnapshotResult, tiktokProductResult] = await Promise.all([
+    db.execute({
+      sql: `SELECT id, title, available_quantity, last_synced_at
+            FROM variants WHERE product_id = ? ORDER BY title, id`,
+      args: [canonicalProductId],
+    }),
+    db.execute("SELECT MAX(synced_at) AS synced_at FROM channel_inventory WHERE channel = 'tiktok'"),
+    db.execute({
+      sql: `WITH mapped_products AS (
+              SELECT cm.external_product_id, MIN(v.product_id) AS product_id
+              FROM channel_mappings cm
+              JOIN variants v ON v.id = cm.variant_id
+              WHERE cm.channel = 'tiktok' AND cm.active = 1 AND cm.external_product_id IS NOT NULL
+              GROUP BY cm.external_product_id
+              HAVING COUNT(DISTINCT v.product_id) = 1
+            )
+            SELECT SUM(ci.available_quantity) AS quantity
+            FROM channel_inventory ci
+            JOIN mapped_products mp ON mp.external_product_id = ci.external_product_id
+            WHERE ci.channel = 'tiktok' AND ci.variant_id IS NULL AND mp.product_id = ?`,
+      args: [canonicalProductId],
+    }),
+  ]);
+  const variantIds = variantsResult.rows.map((row) => stringValue(row.id)).filter(Boolean);
+  const sync = await getLatestSync();
+  if (variantIds.length === 0) {
+    return {
+      id: canonicalProductId,
+      title: stringValue(productRow.title),
+      handle: stringValue(productRow.handle),
+      imageUrl: optionalString(productRow.image_url) ?? null,
+      variants: [],
+      totals: { master: null, shopify: 0, tiktok: null, sold7d: 0, sold30d: 0, dailySalesRate: 0, daysCover: null },
+      tiktokProductLevel: null,
+      shopifySyncedAt: null,
+      tiktokSyncedAt: stringValue(tiktokSnapshotResult.rows[0]?.synced_at) || null,
+      sync,
+      ledger: [],
+    };
+  }
+
+  const placeholders = variantIds.map(() => "?").join(", ");
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [masterResult, tiktokResult, salesResult, ledgerResult] = await Promise.all([
+    db.execute({
+      sql: `SELECT variant_id, quantity FROM master_inventory WHERE variant_id IN (${placeholders})`,
+      args: variantIds,
+    }),
+    db.execute({
+      sql: `SELECT variant_id, SUM(available_quantity) AS quantity, MAX(synced_at) AS synced_at
+            FROM channel_inventory WHERE channel = 'tiktok' AND variant_id IN (${placeholders}) GROUP BY variant_id`,
+      args: variantIds,
+    }),
+    db.execute({
+      sql: `SELECT oi.variant_id,
+              SUM(CASE WHEN o.source_created_at >= ? THEN oi.quantity ELSE 0 END) AS sold_7d,
+              SUM(oi.quantity) AS sold_30d
+            FROM order_items oi JOIN orders o ON o.id = oi.order_id
+            WHERE o.source_created_at >= ? AND oi.variant_id IN (${placeholders})
+            GROUP BY oi.variant_id`,
+      args: [sevenDaysAgo, thirtyDaysAgo, ...variantIds],
+    }),
+    db.execute({
+      sql: `SELECT il.id, il.variant_id, v.title AS item, il.inventory, il.change_type, il.actor,
+              il.quantity_before, il.quantity_after, il.quantity_delta, il.reference, il.created_at
+            FROM inventory_ledger il LEFT JOIN variants v ON v.id = il.variant_id
+            WHERE il.variant_id IN (${placeholders}) ORDER BY il.created_at DESC LIMIT 100`,
+      args: variantIds,
+    }),
+  ]);
+
+  const masterByVariant = new Map(masterResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
+  const tiktokByVariant = new Map(tiktokResult.rows.map((row) => [stringValue(row.variant_id), numberValue(row.quantity)]));
+  const tiktokProductLevel = tiktokProductResult.rows[0]?.quantity == null ? null : numberValue(tiktokProductResult.rows[0].quantity);
+  const salesByVariant = new Map(salesResult.rows.map((row) => [stringValue(row.variant_id), {
+    sold7d: numberValue(row.sold_7d),
+    sold30d: numberValue(row.sold_30d),
+  }]));
+  const shopifySyncedAt = variantsResult.rows.reduce<string | null>((latest, row) => {
+    const syncedAt = optionalString(row.last_synced_at) ?? null;
+    return syncedAt && (!latest || syncedAt > latest) ? syncedAt : latest;
+  }, null);
+  const tiktokSyncedAt = stringValue(tiktokSnapshotResult.rows[0]?.synced_at) || null;
+
+  const variants: ProductDetailVariant[] = variantsResult.rows.map((row) => {
+    const id = stringValue(row.id);
+    const sales = salesByVariant.get(id) ?? { sold7d: 0, sold30d: 0 };
+    const dailySalesRate = Math.max(sales.sold7d / 7, sales.sold30d / 30);
+    const master = masterByVariant.has(id) ? masterByVariant.get(id)! : null;
+    return {
+      id,
+      title: stringValue(row.title),
+      master,
+      shopify: numberValue(row.available_quantity),
+      tiktok: tiktokByVariant.has(id) ? tiktokByVariant.get(id)! : null,
+      sold7d: sales.sold7d,
+      sold30d: sales.sold30d,
+      dailySalesRate,
+      daysCover: master !== null && master > 0 && dailySalesRate > 0 ? Math.ceil(master / dailySalesRate) : null,
+    };
+  });
+
+  const masterValues = variants.map((variant) => variant.master).filter((quantity): quantity is number => quantity !== null);
+  const tiktokValues = variants.map((variant) => variant.tiktok).filter((quantity): quantity is number => quantity !== null);
+  const sold7d = variants.reduce((total, variant) => total + variant.sold7d, 0);
+  const sold30d = variants.reduce((total, variant) => total + variant.sold30d, 0);
+  const dailySalesRate = Math.max(sold7d / 7, sold30d / 30);
+  const ledger: InventoryLedgerEntry[] = ledgerResult.rows.map((row) => ({
+    id: stringValue(row.id),
+    item: stringValue(row.item) || "Inventory item",
+    inventory: toInventoryChannel(stringValue(row.inventory)),
+    changeType: stringValue(row.change_type) as InventoryLedgerEntry["changeType"],
+    actor: stringValue(row.actor),
+    isSystem: stringValue(row.actor).toLowerCase() === "system",
+    quantityBefore: nullableNumber(row.quantity_before),
+    quantityAfter: nullableNumber(row.quantity_after),
+    quantityDelta: numberValue(row.quantity_delta),
+    reference: stringValue(row.reference),
+    createdAt: stringValue(row.created_at),
+  }));
+
+  return {
+    id: canonicalProductId,
+    title: stringValue(productRow.title),
+    handle: stringValue(productRow.handle),
+    imageUrl: optionalString(productRow.image_url) ?? null,
+    variants,
+    totals: {
+      master: masterValues.length === 0 ? null : masterValues.reduce((total, quantity) => total + quantity, 0),
+      shopify: variants.reduce((total, variant) => total + variant.shopify, 0),
+      tiktok: tiktokValues.length === 0 && tiktokProductLevel === null
+        ? null
+        : tiktokValues.reduce((total, quantity) => total + quantity, 0) + (tiktokProductLevel ?? 0),
+      sold7d,
+      sold30d,
+      dailySalesRate,
+      daysCover: masterValues.length > 0 && dailySalesRate > 0 ? Math.ceil(masterValues.reduce((total, quantity) => total + quantity, 0) / dailySalesRate) : null,
+    },
+    shopifySyncedAt,
+    tiktokSyncedAt,
+    tiktokProductLevel,
+    sync,
+    ledger,
+  };
 }
 
 /** Appends one immutable audit-ledger row. Never updates or deletes existing rows. */
@@ -666,9 +2079,46 @@ export function collectInventoryAlertCandidates(snapshot: Pick<InventorySnapshot
 }
 
 export async function reconcileInventoryAlerts() {
-  const snapshot = await getInventory();
-  const candidates = collectInventoryAlertCandidates(snapshot);
+  const [physicalItems, packaging] = await Promise.all([getPhysicalInventory(), getPackagingInventory()]);
   const db = await getTursoClient();
+  const unmappedListings = await db.execute(`
+    SELECT id, title, channel FROM physical_channel_listings
+    WHERE active = 1 AND mapping_status <> 'confirmed'
+  `);
+  const candidates: AlertCandidate[] = [];
+  for (const item of physicalItems) {
+    for (const variant of item.variants) {
+      if (!variant.quantityKnown || variant.quantity >= 10) continue;
+      const empty = variant.quantity === 0;
+      candidates.push({
+        key: `physical-low-stock:${variant.id}`,
+        kind: empty ? "reorder" : "low_stock",
+        severity: empty ? "critical" : "warning",
+        title: `${item.title} is ${empty ? "out of stock" : "below 10 units"}`,
+        detail: `${variant.title || "Default variant"} has ${variant.quantity} physical units on hand.`,
+      });
+    }
+  }
+  for (const material of packaging) {
+    if (material.quantity > material.reorderPoint) continue;
+    candidates.push({
+      key: `packaging:${material.id}`,
+      kind: "packaging",
+      severity: material.quantity === 0 ? "critical" : "warning",
+      title: `${material.title} packaging ${material.quantity === 0 ? "is empty" : "is low"}`,
+      detail: material.leadTimeDays ? `${material.quantity} units on hand · ${material.leadTimeDays}-day lead time.` : `${material.quantity} units on hand.`,
+    });
+  }
+  for (const listing of unmappedListings.rows) {
+    const channel = stringValue(listing.channel) === "tiktok" ? "TikTok" : "Shopify";
+    candidates.push({
+      key: `physical-mapping:${stringValue(listing.id)}`,
+      kind: "mapping",
+      severity: "info",
+      title: `${stringValue(listing.title) || `${channel} listing`} needs mapping review`,
+      detail: `${channel} sales will not affect physical stock until this listing is confirmed.`,
+    });
+  }
   const now = new Date().toISOString();
 
   for (const candidate of candidates) {

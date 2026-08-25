@@ -4,26 +4,29 @@ import type { ReactNode } from "react";
 import { SyncButton } from "@/components/sync-button";
 import { PaymentPill } from "@/components/status-pill";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
-import type { InventorySnapshot, Order } from "@/lib/types";
+import type { Order, PackagingMaterial, PhysicalInventoryItem, SyncSnapshot } from "@/lib/types";
 
 type OverviewWorkspaceProps = {
   orders: Order[];
-  inventory: InventorySnapshot;
+  items: PhysicalInventoryItem[];
+  packaging: PackagingMaterial[];
+  sync: SyncSnapshot;
 };
 
-export function OverviewWorkspace({ orders, inventory }: OverviewWorkspaceProps) {
+export function OverviewWorkspace({ orders, items, packaging, sync }: OverviewWorkspaceProps) {
   const shopifyOrders = orders.filter((order) => order.channel === "shopify");
   const tiktokOrders = orders.filter((order) => order.channel === "tiktok");
-  const unitsOnHand = inventory.products.reduce((total, product) => total + product.quantity, 0);
-  const liveVariants = inventory.products.length;
-  const lowStockVariants = inventory.products.filter((product) => product.isLowStock).length;
-  const outOfStockVariants = inventory.products.filter((product) => product.quantity === 0).length;
-  const packagingTypes = inventory.packaging.length;
+  const variants = items.flatMap((item) => item.variants);
+  const unitsOnHand = variants.reduce((total, variant) => total + variant.quantity, 0);
+  const liveVariants = variants.length;
+  const lowStockVariants = variants.filter((variant) => variant.quantityKnown && variant.quantity < 10).length;
+  const outOfStockVariants = variants.filter((variant) => variant.quantityKnown && variant.quantity === 0).length;
+  const packagingTypes = packaging.length;
   const recentOrders = orders.slice(0, 5);
-  const shopifyConnected = inventory.sync.liveChannels > 0;
-  const tiktokConnected = inventory.sync.liveChannels > 1;
-  const syncCaption = inventory.sync.lastSyncedAt
-    ? `Last synced ${relativeTime(inventory.sync.lastSyncedAt)}`
+  const shopifyConnected = sync.liveChannels > 0;
+  const tiktokConnected = sync.liveChannels > 1;
+  const syncCaption = sync.lastSyncedAt
+    ? `Last synced ${relativeTime(sync.lastSyncedAt)}`
     : "Awaiting first sync";
 
   return (
@@ -34,10 +37,10 @@ export function OverviewWorkspace({ orders, inventory }: OverviewWorkspaceProps)
           <h1>Overview</h1>
           <p className="overview-intro">A clear view of orders, channels, and the stock picture behind today&apos;s work.</p>
           <div className="overview-meta">
-            <span className={`live-dot live-dot--${inventory.sync.status}`} aria-hidden="true" />
+            <span className={`live-dot live-dot--${sync.status}`} aria-hidden="true" />
             <span>{syncCaption}</span>
             <span aria-hidden="true">·</span>
-            <span>{inventory.sync.status === "healthy" ? "All connected sources are current" : inventory.sync.message}</span>
+            <span>{sync.status === "healthy" ? "All connected sources are current" : sync.message}</span>
           </div>
         </div>
         <SyncButton variant="primary" />

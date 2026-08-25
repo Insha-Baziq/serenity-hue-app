@@ -10,6 +10,7 @@ type ShopifyOrder = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  cancelledAt: string | null;
   email: string | null;
   phone: string | null;
   displayFinancialStatus: string | null;
@@ -37,7 +38,18 @@ type ShopifyOrder = {
     quantity: number;
     originalUnitPriceSet: MoneySet;
     image: { url: string } | null;
-    variant: { id: string; sku: string | null } | null;
+    variant: { id: string; sku: string | null; product: { id: string } | null } | null;
+  }>;
+  refunds: Array<{
+    id: string;
+    processedAt: string | null;
+    refundLineItems: Connection<{
+      id: string;
+      quantity: number;
+      restocked: boolean;
+      restockType: string;
+      lineItem: { id: string };
+    }>;
   }>;
 };
 
@@ -52,10 +64,10 @@ type ShopifyVariant = {
 };
 
 const ORDERS_QUERY = `
-  query OperationsOrders($cursor: String) {
-    orders(first: 100, after: $cursor, sortKey: PROCESSED_AT, reverse: true) {
+  query OperationsOrders($cursor: String, $query: String) {
+    orders(first: 100, after: $cursor, sortKey: UPDATED_AT, query: $query) {
       nodes {
-        id name createdAt updatedAt email phone displayFinancialStatus displayFulfillmentStatus
+        id name createdAt updatedAt cancelledAt email phone displayFinancialStatus displayFulfillmentStatus
         subtotalPriceSet { shopMoney { amount currencyCode } }
         totalShippingPriceSet { shopMoney { amount currencyCode } }
         totalTaxSet { shopMoney { amount currencyCode } }
@@ -66,9 +78,16 @@ const ORDERS_QUERY = `
           nodes {
             id title variantTitle sku quantity image { url }
             originalUnitPriceSet { shopMoney { amount currencyCode } }
-            variant { id sku }
+            variant { id sku product { id } }
           }
           pageInfo { hasNextPage endCursor }
+        }
+        refunds {
+            id processedAt
+            refundLineItems(first: 250) {
+              nodes { id quantity restocked restockType lineItem { id } }
+              pageInfo { hasNextPage endCursor }
+            }
         }
       }
       pageInfo { hasNextPage endCursor }
@@ -77,8 +96,8 @@ const ORDERS_QUERY = `
 `;
 
 const VARIANTS_QUERY = `
-  query OperationsVariants($cursor: String) {
-    productVariants(first: 100, after: $cursor) {
+  query OperationsVariants($cursor: String, $query: String) {
+    productVariants(first: 100, after: $cursor, query: $query) {
       nodes {
         id title sku inventoryQuantity updatedAt image { url }
         product {
@@ -115,22 +134,31 @@ function addressLines(address: ShopifyOrder["shippingAddress"]) {
   return [address.name, address.address1, address.address2, [address.city, address.province, address.zip].filter(Boolean).join(", "), address.country].filter((line): line is string => Boolean(line));
 }
 
-async function fetchAllOrders() {
+function updatedSinceQuery(value: string | null) {
+  if (!value) return null;
+  const updatedAt = Date.parse(value);
+  if (!Number.isFinite(updatedAt)) return null;
+  // A small overlap makes clock rounding and Shopify's eventual updates safe;
+  // all writes are idempotent on the platform line/event identity.
+  return `updated_at:>='${new Date(updatedAt - 2 * 60 * 60 * 1000).toISOString()}'`;
+}
+
+async function fetchAllOrders(updatedSince: string | null) {
   const orders: ShopifyOrder[] = [];
   let cursor: string | null = null;
   do {
-    const data: { orders: Connection<ShopifyOrder> } = await shopifyGraphql<{ orders: Connection<ShopifyOrder> }>(ORDERS_QUERY, { cursor });
+    const data: { orders: Connection<ShopifyOrder> } = await shopifyGraphql<{ orders: Connection<ShopifyOrder> }>(ORDERS_QUERY, { cursor, query: updatedSinceQuery(updatedSince) });
     orders.push(...data.orders.nodes);
     cursor = data.orders.pageInfo.hasNextPage ? data.orders.pageInfo.endCursor : null;
   } while (cursor);
   return orders;
 }
 
-async function fetchAllVariants() {
+async function fetchAllVariants(updatedSince: string | null) {
   const variants: ShopifyVariant[] = [];
   let cursor: string | null = null;
   do {
-    const data: { productVariants: Connection<ShopifyVariant> } = await shopifyGraphql<{ productVariants: Connection<ShopifyVariant> }>(VARIANTS_QUERY, { cursor });
+    const data: { productVariants: Connection<ShopifyVariant> } = await shopifyGraphql<{ productVariants: Connection<ShopifyVariant> }>(VARIANTS_QUERY, { cursor, query: updatedSinceQuery(updatedSince) });
     variants.push(...data.productVariants.nodes);
     cursor = data.productVariants.pageInfo.hasNextPage ? data.productVariants.pageInfo.endCursor : null;
   } while (cursor);
@@ -138,28 +166,38 @@ async function fetchAllVariants() {
 }
 
 export async function importShopifySnapshot() {
-  const [orders, variants] = await Promise.all([fetchAllOrders(), fetchAllVariants()]);
   const db = await getTursoClient();
+  const [latestOrder, latestVariant] = await Promise.all([
+    db.execute("SELECT MAX(source_updated_at) AS latest FROM orders WHERE source = 'shopify'"),
+    db.execute("SELECT MAX(updated_at) AS latest FROM variants"),
+  ]);
+  const [orders, variants] = await Promise.all([
+    fetchAllOrders(typeof latestOrder.rows[0]?.latest === "string" ? latestOrder.rows[0].latest : null),
+    fetchAllVariants(typeof latestVariant.rows[0]?.latest === "string" ? latestVariant.rows[0].latest : null),
+  ]);
 
-  for (const variant of variants) {
+  const variantStatements = variants.flatMap((variant) => {
     const imageUrl = variant.image?.url ?? variant.product.featuredMedia?.preview?.image?.url ?? null;
-    await db.execute({
+    return [{
       sql: `INSERT INTO products (id, shopify_product_id, title, handle, image_url, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(shopify_product_id) DO UPDATE SET title = excluded.title, handle = excluded.handle,
               image_url = excluded.image_url, updated_at = excluded.updated_at`,
       args: [variant.product.id, variant.product.id, variant.product.title, variant.product.handle, imageUrl, variant.updatedAt],
-    });
-    await db.execute({
+    }, {
       sql: `INSERT INTO variants (id, product_id, shopify_variant_id, sku, title, available_quantity, last_synced_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(shopify_variant_id) DO UPDATE SET sku = excluded.sku, title = excluded.title,
               available_quantity = excluded.available_quantity, last_synced_at = excluded.last_synced_at, updated_at = excluded.updated_at`,
       args: [variant.id, variant.product.id, variant.id, variant.sku || null, variant.title, variant.inventoryQuantity ?? 0, variant.updatedAt, variant.updatedAt],
-    });
+    }];
+  });
+  for (let index = 0; index < variantStatements.length; index += 400) {
+    await db.batch(variantStatements.slice(index, index + 400), "write");
   }
 
-  const knownVariantIds = new Set(variants.map((variant) => variant.id));
+  const knownVariants = await db.execute("SELECT id FROM variants WHERE shopify_variant_id IS NOT NULL");
+  const knownVariantIds = new Set(knownVariants.rows.map((variant) => String(variant.id)));
   for (const order of orders) {
     const customerName = order.customer?.displayName || order.shippingAddress?.name || "Guest customer";
     const customerEmail = order.customer?.email || order.email || null;
@@ -169,25 +207,41 @@ export async function importShopifySnapshot() {
       {
         sql: `INSERT INTO orders (id, source, source_order_id, order_number, customer_name, customer_email, customer_phone,
                                   shipping_address_json, currency, total_amount, subtotal_amount, shipping_amount, tax_amount,
-                                  financial_status, fulfillment_status, source_created_at, source_updated_at, imported_at)
-              VALUES (?, 'shopify', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  financial_status, fulfillment_status, cancelled_at, source_created_at, source_updated_at, imported_at)
+              VALUES (?, 'shopify', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(source, source_order_id) DO UPDATE SET order_number = excluded.order_number,
                 customer_name = excluded.customer_name, customer_email = excluded.customer_email, customer_phone = excluded.customer_phone,
                 shipping_address_json = excluded.shipping_address_json, currency = excluded.currency, total_amount = excluded.total_amount,
                 subtotal_amount = excluded.subtotal_amount, shipping_amount = excluded.shipping_amount, tax_amount = excluded.tax_amount,
                 financial_status = excluded.financial_status, fulfillment_status = excluded.fulfillment_status,
+                cancelled_at = excluded.cancelled_at,
                 source_updated_at = excluded.source_updated_at, imported_at = excluded.imported_at`,
         args: [order.id, order.id, order.name, customerName, customerEmail, customerPhone, JSON.stringify(lines), currency(order.totalPriceSet),
           moneyInCents(order.totalPriceSet), moneyInCents(order.subtotalPriceSet), moneyInCents(order.totalShippingPriceSet), moneyInCents(order.totalTaxSet),
-          paymentStatus(order.displayFinancialStatus), fulfillmentStatus(order.displayFulfillmentStatus), order.createdAt, order.updatedAt, new Date().toISOString()],
+          paymentStatus(order.displayFinancialStatus), fulfillmentStatus(order.displayFulfillmentStatus), order.cancelledAt, order.createdAt, order.updatedAt, new Date().toISOString()],
       },
-      { sql: "DELETE FROM order_items WHERE order_id = ?", args: [order.id] },
+      ...(order.lineItems.pageInfo.hasNextPage ? [] : [{ sql: "DELETE FROM order_items WHERE order_id = ?", args: [order.id] }]),
       ...order.lineItems.nodes.map((item) => ({
-        sql: `INSERT INTO order_items (id, order_id, variant_id, source_line_item_id, title, variant_title, sku, quantity, unit_price_amount, image_url)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO order_items (id, order_id, variant_id, source_line_item_id, source_product_id, source_variant_id, title, variant_title, sku, quantity, unit_price_amount, image_url)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(order_id, source_line_item_id) DO UPDATE SET
+                variant_id=excluded.variant_id, source_product_id=excluded.source_product_id,
+                source_variant_id=excluded.source_variant_id, title=excluded.title,
+                variant_title=excluded.variant_title, sku=excluded.sku, quantity=excluded.quantity,
+                unit_price_amount=excluded.unit_price_amount, image_url=excluded.image_url`,
         args: [item.id, order.id, item.variant && knownVariantIds.has(item.variant.id) ? item.variant.id : null, item.id,
+          item.variant?.product?.id ?? null, item.variant?.id ?? null,
           item.title, item.variantTitle, item.sku || item.variant?.sku || null, item.quantity, moneyInCents(item.originalUnitPriceSet), item.image?.url ?? null],
       })),
+      ...order.refunds.flatMap((refund) => refund.refundLineItems.nodes.map((item) => ({
+        sql: `INSERT INTO shopify_refund_line_items
+                (id, refund_id, order_id, source_line_item_id, quantity, restocked, restock_type, processed_at, imported_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(refund_id, source_line_item_id) DO UPDATE SET
+                quantity=excluded.quantity, restocked=excluded.restocked, restock_type=excluded.restock_type,
+                processed_at=excluded.processed_at, imported_at=excluded.imported_at`,
+        args: [item.id, refund.id, order.id, item.lineItem.id, item.quantity, item.restocked ? 1 : 0, item.restockType, refund.processedAt, new Date().toISOString()],
+      }))),
     ];
     await db.batch(statements, "write");
   }

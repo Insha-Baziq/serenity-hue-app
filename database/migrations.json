@@ -1,0 +1,24 @@
+{
+  "version": "2026-08-25-parcel2go-reference-linking",
+  "columns": [
+    ["variants", "packaging_type", "TEXT"],
+    ["variants", "units_per_box", "INTEGER NOT NULL DEFAULT 1"],
+    ["channel_mappings", "multiplier", "INTEGER NOT NULL DEFAULT 1"],
+    ["channel_mappings", "confidence", "TEXT"],
+    ["channel_mappings", "notes", "TEXT"],
+    ["channel_mappings", "active", "INTEGER NOT NULL DEFAULT 1"],
+    ["packaging_materials", "lead_time_days", "INTEGER"],
+    ["packaging_materials", "active", "INTEGER NOT NULL DEFAULT 1"],
+    ["shipments", "match_method", "TEXT CHECK (match_method IN ('order_reference', 'customer_email', 'customer_phone', 'delivery_address'))"],
+    ["shipments", "source_references_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["channel_inventory", "shop_id", "TEXT"],
+    ["physical_inventory_items", "quantity_known", "INTEGER NOT NULL DEFAULT 0"],
+    ["physical_inventory_items", "description", "TEXT"],
+    ["physical_inventory_items", "shopify_product_id", "TEXT"],
+    ["physical_inventory_variants", "active", "INTEGER NOT NULL DEFAULT 1"],
+    ["orders", "cancelled_at", "TEXT"],
+    ["orders", "source_shop_id", "TEXT"],
+    ["order_items", "source_product_id", "TEXT"],
+    ["order_items", "source_variant_id", "TEXT"]
+  ]
+}

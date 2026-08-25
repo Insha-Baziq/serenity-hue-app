@@ -8,8 +8,8 @@ export const maxDuration = 300;
 
 /**
  * Read-only diagnostic. Confirms the seller's re-authorized token can read
- * TikTok Shop product inventory (the `Product basic` scope) and summarizes what
- * comes back. Returns no customer/PII data — only product/SKU IDs and quantities.
+ * live TikTok Shop product inventory (the `Product basic` scope) and summarizes
+ * what comes back. Returns no customer/PII data — only product/SKU IDs and quantities.
  */
 export async function GET(request: Request) {
   if (!(await requireApiSession(request))) {
@@ -32,6 +32,7 @@ export async function GET(request: Request) {
         productTitle: sku.productTitle,
         skuId: sku.skuId,
         sellerSku: sku.sellerSku,
+        variantTitle: sku.variantTitle,
         warehouses: sku.warehouses,
         totalQuantity: sku.totalQuantity,
       })),

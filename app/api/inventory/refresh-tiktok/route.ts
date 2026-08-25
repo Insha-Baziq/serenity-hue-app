@@ -1,4 +1,5 @@
 import { requireApiSession } from "@/lib/auth-guard";
+import { getPhysicalChannelListings } from "@/lib/repository";
 import { storeTikTokInventory } from "@/lib/tiktok-inventory";
 import { TikTokNotConnectedError } from "@/lib/tiktok-import";
 
@@ -13,7 +14,8 @@ export async function POST(request: Request) {
   }
   try {
     const result = await storeTikTokInventory();
-    return Response.json({ ok: true, ...result });
+    const listings = await getPhysicalChannelListings("tiktok");
+    return Response.json({ ok: true, ...result, listings });
   } catch (error) {
     if (error instanceof TikTokNotConnectedError) {
       return Response.json({ ok: false, message: "TikTok Shop is not connected on this deployment" }, { status: 409 });

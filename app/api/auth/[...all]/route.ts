@@ -1,5 +1,6 @@
 import { toNextJsHandler } from "better-auth/next-js";
 import { auth, ensureAuthDatabase } from "@/lib/auth";
+import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,11 @@ export function GET(request: Request) {
 }
 
 export function POST(request: Request) {
+  const path = new URL(request.url).pathname;
+  if (path.endsWith("/sign-in/email") || path.endsWith("/sign-up/email")) {
+    const limit = takeRateLimit(request, { name: "auth-credentials", limit: 8, windowMs: 15 * 60 * 1000 });
+    if (!limit.allowed) return Promise.resolve(rateLimitedResponse(limit.retryAfterSeconds));
+  }
   return withDatabase(handlers.POST, request);
 }
 

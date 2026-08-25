@@ -1,10 +1,11 @@
-import { recordSyncRun, releaseSyncLease, takeSyncLease } from "@/lib/repository";
+import { markWebhookEventsProcessed, recordSyncRun, releaseSyncLease, takeSyncLease } from "@/lib/repository";
 import { reconcileInventoryOperations } from "@/lib/inventory-rules";
 import { hasParcel2GoCredentials } from "@/lib/parcel2go";
 import { importRecentParcel2GoShipments } from "@/lib/parcel2go-import";
 import { importShopifySnapshot } from "@/lib/shopify-import";
 import { hasShopifyCredentials } from "@/lib/shopify";
 import { importTikTokOrders, TikTokNotConnectedError, type TikTokRedactedSample } from "@/lib/tiktok-import";
+import { storeTikTokInventory } from "@/lib/tiktok-inventory";
 
 export type SyncTrigger = "manual" | "scheduled" | "webhook";
 
@@ -25,6 +26,7 @@ export type SyncResult = {
  */
 export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResult> {
   const id = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
   const completedAt = new Date().toISOString();
   const canRun = await takeSyncLease(id);
   if (!canRun) {
@@ -42,6 +44,7 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
 
     const imported = await importShopifySnapshot();
     let tiktokOrders = 0;
+    let tiktokInventorySkus = 0;
     let tiktokSample: TikTokRedactedSample | undefined;
     let tiktokNote = " TikTok Shop is awaiting seller authorization.";
     const failures: string[] = [];
@@ -51,10 +54,27 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
       tiktokSample = tiktok.redactedSample;
       tiktokNote = ` TikTok Shop refreshed ${tiktok.orders} orders from ${tiktok.shops} ${tiktok.shops === 1 ? "shop" : "shops"}.`;
       if (tiktok.baselineOrders > 0) tiktokNote += ` ${tiktok.baselineOrders} initial TikTok orders were kept as the inventory baseline.`;
+      if (tiktok.afterSales > 0) tiktokNote += ` ${tiktok.afterSales} cancellation/return line updates were recorded.`;
+      if (tiktok.afterSalesWarning) {
+        failures.push("TikTok cancellation/return sync needs attention");
+        tiktokNote += ` ${tiktok.afterSalesWarning}.`;
+      }
     } catch (error) {
       if (!(error instanceof TikTokNotConnectedError)) {
         failures.push("TikTok Shop order sync needs attention");
         tiktokNote = " TikTok Shop order sync needs attention.";
+      }
+    }
+
+    let tiktokInventoryNote = "";
+    try {
+      const inventory = await storeTikTokInventory();
+      tiktokInventorySkus = inventory.skus;
+      tiktokInventoryNote = ` TikTok inventory refreshed ${inventory.skus} live SKUs and removed ${inventory.removed} stale records.`;
+    } catch (error) {
+      if (!(error instanceof TikTokNotConnectedError)) {
+        failures.push("TikTok inventory sync needs attention");
+        tiktokInventoryNote = " TikTok inventory sync needs attention.";
       }
     }
 
@@ -76,10 +96,11 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
       : operational.packagingMovements > 0 || operational.stockMovements > 0
         ? ` Recorded ${operational.stockMovements} order movements and ${operational.packagingMovements} packaging movements.`
         : "";
-    const message = `Shopify synced ${imported.orders} orders and ${imported.variants} variants.${tiktokNote}${parcel2GoNote} ${operational.alerts} active inventory alerts${baselineNote}`;
-    const recordsSeen = imported.orders + imported.variants + tiktokOrders + parcel2GoRecords;
+    const message = `Shopify synced ${imported.orders} orders and ${imported.variants} variants.${tiktokNote}${tiktokInventoryNote}${parcel2GoNote} ${operational.alerts} active inventory alerts${baselineNote}`;
+    const recordsSeen = imported.orders + imported.variants + tiktokOrders + tiktokInventorySkus + parcel2GoRecords;
     const status = failures.length > 0 ? "failed" : "succeeded";
     await recordSyncRun({ id, trigger, provider: "direct", status, message, recordsSeen, recordsChanged: recordsSeen, finished: true });
+    if (status === "succeeded") await markWebhookEventsProcessed({ before: startedAt });
     return { ok: status === "succeeded", status, message, recordsSeen, recordsChanged: recordsSeen, completedAt, tiktokSample };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected reconciliation error";

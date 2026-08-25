@@ -1,14 +1,14 @@
 import { Sidebar } from "@/components/sidebar";
-import { getCurrentSession } from "@/lib/auth-guard";
-import { redirect } from "next/navigation";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { requirePageSession } from "@/lib/auth-guard";
 
 export default async function OperationsLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  if (!(await getCurrentSession())) redirect("/login");
+  await requirePageSession();
 
-  return (
+  return <SidebarProvider>
     <div className="operations-shell">
       <Sidebar />
-      <main className="operations-main">{children}</main>
+      <SidebarInset className="operations-main">{children}</SidebarInset>
     </div>
-  );
+  </SidebarProvider>;
 }

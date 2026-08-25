@@ -1,10 +1,9 @@
 import "server-only";
 
 import {
+  advanceTikTokSyncCursor,
   getActiveTikTokConnections,
-  getLatestTikTokOrderUpdatedAt,
-  hasCompletedTikTokBackfill,
-  markTikTokBackfillCompleted,
+  getTikTokSyncCursor,
   updateTikTokConnectionShop,
   updateTikTokConnectionTokens,
 } from "@/lib/repository";
@@ -28,11 +27,6 @@ type SqlStatement = {
   args: (string | number | null)[];
 };
 
-type TikTokMappings = {
-  byExternalVariant: Map<string, string[]>;
-  byExternalProduct: Map<string, string[]>;
-};
-
 export type TikTokRedactedSample = {
   orderId: "[redacted]";
   customer: "[redacted]";
@@ -46,6 +40,8 @@ export type TikTokImportResult = {
   shops: number;
   baselineOrders: number;
   redactedSample?: TikTokRedactedSample;
+  afterSales: number;
+  afterSalesWarning?: string;
 };
 
 export class TikTokNotConnectedError extends Error {
@@ -116,9 +112,15 @@ function financialStatus(order: UnknownRecord) {
 
 function fulfillmentStatus(order: UnknownRecord) {
   const status = text(order.status ?? order.order_status).toUpperCase();
+  if (status.includes("CANCEL")) return "cancelled";
   if (status.includes("DELIVERED") || status.includes("COMPLETED")) return "fulfilled";
   if (status.includes("IN_TRANSIT") || status.includes("COLLECTION") || status.includes("PARTIAL")) return "partial";
   return "unfulfilled";
+}
+
+function cancelledAt(order: UnknownRecord) {
+  const status = text(order.status ?? order.order_status).toUpperCase();
+  return status.includes("CANCEL") ? timestamp(order.update_time ?? order.updated_at ?? order.cancel_time) : null;
 }
 
 function extractShops(value: unknown): TikTokShop[] {
@@ -205,40 +207,7 @@ async function getOrderDetails(input: { accessToken: string; shopCipher: string;
   return details;
 }
 
-async function loadTikTokMappings(): Promise<TikTokMappings> {
-  const db = await getTursoClient();
-  const result = await db.execute(`SELECT external_variant_id, external_product_id, variant_id
-    FROM channel_mappings
-    WHERE channel = 'tiktok' AND active = 1 AND status = 'confirmed' AND multiplier = 1
-      AND (external_variant_id IS NOT NULL OR external_product_id IS NOT NULL)`);
-  const byExternalVariant = new Map<string, string[]>();
-  const byExternalProduct = new Map<string, string[]>();
-  for (const row of result.rows) {
-    const variantId = text(row.variant_id);
-    if (!variantId) continue;
-    const externalVariantId = text(row.external_variant_id);
-    const externalProductId = text(row.external_product_id);
-    if (externalVariantId) byExternalVariant.set(externalVariantId, [...(byExternalVariant.get(externalVariantId) ?? []), variantId]);
-    if (externalProductId) byExternalProduct.set(externalProductId, [...(byExternalProduct.get(externalProductId) ?? []), variantId]);
-  }
-  return { byExternalVariant, byExternalProduct };
-}
-
-function mappedVariantId(values: string[] | undefined) {
-  return values?.length === 1 ? values[0] : null;
-}
-
-function confirmedVariantId(input: { externalVariantId: string; externalProductId: string }, mappings: TikTokMappings) {
-  if (input.externalVariantId) {
-    const mapped = mappedVariantId(mappings.byExternalVariant.get(input.externalVariantId));
-    if (mapped) return mapped;
-  }
-  return input.externalProductId
-    ? mappedVariantId(mappings.byExternalProduct.get(input.externalProductId))
-    : null;
-}
-
-function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, mappings: TikTokMappings): SqlStatement[] | undefined {
+function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, shopId: string): SqlStatement[] | undefined {
   const sourceOrderId = orderId(order);
   if (!sourceOrderId) return undefined;
 
@@ -257,13 +226,14 @@ function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, ma
   const statements: SqlStatement[] = [{
     sql: `INSERT INTO orders (id, source, source_order_id, order_number, customer_name, customer_email, customer_phone,
                               shipping_address_json, currency, total_amount, subtotal_amount, shipping_amount, tax_amount,
-                              financial_status, fulfillment_status, source_created_at, source_updated_at, imported_at)
-          VALUES (?, 'tiktok', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              financial_status, fulfillment_status, cancelled_at, source_shop_id, source_created_at, source_updated_at, imported_at)
+          VALUES (?, 'tiktok', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(source, source_order_id) DO UPDATE SET order_number = excluded.order_number,
             customer_name = excluded.customer_name, customer_email = excluded.customer_email, customer_phone = excluded.customer_phone,
             shipping_address_json = excluded.shipping_address_json, currency = excluded.currency, total_amount = excluded.total_amount,
             subtotal_amount = excluded.subtotal_amount, shipping_amount = excluded.shipping_amount, tax_amount = excluded.tax_amount,
             financial_status = excluded.financial_status, fulfillment_status = excluded.fulfillment_status,
+            cancelled_at = excluded.cancelled_at, source_shop_id = excluded.source_shop_id,
             source_updated_at = excluded.source_updated_at, imported_at = excluded.imported_at`,
     args: [
       id,
@@ -280,6 +250,8 @@ function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, ma
       tax,
       financialStatus(order),
       fulfillmentStatus(order),
+      cancelledAt(order),
+      shopId,
       timestamp(order.create_time ?? order.created_at),
       timestamp(order.update_time ?? order.updated_at),
       now,
@@ -295,15 +267,18 @@ function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, ma
       const externalLineId = text(line.id ?? line.order_line_id) || `${sourceOrderId}:${index}`;
       const externalVariantId = text(line.sku_id ?? line.variant_id);
       const externalProductId = text(line.product_id);
-      const variantId = confirmedVariantId({ externalVariantId, externalProductId }, mappings);
       statements.push({
-        sql: `INSERT INTO order_items (id, order_id, variant_id, source_line_item_id, title, variant_title, sku, quantity, unit_price_amount, image_url)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO order_items
+              (id, order_id, variant_id, source_line_item_id, source_product_id, source_variant_id,
+               title, variant_title, sku, quantity, unit_price_amount, image_url)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           `tiktok:${sourceOrderId}:line:${externalLineId}`,
           id,
-          variantId,
+          null,
           externalLineId,
+          externalProductId || null,
+          externalVariantId || null,
           text(line.product_name ?? line.product_title ?? line.title) || "TikTok Shop item",
           text(line.sku_name ?? line.variant_title ?? line.sku_title) || null,
           text(line.seller_sku ?? line.sku_id ?? line.sku) || null,
@@ -326,20 +301,221 @@ function buildOrderStatements(order: UnknownRecord, initialBackfill: boolean, ma
   return statements;
 }
 
+type TikTokAfterSalesType = "cancel" | "return";
+
+function afterSalesEvents(value: unknown, eventType: TikTokAfterSalesType) {
+  const data = record(value);
+  const keys = eventType === "cancel"
+    ? ["cancellations", "cancellation_list", "cancel_orders", "cancel_order_list"]
+    : ["returns", "return_orders", "return_list", "return_order_list"];
+  return keys.flatMap((key) => records(data?.[key]));
+}
+
+function afterSalesLines(event: UnknownRecord) {
+  const candidates = [
+    ...records(event.return_line_items),
+    ...records(event.return_order_line_items),
+    ...records(event.sku_return_requests),
+    ...records(event.order_line_items),
+    ...records(event.order_line_list),
+    ...records(event.order_line_item_list),
+    ...records(event.skus),
+    ...records(event.sku_list),
+    ...records(event.line_items),
+  ];
+  if (candidates.length > 0) return candidates;
+  if (event.order_line_item_id || event.order_line_id || event.sku_id) return [event];
+  return [];
+}
+
+function afterSalesStatus(event: UnknownRecord, eventType: TikTokAfterSalesType) {
+  return text(event[eventType === "cancel" ? "cancel_status" : "return_status"] ?? event.status).toUpperCase();
+}
+
+function afterSalesSourceUpdatedAt(event: UnknownRecord) {
+  return timestamp(event.update_time ?? event.updated_at ?? event.create_time ?? event.created_at);
+}
+
+function afterSalesLineId(line: UnknownRecord) {
+  return text(line.order_line_item_id ?? line.order_line_id ?? line.line_item_id ?? line.id);
+}
+
+function afterSalesVariantId(line: UnknownRecord) {
+  return text(line.sku_id ?? line.variant_id);
+}
+
+function afterSalesLineQuantity(line: UnknownRecord) {
+  return Math.max(0, Math.round(number(line.quantity ?? line.cancel_quantity ?? line.return_quantity ?? line.sku_quantity)));
+}
+
+async function searchTikTokAfterSales(input: {
+  accessToken: string;
+  shopCipher: string;
+  eventType: TikTokAfterSalesType;
+  updatedAfter?: string;
+}) {
+  const events: UnknownRecord[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+  const path = input.eventType === "cancel"
+    ? "/return_refund/202602/cancellations/search"
+    : "/return_refund/202602/returns/search";
+
+  for (let page = 0; page < 100; page += 1) {
+    const body: Record<string, number> = {};
+    if (input.updatedAfter) {
+      const cutoff = Date.parse(input.updatedAfter) - 2 * 60 * 60 * 1000;
+      if (Number.isFinite(cutoff)) body.update_time_ge = Math.max(0, Math.floor(cutoff / 1000));
+    }
+    const data = await tiktokApiRequest<unknown>({
+      path,
+      method: "POST",
+      accessToken: input.accessToken,
+      query: {
+        shop_cipher: input.shopCipher,
+        page_size: 50,
+        page_token: pageToken,
+        sort_field: "update_time",
+        sort_order: "DESC",
+      },
+      body,
+    });
+    events.push(...afterSalesEvents(data, input.eventType));
+    const response = record(data);
+    const nextPageToken = text(response?.next_page_token ?? response?.page_token) || undefined;
+    if (!nextPageToken || seenPageTokens.has(nextPageToken)) break;
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+  return events;
+}
+
+async function storeTikTokAfterSalesRecords(input: {
+  db: Awaited<ReturnType<typeof getTursoClient>>;
+  events: UnknownRecord[];
+  eventType: TikTokAfterSalesType;
+}) {
+  let stored = 0;
+  for (const event of input.events) {
+    const orderSourceId = text(event.order_id ?? event.orderId);
+    const eventId = text(event[input.eventType === "cancel" ? "cancel_id" : "return_id"] ?? event.id);
+    const status = afterSalesStatus(event, input.eventType);
+    if (!orderSourceId || !eventId || !status) continue;
+    const order = await input.db.execute({
+      sql: "SELECT id FROM orders WHERE source='tiktok' AND source_order_id=? LIMIT 1",
+      args: [orderSourceId],
+    });
+    if (!order.rows[0]) continue;
+    const orderId = text(order.rows[0].id);
+    const returnType = input.eventType === "return" ? text(event.return_type ?? event.type).toUpperCase() || null : null;
+    const sourceUpdatedAt = afterSalesSourceUpdatedAt(event);
+    for (const line of afterSalesLines(event)) {
+      let sourceLineItemId = afterSalesLineId(line);
+      const sourceVariantId = afterSalesVariantId(line);
+      const quantity = afterSalesLineQuantity(line);
+      if (!sourceLineItemId && sourceVariantId) {
+        // A SKU can legitimately occur multiple times in an order. Fall back
+        // only when it resolves to exactly one imported line, never all lines.
+        const matchingLines = await input.db.execute({
+          sql: `SELECT source_line_item_id FROM order_items
+                WHERE order_id = ? AND source_variant_id = ? AND source_line_item_id IS NOT NULL
+                LIMIT 2`,
+          args: [orderId, sourceVariantId],
+        });
+        if (matchingLines.rows.length === 1) sourceLineItemId = text(matchingLines.rows[0].source_line_item_id);
+      }
+      if (!sourceLineItemId || quantity <= 0) continue;
+      await input.db.execute({
+        sql: `INSERT INTO tiktok_after_sales_line_items
+              (id, event_type, event_id, order_id, source_line_item_id, source_variant_id, quantity, status, return_type, source_updated_at, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(event_type, event_id, source_line_item_id) DO UPDATE SET
+                quantity=excluded.quantity, status=excluded.status, return_type=excluded.return_type,
+                source_variant_id=excluded.source_variant_id, source_updated_at=excluded.source_updated_at,
+                updated_at=excluded.updated_at`,
+        args: [
+          `tiktok:${input.eventType}:${eventId}:${sourceLineItemId}`,
+          input.eventType,
+          eventId,
+          orderId,
+          sourceLineItemId,
+          sourceVariantId || null,
+          quantity,
+          status,
+          returnType,
+          sourceUpdatedAt,
+          new Date().toISOString(),
+          new Date().toISOString(),
+        ],
+      });
+      stored += 1;
+    }
+  }
+  return stored;
+}
+
+function latestUpdatedAt(recordsToInspect: UnknownRecord[]) {
+  let latest: string | undefined;
+  for (const item of recordsToInspect) {
+    const raw = item.update_time ?? item.updated_at ?? item.create_time ?? item.created_at;
+    if (raw === undefined || raw === null || raw === "") continue;
+    const candidate = timestamp(raw);
+    if (!latest || candidate > latest) latest = candidate;
+  }
+  return latest;
+}
+
+async function importTikTokAfterSalesForShop(input: {
+  connectionId: string;
+  shopId: string;
+  shopCipher: string;
+  accessToken: string;
+  grantedScopes: string[];
+  db: Awaited<ReturnType<typeof getTursoClient>>;
+}) {
+  let stored = 0;
+  const warnings: string[] = [];
+  if (input.grantedScopes.length > 0 && !input.grantedScopes.includes("seller.return_refund.basic")) {
+    return { stored, warning: "seller.return_refund.basic scope is not granted" };
+  }
+  for (const eventType of ["cancel", "return"] as const) {
+    const stream = eventType === "cancel" ? "after_sales_cancel" : "after_sales_return";
+    try {
+      const cursor = await getTikTokSyncCursor({ connectionId: input.connectionId, shopId: input.shopId, stream });
+      const events = await searchTikTokAfterSales({
+        accessToken: input.accessToken,
+        shopCipher: input.shopCipher,
+        eventType,
+        updatedAfter: cursor ?? undefined,
+      });
+      stored += await storeTikTokAfterSalesRecords({ db: input.db, events, eventType });
+      await advanceTikTokSyncCursor({
+        connectionId: input.connectionId,
+        shopId: input.shopId,
+        stream,
+        cursorAt: latestUpdatedAt(events) ?? new Date().toISOString(),
+      });
+    } catch {
+      warnings.push(`TikTok ${eventType === "cancel" ? "cancellation" : "return"} status sync needs attention`);
+    }
+  }
+  return { stored, warning: warnings.length > 0 ? [...new Set(warnings)].join("; ") : undefined };
+}
+
 /** Imports the seller's authorized TikTok Shop orders into the shared order model. */
 export async function importTikTokOrders(): Promise<TikTokImportResult> {
   if (!hasTikTokApiCredentials()) throw new TikTokNotConnectedError();
   const connections = await getActiveTikTokConnections();
   if (connections.length === 0) throw new TikTokNotConnectedError();
 
-  const initialBackfill = !(await hasCompletedTikTokBackfill());
-  const updatedAfter = initialBackfill ? undefined : await getLatestTikTokOrderUpdatedAt();
   const importedOrderIds = new Set<string>();
   const db = await getTursoClient();
-  const mappings = await loadTikTokMappings();
   let shopsImported = 0;
+  let baselineOrders = 0;
+  let afterSales = 0;
+  const afterSalesWarnings: string[] = [];
+  const importedShopIds = new Set<string>();
   let lastError: unknown;
-  let importFailed = false;
   let redactedSample: TikTokRedactedSample | undefined;
 
   for (const connection of connections) {
@@ -352,17 +528,21 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
       }
       const shops = await authorizedShops(accessToken);
       for (const shop of shops) {
+        if (importedShopIds.has(shop.id)) continue;
+        importedShopIds.add(shop.id);
         shopsImported += 1;
         if (!connection.shopId || connection.shopId === shop.id || !connection.shopCipher) {
           await updateTikTokConnectionShop({ id: connection.id, shopId: shop.id, shopCipher: shop.cipher });
         }
-        const searchResults = await searchOrderRecords({ accessToken, shopCipher: shop.cipher, updatedAfter });
+        const cursor = await getTikTokSyncCursor({ connectionId: connection.id, shopId: shop.id, stream: "orders" });
+        const initialBackfill = !cursor;
+        const searchResults = await searchOrderRecords({ accessToken, shopCipher: shop.cipher, updatedAfter: cursor ?? undefined });
         const ids = [...new Set(searchResults.map(orderId).filter(Boolean))];
         const details = ids.length > 0 ? await getOrderDetails({ accessToken, shopCipher: shop.cipher, orderIds: ids }) : [];
         const completeOrders = details.length > 0 ? details : searchResults;
         let pendingStatements: SqlStatement[] = [];
         for (const order of completeOrders) {
-          const statements = buildOrderStatements(order, initialBackfill, mappings);
+          const statements = buildOrderStatements(order, initialBackfill, shop.id);
           if (!statements) continue;
           if (!redactedSample) {
             redactedSample = {
@@ -375,26 +555,43 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
           }
           pendingStatements.push(...statements);
           importedOrderIds.add(orderId(order));
+          if (initialBackfill) baselineOrders += 1;
           if (pendingStatements.length >= 250) {
             await db.batch(pendingStatements, "write");
             pendingStatements = [];
           }
         }
         if (pendingStatements.length > 0) await db.batch(pendingStatements, "write");
+        await advanceTikTokSyncCursor({
+          connectionId: connection.id,
+          shopId: shop.id,
+          stream: "orders",
+          cursorAt: latestUpdatedAt(completeOrders) ?? latestUpdatedAt(searchResults) ?? new Date().toISOString(),
+        });
+        const afterSalesResult = await importTikTokAfterSalesForShop({
+          connectionId: connection.id,
+          shopId: shop.id,
+          shopCipher: shop.cipher,
+          accessToken,
+          grantedScopes: connection.grantedScopes,
+          db,
+        });
+        afterSales += afterSalesResult.stored;
+        if (afterSalesResult.warning) afterSalesWarnings.push(afterSalesResult.warning);
       }
     } catch (error) {
       lastError = error;
-      importFailed = true;
     }
   }
 
   if (shopsImported === 0 && lastError) throw lastError;
   if (shopsImported === 0) throw new Error("TikTok Shop returned no authorized shops for this connection");
-  if (initialBackfill && !importFailed) await markTikTokBackfillCompleted();
   return {
     orders: importedOrderIds.size,
     shops: shopsImported,
-    baselineOrders: initialBackfill ? importedOrderIds.size : 0,
+    baselineOrders,
     redactedSample,
+    afterSales,
+    afterSalesWarning: afterSalesWarnings.length ? [...new Set(afterSalesWarnings)].join("; ") : undefined,
   };
 }

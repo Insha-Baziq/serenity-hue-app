@@ -1,8 +1,9 @@
 "use client";
 
 import { CalendarDays, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, Search } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { ORDERS_PAGE_SIZES, ordersQueryToParams, type OrdersQuery } from "@/lib/orders-query";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,10 +13,18 @@ import { ChannelPill, FulfillmentPill, PaymentPill } from "@/components/status-p
 import { ProductArt } from "@/components/product-art";
 import { SyncButton } from "@/components/sync-button";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
-import type { Channel, FulfillmentStatus, Order, Parcel2GoMatchMethod, Parcel2GoShipmentOption, SyncSnapshot } from "@/lib/types";
+import type { Channel, Order, Parcel2GoMatchMethod, Parcel2GoShipmentOption, SyncSnapshot } from "@/lib/types";
 
-type Props = { initialOrders: Order[]; initialSync: SyncSnapshot };
-type DateRange = "30" | "90" | "all";
+type Props = {
+  initialOrders: Order[];
+  initialSync: SyncSnapshot;
+  query: OrdersQuery;
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  unlinkedParcel2GoShipments: Parcel2GoShipmentOption[];
+};
 type ColumnId = "date" | "customer" | "channel" | "total" | "payment" | "fulfillment" | "items";
 
 const channelTabs: { label: string; value: "all" | Channel }[] = [
@@ -36,64 +45,62 @@ const columns: { id: ColumnId; label: string }[] = [
 
 const defaultVisibleColumns = columns.map((column) => column.id);
 
-export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
-  const [query, setQuery] = useState("");
-  const [channel, setChannel] = useState<"all" | Channel>("all");
-  const [fulfillment, setFulfillment] = useState<"all" | FulfillmentStatus>("all");
-  const [dateRange, setDateRange] = useState<DateRange>("all");
+export function OrdersWorkspace({ initialOrders, initialSync, query, total, page, pageSize, totalPages, unlinkedParcel2GoShipments }: Props) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [isPending, startTransition] = useTransition();
+
+  const [queryInput, setQueryInput] = useState(query.q);
+  const [syncedQuery, setSyncedQuery] = useState(query.q);
   const [selectedId, setSelectedId] = useState("");
-  const [filterReferenceTime] = useState(() => Date.now());
   const [visibleColumns, setVisibleColumns] = useState<ColumnId[]>(defaultVisibleColumns);
-  const [pageSize, setPageSize] = useState(50);
-  const [page, setPage] = useState(1);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const orders = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    const days = dateRange === "all" ? null : Number(dateRange);
-    const cutoff = days ? filterReferenceTime - days * 24 * 60 * 60 * 1000 : null;
+  // Keep the search box in step with the URL (e.g. back/forward) without an
+  // effect: React's recommended "adjust state during render" pattern.
+  if (query.q !== syncedQuery) {
+    setSyncedQuery(query.q);
+    setQueryInput(query.q);
+  }
 
-    return initialOrders.filter((order) => {
-      const haystack = [order.number, order.customer, order.email, ...order.items.map((item) => `${item.title} ${item.sku}`)]
-        .join(" ")
-        .toLowerCase();
-      const inDateRange = cutoff === null || new Date(order.createdAt).getTime() >= cutoff;
-
-      return (
-        (channel === "all" || order.channel === channel) &&
-        (fulfillment === "all" || order.fulfillment === fulfillment) &&
-        inDateRange &&
-        (!text || haystack.includes(text))
-      );
-    });
-  }, [channel, dateRange, filterReferenceTime, fulfillment, initialOrders, query]);
-
-  const totalPages = Math.max(1, Math.ceil(orders.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pageStart = orders.length === 0 ? 0 : (currentPage - 1) * pageSize;
-  const pageEnd = Math.min(pageStart + pageSize, orders.length);
-  const visibleOrders = orders.slice(pageStart, pageEnd);
+  const orders = initialOrders;
   const selectedOrder = initialOrders.find((order) => order.id === selectedId);
-  const pageItems = getPageItems(currentPage, totalPages);
+  const pageItems = getPageItems(page, totalPages);
+  const pageStart = total === 0 ? 0 : (page - 1) * pageSize;
+  const pageEnd = pageStart + orders.length;
   const syncCaption = initialSync.lastSyncedAt ? `reconciled ${relativeTime(initialSync.lastSyncedAt)}` : initialSync.message;
-  const channelCaption = initialSync.status === "healthy"
-    ? initialSync.liveChannels > 1 ? "Shopify + TikTok Shop" : "Shopify"
-    : "Order channels are awaiting connection";
+  const channelCaption = initialSync.liveChannels > 1 ? "Shopify + TikTok Shop" : "Shopify";
 
-  function resetPage() {
-    setPage(1);
+  // All filtering, search and pagination now run server-side, driven through the
+  // URL. Each control merges its change into the current query and navigates;
+  // any change other than paging resets to page 1.
+  function navigate(next: Partial<OrdersQuery>, replace = false) {
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    const merged: OrdersQuery = { ...query, q: queryInput, ...next };
+    if (!("page" in next)) merged.page = 1;
+    const params = ordersQueryToParams(merged);
+    const href = params.toString() ? `${pathname}?${params.toString()}` : pathname;
+    startTransition(() => {
+      if (replace) router.replace(href, { scroll: false });
+      else router.push(href, { scroll: false });
+    });
+  }
+
+  function onSearchChange(value: string) {
+    setQueryInput(value);
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    searchDebounce.current = setTimeout(() => navigate({ q: value }, true), 300);
   }
 
   function setColumnVisibility(column: ColumnId) {
     setVisibleColumns((current) => current.includes(column) ? current.filter((item) => item !== column) : [...current, column]);
   }
 
-  function exportOrders() {
-    const rows = [
-      ["Order", "Channel", "Customer", "Payment", "Fulfilment", "Date", "Total"],
-      ...orders.map((order) => [order.number, order.channel, order.customer, order.payment, order.fulfillment, order.createdAt, (order.total / 100).toFixed(2)]),
-    ];
-    const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  async function exportOrders() {
+    const params = ordersQueryToParams({ ...query, q: queryInput, page: 1 });
+    const response = await fetch(`/api/orders/export?${params.toString()}`);
+    if (!response.ok) return;
+    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -113,7 +120,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
             <span aria-hidden="true">·</span>
             <span>{syncCaption}</span>
             <span className={`live-dot live-dot--${initialSync.status}`} aria-hidden="true" />
-            <span>{initialSync.status === "healthy" ? "All channels live" : "Connection needs setup"}</span>
+            <span>{initialSync.status === "healthy" ? "All channels live" : "Sync needs attention"}</span>
           </div>
         </div>
         <div className="header-actions">
@@ -131,11 +138,11 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
             <label className="search-field">
               <Search size={18} strokeWidth={1.8} aria-hidden="true" />
               <span className="sr-only">Search orders</span>
-              <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search order, customer or SKU" />
+              <Input value={queryInput} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search order, customer or SKU" />
             </label>
             <div className="order-date-control">
               <CalendarDays size={17} strokeWidth={1.8} aria-hidden="true" />
-              <Select value={dateRange} onValueChange={(value) => { setDateRange(value as DateRange); resetPage(); }}>
+              <Select value={query.dateRange} onValueChange={(value) => navigate({ dateRange: value as OrdersQuery["dateRange"] })}>
                 <SelectTrigger aria-label="Order date range">
                   <SelectValue placeholder="Date range" />
                 </SelectTrigger>
@@ -148,16 +155,16 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
             </div>
           </div>
 
-          <div className="orders-table-frame">
+          <div className="orders-table-frame" aria-busy={isPending} style={{ opacity: isPending ? 0.6 : 1, transition: "opacity 120ms ease" }}>
             <div className="orders-tabs">
               <div role="tablist" aria-label="Order channel">
                 {channelTabs.map((tab) => (
                   <button
                     key={tab.value}
                     role="tab"
-                    aria-selected={channel === tab.value}
-                    className={channel === tab.value ? "is-selected" : ""}
-                    onClick={() => { setChannel(tab.value); resetPage(); }}
+                    aria-selected={query.channel === tab.value}
+                    className={query.channel === tab.value ? "is-selected" : ""}
+                    onClick={() => navigate({ channel: tab.value })}
                     type="button"
                   >
                     {tab.label}
@@ -165,7 +172,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
                 ))}
               </div>
               <div className="orders-table-actions">
-                <Select value={fulfillment} onValueChange={(value) => { setFulfillment(value as "all" | FulfillmentStatus); resetPage(); }}>
+                <Select value={query.fulfillment} onValueChange={(value) => navigate({ fulfillment: value as OrdersQuery["fulfillment"] })}>
                   <SelectTrigger className="table-filter" aria-label="Fulfilment status">
                     <SelectValue placeholder="Fulfilment status" />
                   </SelectTrigger>
@@ -174,6 +181,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
                     <SelectItem value="unfulfilled">Unfulfilled</SelectItem>
                     <SelectItem value="partial">Partially fulfilled</SelectItem>
                     <SelectItem value="fulfilled">Fulfilled</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
                 <TableColumnPicker columns={columns} visibleColumns={visibleColumns} onToggle={setColumnVisibility} onReset={() => setVisibleColumns(defaultVisibleColumns)} />
@@ -196,7 +204,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleOrders.map((order) => (
+                  {orders.map((order) => (
                     <tr
                       key={order.id}
                       className={selectedOrder?.id === order.id ? "is-selected" : ""}
@@ -214,7 +222,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
                       {visibleColumns.includes("customer") && <td>{order.customer}</td>}
                       {visibleColumns.includes("channel") && <td><ChannelPill channel={order.channel} /></td>}
                       {visibleColumns.includes("total") && <td className="total-cell">{formatMoney(order.total)}</td>}
-                      {visibleColumns.includes("payment") && <td><PaymentPill status={order.payment} /></td>}
+                      {visibleColumns.includes("payment") && <td><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></td>}
                       {visibleColumns.includes("fulfillment") && <td><FulfillmentPill status={order.fulfillment} /></td>}
                       {visibleColumns.includes("items") && <td>{order.items.reduce((total, item) => total + item.quantity, 0)} {order.items.reduce((total, item) => total + item.quantity, 0) === 1 ? "item" : "items"}</td>}
                       <td className="row-action"><ChevronRight size={18} aria-hidden="true" /></td>
@@ -224,7 +232,7 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
               </table>
             </div>
             <div className="mobile-record-list mobile-order-list" aria-label="Orders">
-              {visibleOrders.map((order) => {
+              {orders.map((order) => {
                 const itemCount = order.items.reduce((total, item) => total + item.quantity, 0);
                 return (
                   <button
@@ -235,31 +243,29 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
                   >
                     <span className="mobile-record__header"><span><strong>{order.number}</strong><small>{compactTime(order.createdAt)}</small></span><ChevronRight aria-hidden="true" size={18} /></span>
                     <span className="mobile-order-card__customer">{order.customer}</span>
-                    <span className="mobile-record__pills"><ChannelPill channel={order.channel} /><PaymentPill status={order.payment} /></span>
+                    <span className="mobile-record__pills"><ChannelPill channel={order.channel} /><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></span>
                     <span className="mobile-record__footer"><span>{itemCount} {itemCount === 1 ? "item" : "items"}</span><FulfillmentPill status={order.fulfillment} /><strong>{formatMoney(order.total)}</strong></span>
                   </button>
                 );
               })}
             </div>
-            {orders.length === 0 && <div className="table-empty">No orders match those filters.</div>}
+            {total === 0 && <div className="table-empty">No orders match those filters.</div>}
             <footer className="table-footer">
               <div className="page-size-control">
-                <Select value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); resetPage(); }}>
+                <Select value={String(query.pageSize)} onValueChange={(value) => navigate({ pageSize: Number(value) })}>
                   <SelectTrigger aria-label="Orders per page">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="25">25 per page</SelectItem>
-                    <SelectItem value="40">40 per page</SelectItem>
-                    <SelectItem value="50">50 per page</SelectItem>
+                    {ORDERS_PAGE_SIZES.map((size) => <SelectItem value={String(size)} key={size}>{size} per page</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div className="pagination" aria-label="Pagination">
-                <span className="pagination-summary">{pageStart + (orders.length ? 1 : 0)}–{pageEnd} of {orders.length}</span>
-                <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={currentPage === 1} aria-label="Previous page"><ChevronLeft size={16} /></button>
-                {pageItems.map((item, index) => item === "ellipsis" ? <span className="pagination-ellipsis" key={`ellipsis-${index}`}>…</span> : <button type="button" key={item} className={item === currentPage ? "is-current" : ""} aria-current={item === currentPage ? "page" : undefined} onClick={() => setPage(item)}>{item}</button>)}
-                <button type="button" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={currentPage === totalPages} aria-label="Next page"><ChevronRight size={16} /></button>
+                <span className="pagination-summary">{pageStart + (total ? 1 : 0)}–{pageEnd} of {total}</span>
+                <button type="button" onClick={() => navigate({ page: page - 1 })} disabled={page === 1} aria-label="Previous page"><ChevronLeft size={16} /></button>
+                {pageItems.map((item, index) => item === "ellipsis" ? <span className="pagination-ellipsis" key={`ellipsis-${index}`}>…</span> : <button type="button" key={item} className={item === page ? "is-current" : ""} aria-current={item === page ? "page" : undefined} onClick={() => navigate({ page: item })}>{item}</button>)}
+                <button type="button" onClick={() => navigate({ page: page + 1 })} disabled={page === totalPages} aria-label="Next page"><ChevronRight size={16} /></button>
               </div>
             </footer>
           </div>
@@ -268,14 +274,14 @@ export function OrdersWorkspace({ initialOrders, initialSync }: Props) {
 
       <Sheet open={Boolean(selectedOrder)} onOpenChange={(open) => !open && setSelectedId("")}>
         <SheetContent className="order-sheet" aria-describedby="order-sheet-description">
-          {selectedOrder && <OrderDetails order={selectedOrder} />}
+          {selectedOrder && <OrderDetails order={selectedOrder} unlinkedParcel2GoShipments={unlinkedParcel2GoShipments} />}
         </SheetContent>
       </Sheet>
     </section>
   );
 }
 
-function OrderDetails({ order }: { order: Order }) {
+function OrderDetails({ order, unlinkedParcel2GoShipments }: { order: Order; unlinkedParcel2GoShipments: Parcel2GoShipmentOption[] }) {
   const sourceLabel = order.channel === "shopify" ? "Shopify" : "TikTok Shop";
 
   return (
@@ -288,7 +294,7 @@ function OrderDetails({ order }: { order: Order }) {
             <ChannelPill channel={order.channel} />
           </div>
           <div className="order-detail-statuses">
-            <PaymentPill status={order.payment} />
+            <PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} />
             <FulfillmentPill status={order.fulfillment} />
           </div>
         </div>
@@ -321,22 +327,25 @@ function OrderDetails({ order }: { order: Order }) {
         <p><span>Shipping</span><span>{formatMoney(order.shipping)}</span></p>
         <p><span>Tax</span><span>{formatMoney(order.tax)}</span></p>
         <p className="order-totals__total"><strong>Total</strong><strong>{formatMoney(order.total)}</strong></p>
-        <p className="paid-row"><span>Payment status</span><PaymentPill status={order.payment} /></p>
+        <p className="paid-row"><span>Payment status</span><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></p>
       </div>
       <div className="detail-section fulfillment-timeline">
-        <h3>Fulfilment timeline</h3>
+        <h3>Order timeline</h3>
         <TimelineStep label="Order placed" detail={compactTime(order.createdAt)} state="complete" />
-        <TimelineStep label={order.payment === "paid" ? "Paid" : "Payment pending"} detail={order.payment === "paid" ? "Payment received" : "Needs attention"} state={order.payment === "paid" ? "complete" : "current"} />
-        <TimelineStep label={order.fulfillment === "fulfilled" ? "Fulfilled" : "Ready to fulfil"} detail={order.fulfillment === "fulfilled" ? "Completed" : "Awaiting fulfilment"} state={order.fulfillment === "fulfilled" ? "complete" : "current"} />
+        {order.cancelledAt ? (
+          <TimelineStep label="Cancelled" detail={compactTime(order.cancelledAt)} state="current" />
+        ) : <>
+          <TimelineStep label={order.payment === "paid" ? "Paid" : "Payment pending"} detail={order.payment === "paid" ? "Payment received" : "Needs attention"} state={order.payment === "paid" ? "complete" : "current"} />
+          <TimelineStep label={order.fulfillment === "fulfilled" ? "Fulfilled" : "Ready to fulfil"} detail={order.fulfillment === "fulfilled" ? "Completed" : "Awaiting fulfilment"} state={order.fulfillment === "fulfilled" ? "complete" : "current"} />
+        </>}
       </div>
-      <Parcel2GoDeliverySection order={order} />
+      <Parcel2GoDeliverySection order={order} availableShipments={unlinkedParcel2GoShipments} />
       <div className="source-row"><span>Order source</span><strong>{sourceLabel}</strong></div>
     </div>
   );
 }
 
-function Parcel2GoDeliverySection({ order }: { order: Order }) {
-  const availableShipments: Parcel2GoShipmentOption[] = [];
+function Parcel2GoDeliverySection({ order, availableShipments }: { order: Order; availableShipments: Parcel2GoShipmentOption[] }) {
   const router = useRouter();
   const [shipmentId, setShipmentId] = useState("");
   const [pending, setPending] = useState(false);
@@ -377,6 +386,7 @@ function Parcel2GoDeliverySection({ order }: { order: Order }) {
           </div>
           <dl className="delivery-record__meta">
             <div><dt>Parcel2Go ref</dt><dd>{delivery.orderLineId}</dd></div>
+            {delivery.sourceReferences.map((reference) => <div key={reference}><dt>Order reference</dt><dd>{reference}</dd></div>)}
             {delivery.collectionDate && <div><dt>Collection</dt><dd>{compactTime(delivery.collectionDate)}</dd></div>}
             {delivery.estimatedDeliveryAt && <div><dt>Estimated delivery</dt><dd>{compactTime(delivery.estimatedDeliveryAt)}</dd></div>}
           </dl>
@@ -392,7 +402,7 @@ function Parcel2GoDeliverySection({ order }: { order: Order }) {
             <Select value={shipmentId} onValueChange={setShipmentId}>
               <SelectTrigger aria-label="Parcel2Go delivery"><SelectValue placeholder="Choose a recent Parcel2Go delivery" /></SelectTrigger>
               <SelectContent>
-                {availableShipments.map((shipment) => <SelectItem value={shipment.id} key={shipment.id}>{shipment.courier} · {shipment.service} · ref {shipment.orderLineId}</SelectItem>)}
+                {availableShipments.map((shipment) => <SelectItem value={shipment.id} key={shipment.id}>{shipment.courier} · {shipment.service} · {shipment.sourceReferences[0] ? `order ${shipment.sourceReferences[0]}` : `Parcel2Go ref ${shipment.orderLineId}`}</SelectItem>)}
               </SelectContent>
             </Select>
             <Button variant="outline" size="compact" disabled={!shipmentId || pending} onClick={linkShipment}><Link2 size={14} aria-hidden="true" />{pending ? "Linking…" : "Link delivery"}</Button>

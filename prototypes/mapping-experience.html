@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Map products · Serenity Hue prototype</title>
+    <style>
+      :root {
+        --canvas: #fcfaf8;
+        --canvas-muted: #f7f0f4;
+        --paper: #fffefd;
+        --paper-strong: #ffffff;
+        --ink: #33212d;
+        --ink-soft: #756a70;
+        --ink-faint: #a89da2;
+        --line: #e9dfe2;
+        --line-strong: #ddcdd3;
+        --plum: #6c285f;
+        --plum-dark: #49163f;
+        --magenta: #c13a9b;
+        --magenta-soft: #f8e9f2;
+        --green: #437d67;
+        --green-soft: #e7f2ec;
+        --orange: #d8781b;
+        --orange-soft: #fff3e4;
+        --red: #c84954;
+        --red-soft: #fff0f1;
+        --shadow-soft: 0 18px 50px rgba(74, 33, 57, 0.08);
+        --shadow-float: 0 22px 70px rgba(67, 24, 55, 0.17);
+      }
+
+      * { box-sizing: border-box; }
+      html { min-width: 320px; background: var(--canvas); }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: radial-gradient(circle at 73% -18%, #f8e9f3 0, transparent 28rem), var(--canvas);
+        font-family: "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif;
+        font-size: 14px;
+        letter-spacing: -0.01em;
+        -webkit-font-smoothing: antialiased;
+      }
+      button, input, select { font: inherit; }
+      button { cursor: pointer; }
+      button:disabled { cursor: not-allowed; }
+      h1, h2, h3, p { margin: 0; }
+      svg { display: block; }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .app-shell { min-height: 100svh; display: grid; grid-template-columns: 224px minmax(0, 1fr); }
+      .sidebar {
+        position: sticky;
+        top: 0;
+        display: flex;
+        flex-direction: column;
+        height: 100svh;
+        border-right: 1px solid rgba(117, 75, 100, 0.14);
+        background: linear-gradient(165deg, #fdf9ff 0%, #faf2f8 49%, #fdfcfb 100%);
+      }
+      .brand-lockup { display: grid; place-items: center; height: 148px; padding: 25px 26px 21px; }
+      .brand-lockup img { width: 126px; max-height: 72px; object-fit: contain; mix-blend-mode: multiply; }
+      .prototype-mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 20px 20px;
+        padding: 7px 10px;
+        border: 1px solid #e7d1df;
+        border-radius: 8px;
+        color: var(--plum);
+        background: rgba(255, 255, 255, 0.56);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      .prototype-mark span { width: 6px; height: 6px; border-radius: 50%; background: var(--magenta); }
+      .nav-list { display: grid; gap: 4px; padding: 4px 13px; }
+      .nav-link {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        min-height: 45px;
+        padding: 0 13px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        color: #584651;
+        font-size: 13px;
+        font-weight: 650;
+        text-decoration: none;
+      }
+      .nav-link svg { color: #836f7c; }
+      .nav-link.is-active { border-color: rgba(193, 58, 155, 0.2); background: #f9dfea; color: var(--plum-dark); }
+      .nav-link.is-active svg { color: var(--magenta); }
+      .nav-link.is-active::before { width: 4px; height: 21px; margin-left: -14px; border-radius: 99px; content: ""; background: var(--magenta); }
+      .nav-section { margin: 24px 19px 8px; color: #8e7d87; font-size: 10px; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; }
+      .subnav { display: grid; gap: 3px; padding: 0 13px 5px 47px; }
+      .subnav a { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-radius: 8px; color: #806c77; font-size: 12px; font-weight: 650; text-decoration: none; }
+      .subnav a::before { width: 5px; height: 5px; margin-right: 9px; border-radius: 50%; content: ""; background: #c5b2bb; }
+      .subnav a.is-active { color: var(--plum-dark); background: #fffafd; }
+      .subnav a.is-active::before { background: var(--magenta); }
+      .sidebar-spacer { flex: 1; }
+      .sidebar-footnote { margin: 0 19px 20px; color: var(--ink-faint); font-size: 11px; line-height: 1.45; }
+
+      .main { min-width: 0; padding: 40px 44px 64px; }
+      .workspace { max-width: 1480px; margin: 0 auto; }
+      .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; padding-bottom: 28px; }
+      .eyebrow { margin-bottom: 9px; color: var(--magenta); font-size: 10px; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
+      h1 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: clamp(44px, 4.2vw, 63px); font-weight: 400; letter-spacing: -0.06em; line-height: 0.93; }
+      .page-description { max-width: 555px; margin-top: 14px; color: var(--ink-soft); line-height: 1.55; }
+      .status-note { display: grid; justify-items: end; gap: 7px; padding-top: 4px; color: var(--ink-soft); font-size: 12px; text-align: right; }
+      .status-note strong { display: flex; align-items: center; gap: 8px; color: var(--green); font-size: 12px; }
+      .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(67, 125, 103, 0.1); }
+      .status-note small { color: var(--ink-faint); font-size: 11px; }
+
+      .flow-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-bottom: 28px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255, 254, 253, 0.78); overflow: hidden; }
+      .flow-step { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 15px 18px; border-right: 1px solid var(--line); }
+      .flow-step:last-child { border-right: 0; }
+      .flow-number { display: grid; flex: 0 0 28px; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--plum-dark); background: var(--magenta-soft); font-size: 12px; font-weight: 800; }
+      .flow-step strong { display: block; margin-bottom: 2px; font-size: 12px; }
+      .flow-step span { display: block; color: var(--ink-soft); font-size: 11px; line-height: 1.35; }
+
+      .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 15px; }
+      .toolbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .search-box { display: flex; align-items: center; gap: 9px; width: min(370px, 42vw); min-height: 43px; padding: 0 13px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--paper-strong); }
+      .search-box svg { flex: 0 0 auto; color: var(--ink-faint); }
+      .search-box input { width: 100%; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 13px; }
+      .search-box input::placeholder { color: #a1929b; }
+      .count { color: var(--ink-faint); font-size: 12px; white-space: nowrap; }
+      .case-filter { display: flex; gap: 5px; }
+      .filter-button { min-height: 34px; padding: 0 11px; border: 1px solid transparent; border-radius: 8px; color: var(--ink-soft); background: transparent; font-size: 11px; font-weight: 750; }
+      .filter-button.is-active { border-color: #e5c8d9; color: var(--plum-dark); background: var(--magenta-soft); }
+
+      .table-shell { border: 1px solid var(--line); border-radius: 15px; background: var(--paper); box-shadow: 0 3px 0 rgba(62, 31, 47, 0.02); overflow: hidden; }
+      .table-head, .listing-row { display: grid; grid-template-columns: minmax(285px, 1.5fr) 118px 116px 180px 145px; align-items: center; column-gap: 15px; padding: 0 18px; }
+      .table-head { min-height: 45px; border-bottom: 1px solid var(--line); color: var(--ink-faint); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+      .listing-row { min-height: 79px; border-bottom: 1px solid #f0e8ea; }
+      .listing-row:last-child { border-bottom: 0; }
+      .listing-row:hover { background: #fffafd; }
+      .product-cell { display: flex; align-items: center; gap: 11px; min-width: 0; }
+      .product-glyph { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; border: 1px solid #e6cad8; border-radius: 10px; color: var(--plum); background: #fcf0f7; font-size: 12px; font-weight: 800; }
+      .product-copy { min-width: 0; }
+      .product-copy strong { display: block; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+      .product-copy small { display: block; margin-top: 4px; overflow: hidden; color: var(--ink-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .variant-count { color: var(--ink-soft); font-size: 12px; }
+      .type-chip { display: inline-flex; align-items: center; min-height: 25px; padding: 0 9px; border-radius: 7px; color: var(--plum-dark); background: var(--magenta-soft); font-size: 11px; font-weight: 750; }
+      .type-chip.bundle { color: #7d5010; background: var(--orange-soft); }
+      .stock { color: var(--ink-soft); font-size: 12px; }
+      .stock strong { color: var(--ink); font-size: 13px; }
+      .status-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 9px; border-radius: 8px; font-size: 11px; font-weight: 750; }
+      .status-chip::before { width: 6px; height: 6px; border-radius: 50%; content: ""; }
+      .status-chip.mapped { color: var(--green); background: var(--green-soft); }
+      .status-chip.mapped::before { background: var(--green); }
+      .status-chip.review { color: #9b5b0e; background: var(--orange-soft); }
+      .status-chip.review::before { background: var(--orange); }
+      .status-chip.unmapped { color: var(--red); background: var(--red-soft); }
+      .status-chip.unmapped::before { background: var(--red); }
+      .map-button, .save-button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 12px; border: 1px solid var(--plum); border-radius: 9px; color: white; background: var(--plum-dark); font-size: 11px; font-weight: 800; white-space: nowrap; }
+      .map-button:hover, .save-button:hover { background: var(--plum); }
+      .table-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 53px; padding: 0 18px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 11px; }
+      .legend { display: flex; flex-wrap: wrap; gap: 13px; }
+      .legend span { display: inline-flex; align-items: center; gap: 6px; }
+      .legend i { display: block; width: 7px; height: 7px; border-radius: 50%; }
+      .legend .green { background: var(--green); }
+      .legend .orange { background: var(--orange); }
+      .legend .red { background: var(--red); }
+      .pagination { color: var(--ink-soft); }
+
+      .backdrop { position: fixed; z-index: 10; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; visibility: hidden; background: rgba(55, 25, 45, 0); transition: background 180ms ease, visibility 180ms ease; }
+      .backdrop.is-open { visibility: visible; background: rgba(55, 25, 45, 0.22); }
+      .drawer { display: flex; flex-direction: column; width: min(720px, 100%); height: min(820px, calc(100svh - 48px)); max-height: calc(100svh - 48px); border: 1px solid #e3d0da; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-float); transform: translateY(14px) scale(0.985); transition: transform 220ms ease; }
+      .backdrop.is-open .drawer { transform: translateY(0) scale(1); }
+      .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 25px 28px 20px; border-bottom: 1px solid var(--line); }
+      .drawer-kicker { margin-bottom: 7px; color: var(--magenta); font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+      .drawer-header h2 { max-width: 510px; color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 33px; font-weight: 400; letter-spacing: -0.045em; line-height: 1; }
+      .drawer-summary { margin-top: 10px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+      .close-button { display: grid; flex: 0 0 36px; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--plum); background: transparent; }
+      .close-button:hover { border-color: #c994b4; background: var(--magenta-soft); }
+      .drawer-body { flex: 1; overflow: auto; padding: 22px 28px 28px; }
+      .section-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+      .section-label strong { font-size: 12px; }
+      .section-label span { color: var(--ink-faint); font-size: 11px; }
+      .fetched-type { display: flex; align-items: center; gap: 11px; min-height: 68px; margin-bottom: 24px; padding: 12px 13px; border: 1px solid #d8e8df; border-radius: 11px; background: #fbfffc; }
+      .fetched-type .type-number { display: grid; flex: 0 0 29px; place-items: center; width: 29px; height: 29px; border-radius: 8px; color: var(--plum); background: var(--magenta-soft); font-size: 12px; font-weight: 850; }
+      .fetched-type.bundle { border-color: #ead8b9; background: #fffdf8; }
+      .fetched-type.bundle .type-number { color: #8b5b13; background: var(--orange-soft); }
+      .fetched-type-main { min-width: 0; }
+      .fetched-type-main strong { display: block; color: var(--ink); font-size: 12px; }
+      .fetched-type-main small { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 10px; line-height: 1.3; }
+      .fetched-badge { margin-left: auto; padding: 5px 8px; border: 1px solid #cbe1d4; border-radius: 7px; color: var(--green); background: var(--green-soft); font-size: 10px; font-weight: 800; white-space: nowrap; }
+      .guidance { display: flex; gap: 10px; margin-bottom: 21px; padding: 12px 13px; border: 1px solid #ead8e2; border-radius: 10px; color: var(--ink-soft); background: #fffafd; font-size: 11px; line-height: 1.45; }
+      .guidance-mark { display: grid; flex: 0 0 21px; place-items: center; width: 21px; height: 21px; border-radius: 50%; color: var(--plum); background: var(--magenta-soft); font-size: 11px; font-weight: 850; }
+      .mapping-list { display: grid; gap: 9px; }
+      .mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 0.95fr); align-items: center; gap: 14px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+      .mapping-row.is-complete { border-color: #d5e7dd; background: #fcfffd; }
+      .mapping-row-copy { min-width: 0; }
+      .mapping-row-copy strong { display: block; overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .mapping-row-copy small { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 10px; }
+      .select-field { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 9px; outline: 0; color: var(--ink); background: var(--paper-strong); font-size: 11px; }
+      .select-field:focus, .number-field:focus, .search-component:focus { border-color: var(--magenta); box-shadow: 0 0 0 3px rgba(193, 58, 155, 0.13); }
+      .row-status { grid-column: 1 / -1; margin-top: -2px; color: var(--orange); font-size: 10px; font-weight: 750; }
+      .row-status.complete { color: var(--green); }
+
+      .recipe-stack { display: grid; gap: 16px; }
+      .recipe-card { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+      .recipe-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 14px 15px 12px; border-bottom: 1px solid var(--line); background: #fffafd; }
+      .recipe-card-header strong { display: block; font-size: 12px; }
+      .recipe-card-header small { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 10px; }
+      .copy-button { min-height: 30px; padding: 0 9px; border: 1px solid #e0bfd1; border-radius: 8px; color: var(--plum); background: transparent; font-size: 10px; font-weight: 750; white-space: nowrap; }
+      .recipe-lines { display: grid; gap: 8px; padding: 13px 15px 15px; }
+      .recipe-line { display: grid; grid-template-columns: minmax(0, 1fr) 104px 28px; align-items: center; gap: 9px; }
+      .component-picker { min-width: 0; }
+      .component-picker select { width: 100%; min-height: 36px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; color: var(--ink); background: #fff; font-size: 11px; }
+      .quantity-control { display: grid; grid-template-columns: 28px 1fr 28px; align-items: center; height: 36px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+      .quantity-control button { height: 100%; border: 0; color: var(--plum); background: #fffafd; font-size: 14px; }
+      .quantity-control button:hover { background: var(--magenta-soft); }
+      .number-field { width: 100%; height: 34px; border: 0; outline: 0; color: var(--ink); background: #fff; text-align: center; font-size: 11px; }
+      .remove-line { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 7px; color: var(--ink-faint); background: transparent; font-size: 18px; }
+      .remove-line:hover { color: var(--red); background: var(--red-soft); }
+      .add-component { align-self: start; min-height: 32px; padding: 0 10px; border: 1px dashed #d5b3c6; border-radius: 8px; color: var(--plum); background: transparent; font-size: 10px; font-weight: 800; }
+      .add-component:hover { border-style: solid; background: var(--magenta-soft); }
+      .recipe-complete { margin: 0 15px 14px; padding: 8px 10px; border-radius: 8px; color: var(--green); background: var(--green-soft); font-size: 10px; font-weight: 750; }
+      .recipe-incomplete { margin: 0 15px 14px; padding: 8px 10px; border-radius: 8px; color: #9b5b0e; background: var(--orange-soft); font-size: 10px; font-weight: 750; }
+      .drawer-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 28px; border-top: 1px solid var(--line); background: #fffafd; }
+      .footer-summary { color: var(--ink-soft); font-size: 11px; }
+      .footer-summary strong { color: var(--ink); }
+      .cancel-button { min-height: 39px; padding: 0 13px; border: 1px solid transparent; border-radius: 9px; color: var(--plum); background: transparent; font-size: 11px; font-weight: 750; }
+      .cancel-button:hover { background: var(--magenta-soft); }
+      .save-button { min-height: 39px; padding: 0 16px; }
+      .toast { position: fixed; z-index: 20; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 9px; max-width: min(360px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid #cbe1d4; border-radius: 10px; color: var(--green); background: var(--green-soft); box-shadow: var(--shadow-soft); font-size: 12px; font-weight: 750; opacity: 0; transform: translateY(9px); pointer-events: none; transition: opacity 180ms ease, transform 180ms ease; }
+      .toast.is-visible { opacity: 1; transform: translateY(0); }
+      .empty-row { padding: 35px 20px; color: var(--ink-soft); text-align: center; }
+
+      @media (max-width: 980px) {
+        .app-shell { grid-template-columns: 76px minmax(0, 1fr); }
+        .sidebar { align-items: center; }
+        .brand-lockup { height: 108px; padding: 20px 9px; }
+        .brand-lockup img { width: 55px; }
+        .prototype-mark { margin: 0 0 18px; padding: 6px; font-size: 0; }
+        .prototype-mark span { width: 8px; height: 8px; }
+        .nav-list { width: 100%; padding: 4px 9px; }
+        .nav-link { justify-content: center; padding: 0; }
+        .nav-link span, .nav-section, .subnav, .sidebar-footnote { display: none; }
+        .nav-link.is-active::before { display: none; }
+        .main { padding: 32px 28px 50px; }
+        .table-head, .listing-row { grid-template-columns: minmax(250px, 1.4fr) 95px 105px 155px 125px; column-gap: 11px; padding-left: 14px; padding-right: 14px; }
+      }
+
+      @media (max-width: 720px) {
+        .app-shell { display: block; }
+        .sidebar { display: none; }
+        .main { padding: 24px 15px 42px; }
+        .page-header { display: block; padding-bottom: 22px; }
+        h1 { font-size: 49px; }
+        .status-note { display: flex; align-items: center; justify-content: space-between; margin-top: 19px; padding-top: 13px; border-top: 1px solid var(--line); text-align: left; }
+        .flow-strip { grid-template-columns: 1fr; margin-bottom: 21px; }
+        .flow-step { min-height: 61px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .flow-step:last-child { border-bottom: 0; }
+        .toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
+        .toolbar-left { align-items: stretch; flex-direction: column; }
+        .search-box { width: 100%; }
+        .case-filter { overflow-x: auto; padding-bottom: 2px; }
+        .filter-button { flex: 0 0 auto; }
+        .table-shell { border-radius: 12px; background: transparent; border: 0; overflow: visible; box-shadow: none; }
+        .table-head { display: none; }
+        .listing-row { grid-template-columns: 1fr auto; gap: 12px; min-height: 0; margin-bottom: 8px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+        .product-cell { grid-column: 1 / -1; }
+        .variant-count { grid-column: 1; grid-row: 2; }
+        .type-chip { grid-column: 2; grid-row: 2; justify-self: end; }
+        .stock { grid-column: 1; grid-row: 3; }
+        .status-chip { grid-column: 2; grid-row: 3; justify-self: end; }
+        .map-button { grid-column: 1 / -1; width: 100%; margin-top: 3px; }
+        .table-footer { display: none; }
+        .backdrop { padding: 12px; }
+        .drawer { width: 100%; height: calc(100svh - 24px); max-height: none; }
+        .drawer-header { padding: 22px 18px 18px; }
+        .drawer-header h2 { font-size: 29px; }
+        .drawer-body { padding: 19px 18px 25px; }
+        .drawer-footer { padding: 13px 18px; }
+        .footer-summary { max-width: 135px; line-height: 1.35; }
+        .mapping-row { grid-template-columns: 1fr; gap: 9px; }
+        .row-status { grid-column: 1; }
+        .recipe-line { grid-template-columns: minmax(0, 1fr) 94px 28px; gap: 6px; }
+        .toast { right: 16px; bottom: 16px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Prototype navigation">
+        <div class="brand-lockup"><img src="../public/serenity-hue-logo-transparent.png" alt="Serenity Hue" /></div>
+        <div class="prototype-mark"><span></span> Prototype</div>
+        <nav class="nav-list">
+          <a class="nav-link" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V10Z"/><path d="M9 21v-7h6v7"/></svg><span>Overview</span></a>
+          <a class="nav-link" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h12v18H6z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg><span>Orders</span></a>
+          <a class="nav-link is-active" href="#" aria-current="page"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z"/><path d="m4.5 8 7.5 4 7.5-4M12 12v9"/></svg><span>Products</span></a>
+          <a class="nav-link" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 21a7 7 0 0 1 14 0"/></svg><span>Employees</span></a>
+        </nav>
+        <div class="nav-section">Inventory</div>
+        <div class="subnav"><a class="is-active" href="#">Products</a><a href="#">Packaging</a></div>
+        <div class="sidebar-spacer"></div>
+        <p class="sidebar-footnote">A test surface for the new product-mapping experience.</p>
+      </aside>
+
+      <main class="main">
+        <div class="workspace">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Inventory / channel mappings</p>
+              <h1>Map products</h1>
+              <p class="page-description">One mapping action for every listing. Choose whether the sale is an individual item or a bundle, then connect it to the physical variants it consumes.</p>
+            </div>
+            <div class="status-note"><strong><span class="status-dot"></span>Prototype mode</strong><small>Sample Shopify listings · no live connections</small></div>
+          </header>
+
+          <section class="flow-strip" aria-label="Mapping flow">
+            <div class="flow-step"><span class="flow-number">1</span><div><strong>Choose the listing type</strong><span>Individual or Bundle only.</span></div></div>
+            <div class="flow-step"><span class="flow-number">2</span><div><strong>Map what one sale consumes</strong><span>Variants and quantities stay explicit.</span></div></div>
+            <div class="flow-step"><span class="flow-number">3</span><div><strong>Save when complete</strong><span>Partial work stays Needs review.</span></div></div>
+          </section>
+
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <label class="search-box"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="sr-only">Search sample listings</span><input id="search" type="search" placeholder="Search sample listings" /></label>
+              <span class="count" id="count"></span>
+            </div>
+            <div class="case-filter" aria-label="Filter mapping cases">
+              <button class="filter-button is-active" data-filter="all">All cases</button>
+              <button class="filter-button" data-filter="individual">Individual</button>
+              <button class="filter-button" data-filter="bundle">Bundle</button>
+              <button class="filter-button" data-filter="review">Needs review</button>
+            </div>
+          </div>
+
+          <section class="table-shell" aria-label="Sample channel listings">
+            <div class="table-head"><span>Shopify listing</span><span>Variants</span><span>Type</span><span>Mapping status</span><span>Action</span></div>
+            <div id="listingRows"></div>
+            <footer class="table-footer"><div class="legend"><span><i class="green"></i>Mapped</span><span><i class="orange"></i>Needs review</span><span><i class="red"></i>Not mapped</span></div><span>7 sample cases</span></footer>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="backdrop" id="backdrop" aria-hidden="true">
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+        <header class="drawer-header">
+          <div><p class="drawer-kicker">Map product(s)</p><h2 id="drawerTitle">Product mapping</h2><p class="drawer-summary" id="drawerSummary"></p></div>
+          <button class="close-button" id="closeDrawer" aria-label="Close mapping panel"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </header>
+        <div class="drawer-body" id="drawerBody"></div>
+        <footer class="drawer-footer"><span class="footer-summary" id="footerSummary"></span><div><button class="cancel-button" id="cancelMapping">Cancel</button><button class="save-button" id="saveMapping">Save mapping</button></div></footer>
+      </aside>
+    </div>
+    <div class="toast" id="toast"><span>✓</span><span id="toastText">Mapping saved in this prototype.</span></div>
+
+    <script>
+      const masterVariants = [
+        { id: "pomade-black", item: "Brow Pomade", variant: "Black" },
+        { id: "pomade-cool-grey", item: "Brow Pomade", variant: "Cool Grey" },
+        { id: "pomade-light-blonde", item: "Brow Pomade", variant: "Light Blonde" },
+        { id: "pomade-light-brown", item: "Brow Pomade", variant: "Light Brown" },
+        { id: "pomade-neutral-brown", item: "Brow Pomade", variant: "Neutral Brown" },
+        { id: "pomade-warm-auburn", item: "Brow Pomade", variant: "Warm Auburn" },
+        { id: "pomade-warm-brown", item: "Brow Pomade", variant: "Warm Brown" },
+        { id: "serum-default", item: "Encapsulated Complex Peptide Long Lash Serum", variant: "Default Title" },
+        { id: "snowlift-default", item: "Snow Lift Peptide Under/Hooded Eye Serum", variant: "Default Title" },
+        { id: "vitamin-c-30ml", item: "Serenity Hue Lab Twist Vitamin C Serum", variant: "30ml" },
+        { id: "baking-5g", item: "Brow Baking Powder", variant: "5g" },
+        { id: "lamination-10g", item: "Brow Lamination Clay", variant: "10g" },
+        { id: "tint-black", item: "Fuel & Tint Brow Tinting Mud", variant: "Black" },
+        { id: "tint-warm-brown", item: "Fuel & Tint Brow Tinting Mud", variant: "Warm Brown" },
+        { id: "spoolie-default", item: "Brow Spoolie", variant: "Default Title" },
+        { id: "pouch-default", item: "Custom-Made Serenity Hue Pouch", variant: "Default Title" }
+      ];
+
+      const listings = [
+        {
+          id: "vitamin-c", title: "20% THD Vitamin C Serum", subtitle: "One product · no variants", type: "individual", stock: 10, case: "single", status: "mapped",
+          variants: [{ id: "default", title: "Default variant", masterId: "vitamin-c-30ml" }]
+        },
+        {
+          id: "pomade-seven", title: "Brow Pomade", subtitle: "One product · 7 shade variants", type: "individual", stock: 353, case: "variant", status: "review",
+          variants: [
+            { id: "black", title: "Black", masterId: "pomade-black" }, { id: "cool-grey", title: "Cool Grey", masterId: "pomade-cool-grey" }, { id: "light-blonde", title: "Light Blonde", masterId: null },
+            { id: "light-brown", title: "Light Brown", masterId: "pomade-light-brown" }, { id: "neutral-brown", title: "Neutral Brown", masterId: null }, { id: "warm-auburn", title: "Warm Auburn", masterId: null }, { id: "warm-brown", title: "Warm Brown", masterId: null }
+          ]
+        },
+        {
+          id: "pomade-light-brown", title: "Brow Pomade — Light Brown", subtitle: "Separate listing for one shade", type: "individual", stock: 47, case: "single", status: "mapped",
+          variants: [{ id: "default", title: "Default variant", masterId: "pomade-light-brown" }]
+        },
+        {
+          id: "lash-two-pack", title: "Eyelash Growth Serum — 2 Pack", subtitle: "Same item twice", type: "bundle", stock: 24, case: "multipack", status: "unmapped",
+          variants: [{ id: "default", title: "Default variant", recipe: [] }]
+        },
+        {
+          id: "lamination-duo", title: "All-Day Hold & Grow Lamination Duo", subtitle: "Multiple physical products", type: "bundle", stock: 26, case: "bundle", status: "mapped",
+          variants: [{ id: "default", title: "Default variant", recipe: [{ masterId: "baking-5g", quantity: 1 }, { masterId: "lamination-10g", quantity: 1 }, { masterId: "spoolie-default", quantity: 5 }, { masterId: "pouch-default", quantity: 1 }] }]
+        },
+        {
+          id: "shape-hold-kit", title: "Brow Shape, Hold & Grow Kit", subtitle: "Bundle with a shade variant", type: "bundle", stock: 67, case: "bundle-variant", status: "review",
+          variants: [
+            { id: "light-brown", title: "Light Brown", recipe: [{ masterId: "pomade-light-brown", quantity: 1 }, { masterId: "baking-5g", quantity: 1 }] },
+            { id: "neutral-brown", title: "Neutral Brown", recipe: [{ masterId: null, quantity: 1 }, { masterId: "baking-5g", quantity: 1 }] },
+            { id: "warm-brown", title: "Warm Brown", recipe: [{ masterId: null, quantity: 1 }, { masterId: "baking-5g", quantity: 1 }] }
+          ]
+        },
+        {
+          id: "pomade-tint-pair", title: "Brow Pomade + Tint Pair", subtitle: "Two variant-bearing components", type: "bundle", stock: 31, case: "multi-variant", status: "unmapped",
+          variants: [
+            { id: "warm-brown", title: "Warm Brown + Warm Brown", recipe: [{ masterId: null, quantity: 1 }, { masterId: "tint-warm-brown", quantity: 1 }] },
+            { id: "black", title: "Black + Black", recipe: [{ masterId: null, quantity: 1 }, { masterId: "tint-black", quantity: 1 }] }
+          ]
+        }
+      ];
+
+      let activeId = null;
+      let draft = null;
+      let activeFilter = "all";
+      let toastTimer = null;
+
+      const $ = (selector) => document.querySelector(selector);
+      const clone = (value) => JSON.parse(JSON.stringify(value));
+      const findListing = (id) => listings.find((listing) => listing.id === id);
+      const findMaster = (id) => masterVariants.find((variant) => variant.id === id);
+      const statusLabel = (status) => status === "mapped" ? "Mapped" : status === "review" ? "Needs review" : "Not mapped";
+      const statusClass = (status) => status === "mapped" ? "mapped" : status === "review" ? "review" : "unmapped";
+      const typeLabel = (type) => type === "bundle" ? "Bundle" : "Individual";
+
+      function listingCompleteness(listing) {
+        if (listing.type === "individual") {
+          const complete = listing.variants.filter((variant) => variant.masterId).length;
+          return { complete, total: listing.variants.length, isComplete: complete === listing.variants.length };
+        }
+        const complete = listing.variants.filter((variant) => variant.recipe?.length && variant.recipe.every((line) => line.masterId && Number(line.quantity) > 0)).length;
+        return { complete, total: listing.variants.length, isComplete: complete === listing.variants.length };
+      }
+
+      function refreshStatus(listing) {
+        const progress = listingCompleteness(listing);
+        listing.status = progress.complete === 0 ? "unmapped" : progress.isComplete ? "mapped" : "review";
+      }
+
+      function renderTable() {
+        const query = $("#search").value.trim().toLowerCase();
+        const rows = listings.filter((listing) => {
+          const searchable = `${listing.title} ${listing.subtitle} ${listing.type}`.toLowerCase();
+          const matchesSearch = !query || searchable.includes(query);
+          const matchesFilter = activeFilter === "all" || activeFilter === listing.type || (activeFilter === "review" && listing.status === "review");
+          return matchesSearch && matchesFilter;
+        });
+        $("#count").textContent = `${rows.length} of ${listings.length} sample listings`;
+        $("#listingRows").innerHTML = rows.length ? rows.map((listing) => {
+          const progress = listingCompleteness(listing);
+          const glyph = listing.type === "bundle" ? "B" : listing.variants.length > 1 ? String(listing.variants.length) : "1";
+          return `<div class="listing-row">
+            <div class="product-cell"><span class="product-glyph">${glyph}</span><div class="product-copy"><strong>${listing.title}</strong><small>${listing.subtitle}</small></div></div>
+            <span class="variant-count">${listing.variants.length} ${listing.variants.length === 1 ? "variant" : "variants"}</span>
+            <span class="type-chip ${listing.type === "bundle" ? "bundle" : ""}">${typeLabel(listing.type)}</span>
+            <span><span class="status-chip ${statusClass(listing.status)}">${statusLabel(listing.status)}${listing.type === "bundle" || listing.variants.length > 1 ? ` · ${progress.complete}/${progress.total}` : ""}</span></span>
+            <button class="map-button" data-map="${listing.id}">Map product(s)</button>
+          </div>`;
+        }).join("") : `<div class="empty-row">No sample listings match that search.</div>`;
+      }
+
+      function masterOptions(selectedId, placeholder = "Choose a master variant") {
+        return `<option value="">${placeholder}</option>${masterVariants.map((master) => `<option value="${master.id}" ${master.id === selectedId ? "selected" : ""}>${master.item} · ${master.variant}</option>`).join("")}`;
+      }
+
+      function renderIndividualBody(listing) {
+        const progress = listingCompleteness(listing);
+        return `<div class="guidance"><span class="guidance-mark">i</span><span>Each Shopify variant maps to one master inventory variant. If this listing is a two-pack or contains multiple products, switch it to <strong>Bundle</strong>.</span></div>
+          <div class="section-label"><strong>Master variant mapping</strong><span>${progress.complete} of ${progress.total} complete</span></div>
+          <div class="mapping-list">${draft.variants.map((variant, index) => `<div class="mapping-row ${variant.masterId ? "is-complete" : ""}">
+            <div class="mapping-row-copy"><strong>${variant.title}</strong><small>Shopify variant · sale quantity 1</small></div>
+            <select class="select-field individual-select" data-index="${index}" aria-label="Master variant for ${variant.title}">${masterOptions(variant.masterId)}</select>
+            <span class="row-status ${variant.masterId ? "complete" : ""}">${variant.masterId ? "✓ Ready to map" : "Choose a master variant"}</span>
+          </div>`).join("")}</div>`;
+      }
+
+      function recipeLine(line, variantIndex, lineIndex) {
+        return `<div class="recipe-line">
+          <label class="component-picker"><span class="sr-only">Component</span><select data-variant-index="${variantIndex}" data-line-index="${lineIndex}" class="component-select">${masterOptions(line.masterId, "Choose a component")}</select></label>
+          <label class="quantity-control"><button type="button" data-quantity="down" data-variant-index="${variantIndex}" data-line-index="${lineIndex}" aria-label="Decrease quantity">−</button><input class="number-field" type="number" min="1" value="${line.quantity || 1}" data-quantity-input data-variant-index="${variantIndex}" data-line-index="${lineIndex}" aria-label="Quantity per sale" /><button type="button" data-quantity="up" data-variant-index="${variantIndex}" data-line-index="${lineIndex}" aria-label="Increase quantity">+</button></label>
+          <button type="button" class="remove-line" data-remove-line data-variant-index="${variantIndex}" data-line-index="${lineIndex}" aria-label="Remove component">×</button>
+        </div>`;
+      }
+
+      function renderBundleBody(listing) {
+        const hasVariants = draft.variants.length > 1;
+        const progress = listingCompleteness(listing);
+        return `<div class="guidance"><span class="guidance-mark">i</span><span>One sale can consume one or more physical variants. Same item twice is valid: add it once and set the quantity to <strong>2</strong>. Each bundle variant gets its own recipe.</span></div>
+          <div class="section-label"><strong>${hasVariants ? "Variant recipes" : "Bundle recipe"}</strong><span>${progress.complete} of ${progress.total} complete</span></div>
+          <div class="recipe-stack">${draft.variants.map((variant, variantIndex) => {
+            const ready = variant.recipe?.length && variant.recipe.every((line) => line.masterId && Number(line.quantity) > 0);
+            return `<article class="recipe-card">
+              <header class="recipe-card-header"><div><strong>${hasVariants ? variant.title : "What does one sale contain?"}</strong><small>${hasVariants ? "This variant maps to its own component recipe." : listing.case === "multipack" ? "Example: one sale contains two identical serum units." : "Choose every physical item included in one sale."}</small></div>${hasVariants && variantIndex === 0 ? `<button class="copy-button" type="button" data-copy-first>Copy recipe</button>` : ""}</header>
+              <div class="recipe-lines">${(variant.recipe || []).map((line, lineIndex) => recipeLine(line, variantIndex, lineIndex)).join("")}<button type="button" class="add-component" data-add-line data-variant-index="${variantIndex}">+ Add component</button></div>
+              <div class="${ready ? "recipe-complete" : "recipe-incomplete"}">${ready ? "✓ Complete recipe" : "Needs a component and quantity before this variant is mapped"}</div>
+            </article>`;
+          }).join("")}</div>`;
+      }
+
+      function renderDrawer() {
+        const listing = findListing(activeId);
+        if (!listing) return;
+        const progress = listingCompleteness(draft);
+        $("#drawerTitle").textContent = listing.title;
+        $("#drawerSummary").textContent = `${typeLabel(draft.type)} · ${listing.variants.length} ${listing.variants.length === 1 ? "variant" : "variants"} · ${listing.stock} units in this sample`;
+        $("#drawerBody").innerHTML = `<div class="section-label"><strong>Fetched listing type</strong><span>Read-only</span></div>
+          <div class="fetched-type ${draft.type === "bundle" ? "bundle" : ""}"><span class="type-number">${draft.type === "bundle" ? "B" : "1"}</span><span class="fetched-type-main"><strong>${typeLabel(draft.type)}</strong><small>Fetched from the Shopify listing data. This mapping dialog cannot change the listing type.</small></span><span class="fetched-badge">Fetched</span></div>
+          ${draft.type === "individual" ? renderIndividualBody(draft) : renderBundleBody(draft)}`;
+        $("#footerSummary").innerHTML = progress.isComplete ? `<strong>Ready to save</strong> · all ${progress.total} mapped` : `<strong>${progress.complete} of ${progress.total}</strong> mapped · finish the remaining rows`;
+        $("#saveMapping").disabled = !progress.isComplete;
+      }
+
+      function openDrawer(id) {
+        activeId = id;
+        draft = clone(findListing(id));
+        renderDrawer();
+        $("#backdrop").classList.add("is-open");
+        $("#backdrop").setAttribute("aria-hidden", "false");
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeDrawer() {
+        $("#backdrop").classList.remove("is-open");
+        $("#backdrop").setAttribute("aria-hidden", "true");
+        document.body.style.overflow = "";
+        activeId = null;
+        draft = null;
+      }
+
+      function showToast(text) {
+        clearTimeout(toastTimer);
+        $("#toastText").textContent = text;
+        $("#toast").classList.add("is-visible");
+        toastTimer = setTimeout(() => $("#toast").classList.remove("is-visible"), 2800);
+      }
+
+      document.addEventListener("click", (event) => {
+        const mapButton = event.target.closest("[data-map]");
+        if (mapButton) openDrawer(mapButton.dataset.map);
+        const filterButton = event.target.closest("[data-filter]");
+        if (filterButton) {
+          activeFilter = filterButton.dataset.filter;
+          document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("is-active", button === filterButton));
+          renderTable();
+        }
+        const addButton = event.target.closest("[data-add-line]");
+        if (addButton && draft) {
+          const index = Number(addButton.dataset.variantIndex);
+          draft.variants[index].recipe.push({ masterId: null, quantity: 1 });
+          renderDrawer();
+        }
+        const removeButton = event.target.closest("[data-remove-line]");
+        if (removeButton && draft) {
+          const variantIndex = Number(removeButton.dataset.variantIndex);
+          const lineIndex = Number(removeButton.dataset.lineIndex);
+          draft.variants[variantIndex].recipe.splice(lineIndex, 1);
+          renderDrawer();
+        }
+        const quantityButton = event.target.closest("[data-quantity]");
+        if (quantityButton && draft) {
+          const variantIndex = Number(quantityButton.dataset.variantIndex);
+          const lineIndex = Number(quantityButton.dataset.lineIndex);
+          const line = draft.variants[variantIndex].recipe[lineIndex];
+          line.quantity = Math.max(1, Number(line.quantity || 1) + (quantityButton.dataset.quantity === "up" ? 1 : -1));
+          renderDrawer();
+        }
+        const copyButton = event.target.closest("[data-copy-first]");
+        if (copyButton && draft) {
+          const firstRecipe = clone(draft.variants[0].recipe || []);
+          draft.variants.slice(1).forEach((variant) => { variant.recipe = clone(firstRecipe); });
+          renderDrawer();
+          showToast("Copied the first recipe to the other variants.");
+        }
+        if (event.target === $("#backdrop") || event.target.closest("#closeDrawer") || event.target.closest("#cancelMapping")) closeDrawer();
+        if (event.target.closest("#saveMapping") && draft && !$("#saveMapping").disabled) {
+          const listing = findListing(activeId);
+          Object.assign(listing, clone(draft));
+          refreshStatus(listing);
+          closeDrawer();
+          renderTable();
+          showToast(`${listing.title} is now ${statusLabel(listing.status)} in this prototype.`);
+        }
+      });
+
+      document.addEventListener("change", (event) => {
+        if (!draft) return;
+        if (event.target.matches(".individual-select")) {
+          draft.variants[Number(event.target.dataset.index)].masterId = event.target.value || null;
+          renderDrawer();
+        }
+        if (event.target.matches(".component-select")) {
+          draft.variants[Number(event.target.dataset.variantIndex)].recipe[Number(event.target.dataset.lineIndex)].masterId = event.target.value || null;
+          renderDrawer();
+        }
+        if (event.target.matches("[data-quantity-input]")) {
+          draft.variants[Number(event.target.dataset.variantIndex)].recipe[Number(event.target.dataset.lineIndex)].quantity = Math.max(1, Number(event.target.value || 1));
+          renderDrawer();
+        }
+      });
+
+      $("#search").addEventListener("input", renderTable);
+      $("#closeDrawer").addEventListener("click", closeDrawer);
+      document.addEventListener("keydown", (event) => { if (event.key === "Escape" && activeId) closeDrawer(); });
+      renderTable();
+    </script>
+  </body>
+</html>

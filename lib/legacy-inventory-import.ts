@@ -98,7 +98,7 @@ export async function importLegacyInventoryMetadata(dataDirectory = legacyDataDi
   for (const row of packagingRows) {
     const title = row["Packaging Type"];
     if (!title || isInstructionalPackagingRow(title)) continue;
-    const existing = await db.execute({ sql: "SELECT id FROM packaging_materials WHERE title = ? LIMIT 1", args: [title] });
+    const existing = await db.execute({ sql: "SELECT id FROM packaging_materials WHERE title = ? AND active = 1 LIMIT 1", args: [title] });
     const quantity = Math.max(0, numeric(row["Qty on Hand (fill in)"]));
     const leadTime = row["Restock Lead Time (days)"] ? numeric(row["Restock Lead Time (days)"]) : null;
     if (existing.rows[0]) {

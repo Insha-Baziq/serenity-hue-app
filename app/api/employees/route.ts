@@ -1,11 +1,14 @@
 import { createEmployee } from "@/lib/repository";
 import { requireApiSession } from "@/lib/auth-guard";
+import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
+  const limit = takeRateLimit(request, { name: "employee-create", limit: 10, windowMs: 60 * 60 * 1000 });
+  if (!limit.allowed) return rateLimitedResponse(limit.retryAfterSeconds);
 
   let body: { name?: unknown; email?: unknown; password?: unknown };
   try {
