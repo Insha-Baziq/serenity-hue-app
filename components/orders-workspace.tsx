@@ -7,12 +7,13 @@ import { ORDERS_PAGE_SIZES, ordersQueryToParams, type OrdersQuery } from "@/lib/
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { TableColumnPicker } from "@/components/table-column-picker";
 import { ChannelPill, FulfillmentPill, PaymentPill } from "@/components/status-pill";
 import { ProductArt } from "@/components/product-art";
 import { SyncButton } from "@/components/sync-button";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
+import { getPageItems } from "@/lib/pagination";
 import type { Channel, Order, Parcel2GoMatchMethod, Parcel2GoShipmentOption, SyncSnapshot } from "@/lib/types";
 
 type Props = {
@@ -272,11 +273,11 @@ export function OrdersWorkspace({ initialOrders, initialSync, query, total, page
         </div>
       </div>
 
-      <Sheet open={Boolean(selectedOrder)} onOpenChange={(open) => !open && setSelectedId("")}>
-        <SheetContent className="order-sheet" aria-describedby="order-sheet-description">
+      <Dialog open={Boolean(selectedOrder)} onOpenChange={(open) => !open && setSelectedId("")}>
+        <DialogContent className="order-dialog" aria-describedby="order-dialog-description">
           {selectedOrder && <OrderDetails order={selectedOrder} unlinkedParcel2GoShipments={unlinkedParcel2GoShipments} />}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -290,7 +291,7 @@ function OrderDetails({ order, unlinkedParcel2GoShipments }: { order: Order; unl
         <div>
           <p className="workspace-kicker">Order detail</p>
           <div className="order-detail-heading-line">
-            <SheetTitle asChild><h2>{order.number}</h2></SheetTitle>
+            <DialogTitle asChild><h2>{order.number}</h2></DialogTitle>
             <ChannelPill channel={order.channel} />
           </div>
           <div className="order-detail-statuses">
@@ -298,49 +299,55 @@ function OrderDetails({ order, unlinkedParcel2GoShipments }: { order: Order; unl
             <FulfillmentPill status={order.fulfillment} />
           </div>
         </div>
-        {order.adminUrl && <a className={`${buttonVariants({ variant: "outline", size: "compact" })} source-link`} href={order.adminUrl} target="_blank" rel="noreferrer">Open in {sourceLabel}<ExternalLink size={14} aria-hidden="true" /></a>}
+        {order.adminUrl && <div className="order-detail-header__actions"><a className={`${buttonVariants({ variant: "outline", size: "compact" })} source-link`} href={order.adminUrl} target="_blank" rel="noreferrer">Open in {sourceLabel}<ExternalLink size={14} aria-hidden="true" /></a></div>}
       </div>
-      <SheetDescription id="order-sheet-description" className="sr-only">
+      <DialogDescription id="order-dialog-description" className="sr-only">
         Full order information for {order.number}.
-      </SheetDescription>
+      </DialogDescription>
       {!order.adminUrl && <p className="source-link source-link--unavailable">A direct {sourceLabel} link will appear once that channel is connected.</p>}
-      <div className="customer-block">
-        <p className="detail-label">Customer</p>
-        <h3>{order.customer}</h3>
-        {order.address.length > 0 && order.address.map((line) => <p key={line}>{line}</p>)}
-        <p className="customer-contact">{order.email || "No email recorded"}</p>
-        {order.phone && <p className="customer-contact">{order.phone}</p>}
-      </div>
-      <div className="detail-section">
-        <div className="detail-section__heading"><h3>Items</h3><span>Qty</span><span>Total</span></div>
-        {order.items.length === 0 ? <p className="muted-copy">No line items were supplied by the source.</p> : order.items.map((item) => (
-          <div className="detail-item" key={item.id}>
-            <ProductArt tone={item.imageTone} size="small" />
-            <div><strong>{item.title}</strong><small>{item.variant || item.sku}</small></div>
-            <span>{item.quantity}</span>
-            <strong>{formatMoney(item.unitPrice * item.quantity)}</strong>
+      <div className="order-detail-grid">
+        <div className="order-detail-grid__primary">
+          <div className="customer-block">
+            <p className="detail-label">Customer</p>
+            <h3>{order.customer}</h3>
+            {order.address.length > 0 && order.address.map((line) => <p key={line}>{line}</p>)}
+            <p className="customer-contact">{order.email || "No email recorded"}</p>
+            {order.phone && <p className="customer-contact">{order.phone}</p>}
           </div>
-        ))}
+          <div className="detail-section">
+            <div className="detail-section__heading"><h3>Items</h3><span>Qty</span><span>Total</span></div>
+            {order.items.length === 0 ? <p className="muted-copy">No line items were supplied by the source.</p> : order.items.map((item) => (
+              <div className="detail-item" key={item.id}>
+                <ProductArt tone={item.imageTone} size="small" />
+                <div><strong>{item.title}</strong><small>{item.variant || item.sku}</small></div>
+                <span>{item.quantity}</span>
+                <strong>{formatMoney(item.unitPrice * item.quantity)}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+        <aside className="order-detail-grid__secondary">
+          <div className="order-totals">
+            <p><span>Subtotal</span><span>{formatMoney(order.subtotal)}</span></p>
+            <p><span>Shipping</span><span>{formatMoney(order.shipping)}</span></p>
+            <p><span>Tax</span><span>{formatMoney(order.tax)}</span></p>
+            <p className="order-totals__total"><strong>Total</strong><strong>{formatMoney(order.total)}</strong></p>
+            <p className="paid-row"><span>Payment status</span><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></p>
+          </div>
+          <div className="detail-section fulfillment-timeline">
+            <h3>Order timeline</h3>
+            <TimelineStep label="Order placed" detail={compactTime(order.createdAt)} state="complete" />
+            {order.cancelledAt ? (
+              <TimelineStep label="Cancelled" detail={compactTime(order.cancelledAt)} state="current" />
+            ) : <>
+              <TimelineStep label={order.payment === "paid" ? "Paid" : "Payment pending"} detail={order.payment === "paid" ? "Payment received" : "Needs attention"} state={order.payment === "paid" ? "complete" : "current"} />
+              <TimelineStep label={order.fulfillment === "fulfilled" ? "Fulfilled" : "Ready to fulfil"} detail={order.fulfillment === "fulfilled" ? "Completed" : "Awaiting fulfilment"} state={order.fulfillment === "fulfilled" ? "complete" : "current"} />
+            </>}
+          </div>
+          <Parcel2GoDeliverySection order={order} availableShipments={unlinkedParcel2GoShipments} />
+          <div className="source-row"><span>Order source</span><strong>{sourceLabel}</strong></div>
+        </aside>
       </div>
-      <div className="order-totals">
-        <p><span>Subtotal</span><span>{formatMoney(order.subtotal)}</span></p>
-        <p><span>Shipping</span><span>{formatMoney(order.shipping)}</span></p>
-        <p><span>Tax</span><span>{formatMoney(order.tax)}</span></p>
-        <p className="order-totals__total"><strong>Total</strong><strong>{formatMoney(order.total)}</strong></p>
-        <p className="paid-row"><span>Payment status</span><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></p>
-      </div>
-      <div className="detail-section fulfillment-timeline">
-        <h3>Order timeline</h3>
-        <TimelineStep label="Order placed" detail={compactTime(order.createdAt)} state="complete" />
-        {order.cancelledAt ? (
-          <TimelineStep label="Cancelled" detail={compactTime(order.cancelledAt)} state="current" />
-        ) : <>
-          <TimelineStep label={order.payment === "paid" ? "Paid" : "Payment pending"} detail={order.payment === "paid" ? "Payment received" : "Needs attention"} state={order.payment === "paid" ? "complete" : "current"} />
-          <TimelineStep label={order.fulfillment === "fulfilled" ? "Fulfilled" : "Ready to fulfil"} detail={order.fulfillment === "fulfilled" ? "Completed" : "Awaiting fulfilment"} state={order.fulfillment === "fulfilled" ? "complete" : "current"} />
-        </>}
-      </div>
-      <Parcel2GoDeliverySection order={order} availableShipments={unlinkedParcel2GoShipments} />
-      <div className="source-row"><span>Order source</span><strong>{sourceLabel}</strong></div>
     </div>
   );
 }
@@ -350,6 +357,10 @@ function Parcel2GoDeliverySection({ order, availableShipments }: { order: Order;
   const [shipmentId, setShipmentId] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
+  const orderReference = (references: string[]) => {
+    const unique = [...new Set(references.map((reference) => reference.trim()).filter(Boolean))];
+    return unique.find((reference) => reference !== order.number && reference !== order.id) ?? "";
+  };
 
   async function linkShipment() {
     if (!shipmentId) return;
@@ -374,8 +385,9 @@ function Parcel2GoDeliverySection({ order, availableShipments }: { order: Order;
   return (
     <div className="detail-section delivery-section">
       <div className="delivery-section__heading"><h3>Delivery</h3><span>Parcel2Go</span></div>
-      {order.deliveries.length > 0 ? order.deliveries.map((delivery) => (
-        <div className="delivery-record" key={delivery.id}>
+      {order.deliveries.length > 0 ? order.deliveries.map((delivery) => {
+        const reference = orderReference(delivery.sourceReferences);
+        return <div className="delivery-record" key={delivery.id}>
           <div className="delivery-record__summary">
             <div>
               <strong>{delivery.courier}</strong>
@@ -386,7 +398,7 @@ function Parcel2GoDeliverySection({ order, availableShipments }: { order: Order;
           </div>
           <dl className="delivery-record__meta">
             <div><dt>Parcel2Go ref</dt><dd>{delivery.orderLineId}</dd></div>
-            {delivery.sourceReferences.map((reference) => <div key={reference}><dt>Order reference</dt><dd>{reference}</dd></div>)}
+            {reference && <div><dt>Order reference</dt><dd>{reference}</dd></div>}
             {delivery.collectionDate && <div><dt>Collection</dt><dd>{compactTime(delivery.collectionDate)}</dd></div>}
             {delivery.estimatedDeliveryAt && <div><dt>Estimated delivery</dt><dd>{compactTime(delivery.estimatedDeliveryAt)}</dd></div>}
           </dl>
@@ -394,8 +406,8 @@ function Parcel2GoDeliverySection({ order, availableShipments }: { order: Order;
             {delivery.events.map((event) => <TimelineStep key={event.id} label={event.label} detail={compactTime(event.occurredAt)} state="complete" />)}
           </div>}
           {delivery.trackingUrl && <a className={`${buttonVariants({ variant: "outline", size: "compact" })} delivery-link`} href={delivery.trackingUrl} target="_blank" rel="noreferrer">Open in Parcel2Go<ExternalLink size={14} aria-hidden="true" /></a>}
-        </div>
-      )) : (
+        </div>;
+      }) : (
         <div className="delivery-empty">
           <p>No Parcel2Go delivery has been confidently matched to this order yet.</p>
           {availableShipments.length > 0 ? <div className="delivery-linker">
@@ -427,19 +439,4 @@ function deliveryMatchLabel(method: Parcel2GoMatchMethod) {
 
 function TimelineStep({ label, detail, state }: { label: string; detail: string; state: "complete" | "current" }) {
   return <div className={`timeline-step timeline-step--${state}`}><span className="timeline-marker" /><div><strong>{label}</strong><small>{detail}</small></div></div>;
-}
-
-function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {
-  if (totalPages <= 6) return Array.from({ length: totalPages }, (_, index) => index + 1);
-
-  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-  const ordered = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
-  const items: (number | "ellipsis")[] = [];
-
-  ordered.forEach((page, index) => {
-    if (index > 0 && page - ordered[index - 1] > 1) items.push("ellipsis");
-    items.push(page);
-  });
-
-  return items;
 }

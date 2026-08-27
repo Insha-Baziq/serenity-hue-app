@@ -11,7 +11,7 @@ import { relativeTime } from "@/lib/format";
 import type { PackagingMaterial } from "@/lib/types";
 
 type PackagingFilter = "all" | "in-stock" | "low" | "empty";
-type PackagingColumnId = "quantity" | "reorderPoint" | "leadTime" | "updated" | "status";
+type PackagingColumnId = "quantity" | "reorderPoint" | "updated" | "status";
 type PackagingDialogMode = "add" | "edit";
 
 const filters: { label: string; value: PackagingFilter }[] = [
@@ -24,7 +24,6 @@ const filters: { label: string; value: PackagingFilter }[] = [
 const columns: TableColumn<PackagingColumnId>[] = [
   { id: "quantity", label: "On hand" },
   { id: "reorderPoint", label: "Reorder point" },
-  { id: "leadTime", label: "Lead time" },
   { id: "updated", label: "Last updated" },
   { id: "status", label: "Status" },
 ];
@@ -186,7 +185,7 @@ export function PackagingWorkspace({ items }: { items: PackagingMaterial[] }) {
         </div>
         <div className="inventory-scroll">
           <table className="packaging-table-grid">
-            <thead><tr><th>Material</th>{visibleColumns.includes("quantity") && <th>On hand</th>}{visibleColumns.includes("reorderPoint") && <th>Reorder point</th>}{visibleColumns.includes("leadTime") && <th>Lead time</th>}{visibleColumns.includes("updated") && <th>Last updated</th>}{visibleColumns.includes("status") && <th>Status</th>}<th className="packaging-actions-heading">Actions</th></tr></thead>
+            <thead><tr><th>Material</th>{visibleColumns.includes("quantity") && <th>On hand</th>}{visibleColumns.includes("reorderPoint") && <th>Reorder point</th>}{visibleColumns.includes("updated") && <th>Last updated</th>}{visibleColumns.includes("status") && <th>Status</th>}<th className="packaging-actions-heading">Actions</th></tr></thead>
             <tbody>{materials.map((item) => <PackagingRow item={item} key={item.id} visibleColumns={visibleColumns} onEdit={openEditDialog} onDelete={openDeleteDialog} />)}</tbody>
           </table>
         </div>
@@ -196,7 +195,7 @@ export function PackagingWorkspace({ items }: { items: PackagingMaterial[] }) {
             const needsAttention = status !== "In stock";
             return (
               <article className="mobile-record mobile-packaging-card" key={item.id}>
-                <div className="mobile-record__header"><span><strong>{item.title}</strong><small>{item.leadTimeDays ? `${item.leadTimeDays}-day lead time` : "Lead time not set"}</small></span><span className="mobile-packaging-card__actions"><span className={`stock-status stock-status--${needsAttention ? "low" : "confirmed"}`}><i />{status}</span><PackagingActionButtons item={item} onEdit={openEditDialog} onDelete={openDeleteDialog} /></span></div>
+                <div className="mobile-record__header"><span><strong>{item.title}</strong></span><span className="mobile-packaging-card__actions"><span className={`stock-status stock-status--${needsAttention ? "low" : "confirmed"}`}><i />{status}</span><PackagingActionButtons item={item} onEdit={openEditDialog} onDelete={openDeleteDialog} /></span></div>
                 <div className="mobile-packaging-card__metrics"><span><small>On hand</small><strong className={needsAttention ? "quantity-cell quantity-cell--low" : "quantity-cell"}>{item.quantity}</strong></span><span><small>Reorder point</small><strong>{item.reorderPoint}</strong></span><span><small>Last updated</small><strong>{item.updatedAt ? relativeTime(item.updatedAt) : "—"}</strong></span></div>
               </article>
             );
@@ -231,7 +230,7 @@ export function PackagingWorkspace({ items }: { items: PackagingMaterial[] }) {
 function PackagingRow({ item, visibleColumns, onEdit, onDelete }: { item: PackagingMaterial; visibleColumns: PackagingColumnId[]; onEdit: (item: PackagingMaterial) => void; onDelete: (item: PackagingMaterial) => void }) {
   const status = getStatus(item);
   const needsAttention = status !== "In stock";
-  return <tr><td className="packaging-material"><strong>{item.title}</strong><small>{item.leadTimeDays ? `${item.leadTimeDays}-day lead time` : "Lead time not set"}</small></td>{visibleColumns.includes("quantity") && <td className={needsAttention ? "quantity-cell quantity-cell--low" : "quantity-cell"}>{item.quantity}</td>}{visibleColumns.includes("reorderPoint") && <td>{item.reorderPoint}</td>}{visibleColumns.includes("leadTime") && <td>{item.leadTimeDays ? `${item.leadTimeDays} days` : "—"}</td>}{visibleColumns.includes("updated") && <td>{item.updatedAt ? relativeTime(item.updatedAt) : "—"}</td>}{visibleColumns.includes("status") && <td><span className={`stock-status stock-status--${needsAttention ? "low" : "confirmed"}`}><i />{status}</span></td>}<td className="packaging-actions-cell"><PackagingActionButtons item={item} onEdit={onEdit} onDelete={onDelete} /></td></tr>;
+  return <tr><td className="packaging-material"><strong>{item.title}</strong></td>{visibleColumns.includes("quantity") && <td className={needsAttention ? "quantity-cell quantity-cell--low" : "quantity-cell"}>{item.quantity}</td>}{visibleColumns.includes("reorderPoint") && <td>{item.reorderPoint}</td>}{visibleColumns.includes("updated") && <td>{item.updatedAt ? relativeTime(item.updatedAt) : "—"}</td>}{visibleColumns.includes("status") && <td><span className={`stock-status stock-status--${needsAttention ? "low" : "confirmed"}`}><i />{status}</span></td>}<td className="packaging-actions-cell"><PackagingActionButtons item={item} onEdit={onEdit} onDelete={onDelete} /></td></tr>;
 }
 
 function PackagingActionButtons({ item, onEdit, onDelete }: { item: PackagingMaterial; onEdit: (item: PackagingMaterial) => void; onDelete: (item: PackagingMaterial) => void }) {

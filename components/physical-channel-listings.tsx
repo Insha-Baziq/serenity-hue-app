@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { channelProductDetailHref, groupChannelListings, listingVariantLabel, mappingStatusLabel, type ChannelProductGroup } from "@/lib/physical-channel-products";
+import { getPageItems } from "@/lib/pagination";
 import type { PhysicalChannel, PhysicalChannelListing, PhysicalInventoryItem, PhysicalInventoryVariant } from "@/lib/types";
 
 type DraftComponent = { physicalVariantId: string; quantityPerSale: number };
@@ -366,15 +367,6 @@ export function PhysicalChannelListings({ channel, listings, items, onSaved }: {
     <div className="physical-channel-table-wrap"><Table className="physical-channel-table"><TableHeader><TableRow><TableHead>Product</TableHead><TableHead>Variants</TableHead><TableHead>Type</TableHead><TableHead>Stock</TableHead><TableHead>Mapping</TableHead><TableHead><span className="sr-only">Map product</span></TableHead></TableRow></TableHeader><TableBody>{pagedGroups.map((group) => <TableRow key={group.id}><TableCell className="physical-channel-listing"><div className="physical-channel-listing__inner"><div className="physical-channel-listing__mark"><ChannelMark channel={channel} /></div><div><Link className="physical-channel-listing__title" href={channelProductDetailHref(channel, group.externalProductId)}>{group.title}</Link>{group.listingUrl && <a href={group.listingUrl} target="_blank" rel="noreferrer">{channel === "tiktok" ? "View on TikTok Shop" : "View source"} <ExternalLink size={11} /></a>}</div></div></TableCell><TableCell className="physical-channel-variant-count">{group.listings.length}</TableCell><TableCell><span className={`physical-listing-kind physical-listing-kind--${group.kind}`}>{listingKindLabel(group.kind)}</span></TableCell><TableCell className="physical-channel-quantity">{group.channelQuantity === null ? <span>Not fetched</span> : <strong>{group.channelQuantity.toLocaleString()} <small>units</small></strong>}</TableCell><TableCell><MappingStatus status={group.mappingStatus} /></TableCell><TableCell className="physical-channel-actions"><MappingManager group={group} items={items} onSaved={onSaved} /></TableCell></TableRow>)}</TableBody></Table>{!visible.length && <div className="table-empty"><PackageOpen size={18} />No channel products match that search.</div>}</div>
     <footer className="table-footer physical-channel-table-footer"><div className="page-size-control"><Select value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); setPage(1); }}><SelectTrigger aria-label="Channel products per page"><SelectValue /></SelectTrigger><SelectContent>{PAGE_SIZES.map((size) => <SelectItem key={size} value={String(size)}>{size} per page</SelectItem>)}</SelectContent></Select></div><div className="pagination" aria-label={`${channelName} inventory pagination`}><span className="pagination-summary">{pageStart + (visible.length ? 1 : 0)}–{pageEnd} of {visible.length}</span><Button variant="ghost" size="icon" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={currentPage === 1} aria-label="Previous page"><ChevronLeft size={16} /></Button>{pageItems.map((item, index) => item === "ellipsis" ? <span className="pagination-ellipsis" key={`ellipsis-${index}`}>…</span> : <Button variant="ghost" size="compact" key={item} className={item === currentPage ? "is-current" : ""} aria-current={item === currentPage ? "page" : undefined} onClick={() => setPage(item)}>{item}</Button>)}<Button variant="ghost" size="icon" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={currentPage === totalPages} aria-label="Next page"><ChevronRight size={16} /></Button></div></footer>
   </section>;
-}
-
-function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {
-  if (totalPages <= 6) return Array.from({ length: totalPages }, (_, index) => index + 1);
-  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-  const ordered = [...pages].filter((item) => item >= 1 && item <= totalPages).sort((a, b) => a - b);
-  const items: (number | "ellipsis")[] = [];
-  ordered.forEach((item, index) => { if (index > 0 && item - ordered[index - 1] > 1) items.push("ellipsis"); items.push(item); });
-  return items;
 }
 
 export { ChannelMark };

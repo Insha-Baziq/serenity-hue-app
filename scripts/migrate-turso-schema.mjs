@@ -1,6 +1,21 @@
 import { createClient } from "@libsql/client";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import nextEnv from "@next/env";
+
+const { loadEnvConfig, updateInitialEnv } = nextEnv;
+
+// Use the same local environment resolution as `next dev` (.env.local). A real
+// deployed environment still wins because Next does not replace non-empty values.
+loadEnvConfig(process.cwd(), true);
+const blankEnvironmentKeys = ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"].filter(
+  (key) => process.env[key] !== undefined && !process.env[key]?.trim(),
+);
+if (blankEnvironmentKeys.length) {
+  updateInitialEnv(Object.fromEntries(blankEnvironmentKeys.map((key) => [key, undefined])));
+  for (const key of blankEnvironmentKeys) delete process.env[key];
+}
+loadEnvConfig(process.cwd(), true, console, true);
 
 const url = process.env.TURSO_DATABASE_URL?.trim();
 const authToken = process.env.TURSO_AUTH_TOKEN?.trim();

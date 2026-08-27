@@ -5,8 +5,9 @@ import { getTursoClient } from "@/lib/turso";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import { hashPassword } from "better-auth/crypto";
-import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabFormula, LabFormulaLine, LabIngredient, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { OrdersQuery } from "@/lib/orders-query";
+import { LAB_FORMULAS } from "@/lib/labs-formulas";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -327,6 +328,36 @@ export async function getCustomers(): Promise<Customer[]> {
       type: orders > 1 ? "repeat" : !email && !phone ? "guest" : "one-time",
     };
   });
+}
+
+function labIngredientId(title: string) {
+  return `lab-ingredient-${createHash("sha256").update(title).digest("hex").slice(0, 16)}`;
+}
+
+async function ensureLabsData() {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const ingredients = [...new Set(LAB_FORMULAS.flatMap((formula) => formula.lines.map((line) => line.ingredient)))];
+  const statements: Array<{ sql: string; args: SqlValue[] }> = ingredients.map((title) => ({
+    sql: `INSERT OR IGNORE INTO lab_ingredients (id, title, quantity_grams, quantity_known, reorder_point_grams, active, created_at, updated_at)
+          VALUES (?, ?, 0, 0, 0, 1, ?, ?)`,
+    args: [labIngredientId(title), title, now, now],
+  }));
+  for (const formula of LAB_FORMULAS) {
+    statements.push({
+      sql: `INSERT INTO lab_formulas (id, title, subtitle, notes, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, subtitle=excluded.subtitle, notes=excluded.notes, updated_at=excluded.updated_at`,
+      args: [formula.id, formula.title, formula.subtitle, formula.notes, now, now],
+    });
+    formula.lines.forEach((line, index) => statements.push({
+      sql: `INSERT OR IGNORE INTO lab_formula_ingredients (id, formula_id, ingredient_id, percentage, calculation, phase, note, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [`${formula.id}-line-${index + 1}`, formula.id, labIngredientId(line.ingredient), line.percentage ?? null, line.calculation, line.phase ?? null, line.note ?? null, index],
+    }));
+  }
+  if (statements.length) await db.batch(statements, "write");
+  return db;
 }
 
 /** Streams matching orders in stable keyset batches so large exports stay bounded. */
@@ -1004,6 +1035,165 @@ export async function getPhysicalProductDetail(id: string): Promise<PhysicalProd
     sourceLabel: stringValue(row.source_label) || "Individual catalogue",
     variants: variantRows,
   };
+}
+
+/**
+ * Returns recent mapped sell-through for a master product. It deliberately
+ * reads historical order lines, rather than only post-cutover inventory
+ * applications, and expands exact listing recipes so bundle components count.
+ */
+export async function getPhysicalProductRunway(id: string): Promise<PhysicalInventoryRunway> {
+  const db = await getTursoClient();
+  const now = new Date();
+  const start = new Date(now);
+  start.setUTCDate(start.getUTCDate() - 89);
+  start.setUTCHours(0, 0, 0, 0);
+  const dates = Array.from({ length: 90 }, (_, index) => {
+    const day = new Date(start);
+    day.setUTCDate(start.getUTCDate() + index);
+    return day.toISOString().slice(0, 10);
+  });
+  const sales = await db.execute({
+    sql: `WITH shopify_reversals AS (
+            SELECT order_id, source_line_item_id, SUM(quantity) AS quantity
+            FROM shopify_refund_line_items
+            WHERE restocked = 1
+            GROUP BY order_id, source_line_item_id
+          ), tiktok_reversals AS (
+            SELECT order_id, source_line_item_id, SUM(quantity) AS quantity
+            FROM tiktok_after_sales_line_items
+            WHERE (event_type = 'cancel' AND status IN ('CANCELLATION_REQUEST_SUCCESS', 'CANCELLATION_REQUEST_COMPLETE'))
+               OR (event_type = 'return' AND return_type = 'RETURN_AND_REFUND'
+                   AND status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE'))
+            GROUP BY order_id, source_line_item_id
+          )
+          SELECT date(o.source_created_at) AS sale_date, o.source,
+                 SUM(MAX(0, oi.quantity - COALESCE(CASE WHEN o.source = 'shopify' THEN shopify_reversals.quantity ELSE tiktok_reversals.quantity END, 0)) * c.quantity_per_sale) AS units
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          JOIN physical_channel_listings l
+            ON l.active = 1 AND l.channel = o.source
+           AND ((o.source = 'shopify' AND l.external_variant_id = oi.source_variant_id)
+             OR (o.source = 'tiktok' AND l.external_product_id = oi.source_product_id
+               AND (l.external_variant_id = oi.source_variant_id
+                 OR (l.external_variant_id IS NULL AND NOT EXISTS (
+                   SELECT 1 FROM physical_channel_listings exact_listing
+                   WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                     AND exact_listing.external_product_id = oi.source_product_id
+                     AND exact_listing.external_variant_id = oi.source_variant_id
+                 )))))
+          JOIN physical_listing_components c ON c.listing_id = l.id
+          JOIN physical_inventory_variants variant ON variant.id = c.physical_variant_id
+          LEFT JOIN shopify_reversals ON shopify_reversals.order_id = oi.order_id
+            AND shopify_reversals.source_line_item_id = oi.source_line_item_id
+          LEFT JOIN tiktok_reversals ON tiktok_reversals.order_id = oi.order_id
+            AND tiktok_reversals.source_line_item_id = oi.source_line_item_id
+          WHERE variant.physical_item_id = ? AND o.cancelled_at IS NULL
+            AND date(o.source_created_at) >= date(?)
+          GROUP BY date(o.source_created_at), o.source`,
+    args: [id, start.toISOString()],
+  });
+  const salesByDate = new Map<string, { shopify: number; tiktok: number }>();
+  for (const row of sales.rows) {
+    const date = stringValue(row.sale_date);
+    if (!date) continue;
+    const entry = salesByDate.get(date) ?? { shopify: 0, tiktok: 0 };
+    const units = numberValue(row.units);
+    if (stringValue(row.source) === "tiktok") entry.tiktok += units;
+    else entry.shopify += units;
+    salesByDate.set(date, entry);
+  }
+  return {
+    daysAvailable: dates.length,
+    generatedAt: now.toISOString(),
+    dailySales: dates.map((date) => {
+      const entry = salesByDate.get(date);
+      return {
+        date,
+        shopify: Math.max(0, entry?.shopify ?? 0),
+        tiktok: Math.max(0, entry?.tiktok ?? 0),
+      };
+    }),
+  };
+}
+
+/**
+ * Returns the same mapped sell-through for every active physical product in
+ * one query. Bundles are expanded through their component recipes, so the
+ * inventory table remains consistent with the product-detail runway.
+ */
+export async function getPhysicalInventoryRunways(): Promise<PhysicalInventoryRunways> {
+  const db = await getTursoClient();
+  const now = new Date();
+  const start = new Date(now);
+  start.setUTCDate(start.getUTCDate() - 89);
+  start.setUTCHours(0, 0, 0, 0);
+  const dates = Array.from({ length: 90 }, (_, index) => {
+    const day = new Date(start);
+    day.setUTCDate(start.getUTCDate() + index);
+    return day.toISOString().slice(0, 10);
+  });
+  const sales = await db.execute({
+    sql: `WITH shopify_reversals AS (
+            SELECT order_id, source_line_item_id, SUM(quantity) AS quantity
+            FROM shopify_refund_line_items
+            WHERE restocked = 1
+            GROUP BY order_id, source_line_item_id
+          ), tiktok_reversals AS (
+            SELECT order_id, source_line_item_id, SUM(quantity) AS quantity
+            FROM tiktok_after_sales_line_items
+            WHERE (event_type = 'cancel' AND status IN ('CANCELLATION_REQUEST_SUCCESS', 'CANCELLATION_REQUEST_COMPLETE'))
+               OR (event_type = 'return' AND return_type = 'RETURN_AND_REFUND'
+                   AND status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE'))
+            GROUP BY order_id, source_line_item_id
+          )
+          SELECT variant.physical_item_id, date(o.source_created_at) AS sale_date, o.source,
+                 SUM(MAX(0, oi.quantity - COALESCE(CASE WHEN o.source = 'shopify' THEN shopify_reversals.quantity ELSE tiktok_reversals.quantity END, 0)) * c.quantity_per_sale) AS units
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          JOIN physical_channel_listings l
+            ON l.active = 1 AND l.channel = o.source
+           AND ((o.source = 'shopify' AND l.external_variant_id = oi.source_variant_id)
+             OR (o.source = 'tiktok' AND l.external_product_id = oi.source_product_id
+               AND (l.external_variant_id = oi.source_variant_id
+                 OR (l.external_variant_id IS NULL AND NOT EXISTS (
+                   SELECT 1 FROM physical_channel_listings exact_listing
+                   WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                     AND exact_listing.external_product_id = oi.source_product_id
+                     AND exact_listing.external_variant_id = oi.source_variant_id
+                 )))))
+          JOIN physical_listing_components c ON c.listing_id = l.id
+          JOIN physical_inventory_variants variant ON variant.id = c.physical_variant_id
+          JOIN physical_inventory_items item ON item.id = variant.physical_item_id AND item.active = 1
+          LEFT JOIN shopify_reversals ON shopify_reversals.order_id = oi.order_id
+            AND shopify_reversals.source_line_item_id = oi.source_line_item_id
+          LEFT JOIN tiktok_reversals ON tiktok_reversals.order_id = oi.order_id
+            AND tiktok_reversals.source_line_item_id = oi.source_line_item_id
+          WHERE o.cancelled_at IS NULL AND date(o.source_created_at) >= date(?)
+          GROUP BY variant.physical_item_id, date(o.source_created_at), o.source`,
+    args: [start.toISOString()],
+  });
+  const salesByItem = new Map<string, Map<string, { shopify: number; tiktok: number }>>();
+  for (const row of sales.rows) {
+    const itemId = stringValue(row.physical_item_id);
+    const date = stringValue(row.sale_date);
+    if (!itemId || !date) continue;
+    const salesByDate = salesByItem.get(itemId) ?? new Map<string, { shopify: number; tiktok: number }>();
+    const entry = salesByDate.get(date) ?? { shopify: 0, tiktok: 0 };
+    const units = numberValue(row.units);
+    if (stringValue(row.source) === "tiktok") entry.tiktok += units;
+    else entry.shopify += units;
+    salesByDate.set(date, entry);
+    salesByItem.set(itemId, salesByDate);
+  }
+  return Object.fromEntries([...salesByItem.entries()].map(([itemId, salesByDate]) => [itemId, {
+    daysAvailable: dates.length,
+    generatedAt: now.toISOString(),
+    dailySales: dates.map((date) => {
+      const entry = salesByDate.get(date);
+      return { date, shopify: Math.max(0, entry?.shopify ?? 0), tiktok: Math.max(0, entry?.tiktok ?? 0) };
+    }),
+  }]));
 }
 
 export async function updatePhysicalProduct(input: { itemId: string; title: string }) {
@@ -2209,4 +2399,199 @@ export async function takeSyncLease(ownerId: string, durationSeconds = 240) {
 export async function releaseSyncLease(ownerId: string) {
   const db = await getTursoClient();
   await db.execute({ sql: "DELETE FROM sync_leases WHERE name = 'direct-channel-sync' AND owner_id = ?", args: [ownerId] });
+}
+
+function labQuantity(value: number) {
+  if (!Number.isFinite(value) || value < 0 || value > 10_000_000) throw new Error("Lab quantity must be between 0 and 10,000,000 g");
+  return Math.round(value * 1000) / 1000;
+}
+
+function batchQuantity(value: number) {
+  if (!Number.isFinite(value) || value <= 0 || value > 10_000_000) throw new Error("Batch size must be between 0.001 and 10,000,000 g");
+  return Math.round(value * 1000) / 1000;
+}
+
+function toLabFormulaLine(row: Record<string, unknown>): LabFormulaLine {
+  const calculation = stringValue(row.calculation);
+  return {
+    ingredientId: stringValue(row.ingredient_id),
+    ingredient: stringValue(row.ingredient),
+    percentage: row.percentage === null ? null : numberValue(row.percentage),
+    calculation: calculation === "remainder" || calculation === "manual" ? calculation : "fixed",
+    phase: stringValue(row.phase),
+    note: stringValue(row.note),
+    quantityGrams: numberValue(row.quantity_grams),
+    quantityKnown: numberValue(row.quantity_known) === 1,
+  };
+}
+
+export async function getLabIngredients(): Promise<LabIngredient[]> {
+  const db = await ensureLabsData();
+  const result = await db.execute(`
+    SELECT i.id, i.title, i.quantity_grams, i.quantity_known, i.reorder_point_grams, i.updated_at,
+           COUNT(DISTINCT fi.formula_id) AS formula_count
+    FROM lab_ingredients i
+    LEFT JOIN lab_formula_ingredients fi ON fi.ingredient_id = i.id
+    WHERE i.active = 1
+    GROUP BY i.id
+    ORDER BY i.title
+  `);
+  return result.rows.map((row) => ({
+    id: stringValue(row.id), title: stringValue(row.title), quantityGrams: numberValue(row.quantity_grams),
+    quantityKnown: numberValue(row.quantity_known) === 1, reorderPointGrams: numberValue(row.reorder_point_grams),
+    usedByFormulaCount: numberValue(row.formula_count), updatedAt: stringValue(row.updated_at),
+  }));
+}
+
+export async function getLabFormulas(): Promise<LabFormula[]> {
+  const db = await ensureLabsData();
+  const result = await db.execute(`
+    SELECT f.id, f.title, f.subtitle, f.notes, COUNT(fi.id) AS ingredient_count
+    FROM lab_formulas f LEFT JOIN lab_formula_ingredients fi ON fi.formula_id = f.id
+    WHERE f.active = 1 GROUP BY f.id ORDER BY f.title
+  `);
+  return result.rows.map((row) => ({
+    id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes),
+    ingredientCount: numberValue(row.ingredient_count), lines: [],
+  }));
+}
+
+export async function getLabFormula(id: string): Promise<LabFormula | null> {
+  const db = await ensureLabsData();
+  const formula = await db.execute({ sql: "SELECT id, title, subtitle, notes FROM lab_formulas WHERE id = ? AND active = 1", args: [id] });
+  const row = formula.rows[0];
+  if (!row) return null;
+  const lines = await db.execute({
+    sql: `SELECT fi.ingredient_id, i.title AS ingredient, fi.percentage, fi.calculation, fi.phase, fi.note, i.quantity_grams, i.quantity_known
+          FROM lab_formula_ingredients fi JOIN lab_ingredients i ON i.id = fi.ingredient_id
+          WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [id],
+  });
+  return { id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes), ingredientCount: lines.rows.length, lines: lines.rows.map((line) => toLabFormulaLine(line as Record<string, unknown>)) };
+}
+
+export async function getLabBatches(limit = 100, formulaId?: string): Promise<LabBatch[]> {
+  const db = await ensureLabsData();
+  const result = await db.execute({
+    sql: `SELECT b.id, b.batch_number, b.target_grams, b.actor, b.created_at, f.title AS formula
+          FROM lab_batches b JOIN lab_formulas f ON f.id = b.formula_id
+          ${formulaId ? "WHERE b.formula_id = ?" : ""}
+          ORDER BY b.created_at DESC LIMIT ?`, args: formulaId ? [formulaId, Math.min(Math.max(1, limit), 100)] : [Math.min(Math.max(1, limit), 100)],
+  });
+  return result.rows.map((row) => ({ id: stringValue(row.id), formula: stringValue(row.formula), batchNumber: stringValue(row.batch_number), targetGrams: numberValue(row.target_grams), actor: stringValue(row.actor), createdAt: stringValue(row.created_at) }));
+}
+
+export async function createLabFormula(input: {
+  title: string;
+  subtitle?: string;
+  notes?: string;
+  lines: Array<{ ingredient: string; calculation: "fixed" | "remainder" | "manual"; percentage?: number; phase?: string; note?: string }>;
+}) {
+  const title = input.title.trim();
+  const subtitle = input.subtitle?.trim() ?? "";
+  const notes = input.notes?.trim() ?? "";
+  if (!title || title.length > 140) throw new Error("Enter a formula name of up to 140 characters");
+  if (subtitle.length > 200 || notes.length > 1400) throw new Error("Keep the formula details within the allowed length");
+  if (!input.lines.length) throw new Error("Add at least one ingredient before saving the formula");
+
+  const lines = input.lines.map((line, index) => {
+    const ingredient = line.ingredient.trim();
+    const phase = line.phase?.trim() ?? "";
+    const note = line.note?.trim() ?? "";
+    if (!ingredient || ingredient.length > 180) throw new Error(`Ingredient ${index + 1} needs a name of up to 180 characters`);
+    if (!["fixed", "remainder", "manual"].includes(line.calculation)) throw new Error(`Choose how ingredient ${index + 1} is calculated`);
+    const percentage = line.calculation === "fixed" ? Number(line.percentage) : null;
+    if (line.calculation === "fixed" && (!Number.isFinite(percentage) || percentage === null || percentage <= 0 || percentage > 100)) throw new Error(`Enter a percentage from 0.001 to 100 for ${ingredient}`);
+    if (phase.length > 40 || note.length > 500) throw new Error(`Keep the details for ${ingredient} shorter`);
+    return { ingredient, calculation: line.calculation, percentage, phase, note };
+  });
+  if (new Set(lines.map((line) => line.ingredient.toLocaleLowerCase())).size !== lines.length) throw new Error("Use each ingredient only once in a formula");
+  if (lines.filter((line) => line.calculation === "remainder").length > 1) throw new Error("A formula can have only one remainder-to-100% ingredient");
+  if (lines.filter((line) => line.calculation === "fixed").reduce((sum, line) => sum + (line.percentage ?? 0), 0) > 100) throw new Error("Fixed percentages cannot total more than 100%");
+
+  const db = await ensureLabsData();
+  const formulaId = `lab-formula-${randomUUID()}`;
+  const now = new Date().toISOString();
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE lower(title) = lower(?)", args: [title] });
+    if (existing.rows[0]) throw new Error("LAB_FORMULA_TITLE_EXISTS");
+    for (const line of lines) {
+      await transaction.execute({
+        sql: `INSERT OR IGNORE INTO lab_ingredients (id, title, quantity_grams, quantity_known, reorder_point_grams, active, created_at, updated_at)
+              VALUES (?, ?, 0, 0, 0, 1, ?, ?)`,
+        args: [labIngredientId(line.ingredient), line.ingredient, now, now],
+      });
+    }
+    await transaction.execute({ sql: "INSERT INTO lab_formulas (id, title, subtitle, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)", args: [formulaId, title, subtitle, notes, now, now] });
+    for (const [index, line] of lines.entries()) {
+      await transaction.execute({
+        sql: `INSERT INTO lab_formula_ingredients (id, formula_id, ingredient_id, percentage, calculation, phase, note, sort_order)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [`${formulaId}-line-${index + 1}`, formulaId, labIngredientId(line.ingredient), line.percentage, line.calculation, line.phase || null, line.note || null, index],
+      });
+    }
+    await transaction.commit();
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+  const formula = await getLabFormula(formulaId);
+  if (!formula) throw new Error("LAB_FORMULA_NOT_FOUND");
+  return formula;
+}
+
+export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; actor: string }) {
+  const db = await ensureLabsData();
+  const quantity = labQuantity(input.quantityGrams);
+  const reorderPoint = input.reorderPointGrams === undefined ? undefined : labQuantity(input.reorderPointGrams);
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const existing = await transaction.execute({ sql: "SELECT quantity_grams, reorder_point_grams FROM lab_ingredients WHERE id = ? AND active = 1", args: [input.id] });
+    const row = existing.rows[0];
+    if (!row) throw new Error("LAB_INGREDIENT_NOT_FOUND");
+    const before = numberValue(row.quantity_grams);
+    const finalReorder = reorderPoint ?? numberValue(row.reorder_point_grams);
+    await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, quantity_known = 1, reorder_point_grams = ?, updated_at = ? WHERE id = ?", args: [quantity, finalReorder, now, input.id] });
+    await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
+      VALUES (?, ?, 'manual_count', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), input.id, input.actor, before, quantity, quantity - before, `ingredient:${input.id}`, now] });
+    await transaction.commit();
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+  return getLabIngredients();
+}
+
+export async function createLabBatch(input: { formulaId: string; batchNumber: string; targetGrams: number; actor: string }) {
+  const db = await ensureLabsData();
+  const batchNumber = input.batchNumber.trim();
+  if (batchNumber.length < 1 || batchNumber.length > 80) throw new Error("Enter a batch number of up to 80 characters");
+  const targetGrams = batchQuantity(input.targetGrams);
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const formula = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
+    if (!formula.rows[0]) throw new Error("LAB_FORMULA_NOT_FOUND");
+    const rows = await transaction.execute({ sql: `SELECT fi.ingredient_id, fi.percentage, fi.calculation, i.title, i.quantity_grams, i.quantity_known
+      FROM lab_formula_ingredients fi JOIN lab_ingredients i ON i.id = fi.ingredient_id
+      WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [input.formulaId] });
+    if (!rows.rows.length) throw new Error("LAB_FORMULA_HAS_NO_LINES");
+    const lines = rows.rows.map((row) => ({ id: stringValue(row.ingredient_id), title: stringValue(row.title), percentage: row.percentage === null ? null : numberValue(row.percentage), calculation: stringValue(row.calculation), quantity: numberValue(row.quantity_grams), known: numberValue(row.quantity_known) === 1 }));
+    const fixedTotal = lines.filter((line) => line.calculation === "fixed").reduce((sum, line) => sum + (line.percentage ?? 0), 0);
+    const requirements = lines.flatMap((line) => {
+      if (line.calculation === "manual") return [];
+      const percentage = line.calculation === "remainder" ? 100 - fixedTotal : line.percentage ?? 0;
+      return [{ ...line, required: Math.round(targetGrams * percentage * 10) / 1000 }];
+    });
+    const unavailable = requirements.filter((line) => !line.known || line.quantity + 0.00001 < line.required);
+    if (unavailable.length) throw new Error(`LAB_INGREDIENTS_UNAVAILABLE:${unavailable.map((line) => line.title).join(", ")}`);
+    const duplicate = await transaction.execute({ sql: "SELECT id FROM lab_batches WHERE batch_number = ?", args: [batchNumber] });
+    if (duplicate.rows[0]) throw new Error("LAB_BATCH_ALREADY_EXISTS");
+    const batchId = `lab-batch-${randomUUID()}`;
+    await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor, now] });
+    for (const line of requirements) {
+      const after = Math.round((line.quantity - line.required) * 1000) / 1000;
+      await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, updated_at = ? WHERE id = ?", args: [after, now, line.id] });
+      await transaction.execute({ sql: "INSERT INTO lab_batch_ingredients (id, batch_id, ingredient_id, required_grams, quantity_before, quantity_after) VALUES (?, ?, ?, ?, ?, ?)", args: [randomUUID(), batchId, line.id, line.required, line.quantity, after] });
+      await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, batch_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
+        VALUES (?, ?, ?, 'batch_deduct', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), line.id, batchId, input.actor, line.quantity, after, -line.required, batchNumber, now] });
+    }
+    await transaction.commit();
+    return { id: batchId, batchNumber, targetGrams };
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
 }

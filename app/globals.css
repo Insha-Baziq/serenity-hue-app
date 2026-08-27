@@ -325,6 +325,67 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 900px) { :root { --sidebar-width: 78px; }.brand-lockup { height: 96px; padding: 16px; }.brand-lockup img { width: 50px; object-position: left; object-fit: cover; }.nav-list { padding: 5px 10px; }.nav-link { justify-content: center; padding: 0; }.nav-link span, .operations-label, .sidebar-footnote { display: none; }.nav-link--inventory .inventory-chevron { display: none; }.inventory-subnav { padding: 0 10px 5px; }.inventory-subnav__link { justify-content: center; min-height: 31px; padding: 0; font-size: 0; }.inventory-subnav__link::before { width: 6px; height: 6px; margin-right: 0; }.nav-link.is-active::before { position: absolute; left: 0; margin-left: 0; border-radius: 0 4px 4px 0; }.workspace-header { padding-bottom: 25px; } }
 @media (max-width: 640px) { .operations-shell { display: block; }.sidebar { position: sticky; z-index: 20; top: 0; flex-direction: row; align-items: center; width: 100%; height: 62px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line-strong); }.brand-lockup { flex: 0 0 63px; height: 62px; padding: 9px; }.brand-lockup img { width: 42px; }.nav-list { display: flex; gap: 0; align-self: stretch; padding: 0; }.nav-link { flex: 0 0 55px; min-height: 62px; }.sidebar-spacer, .operations-label, .nav-list--operation { display: none; }.workspace { padding: 29px 15px 38px; }.workspace-header { flex-direction: column; gap: 19px; }.workspace h1 { font-size: 48px; }.header-actions { justify-content: flex-start; }.header-actions .ui-button { padding: 0 13px; }.orders-layout { min-height: 0; }.orders-content { padding-top: 20px; }.order-toolbar { flex-direction: column; align-items: stretch; gap: 9px; }.search-field, .order-date-control { width: 100%; }.orders-tabs { align-items: stretch; overflow-x: auto; }.orders-tabs > div { min-width: max-content; }.orders-tabs button { min-width: auto; padding: 0 15px; }.table-filter { display: none; }.orders-table-frame { margin: 0 -1px; border-radius: 13px; }.table-footer { gap: 15px; }.table-footer__hint { display: none; }.ui-sheet { width: min(100%, 468px); }.order-details { padding: 34px 22px 42px; }.ui-sheet-close { top: 14px; margin-right: 14px; }.inventory-toolbar { padding: 13px; }.search-field--inventory { width: 100%; }.segmented-control { width: 100%; }.segmented-control button { min-width: max-content; padding: 0 13px; }.packaging-table header { padding: 12px 14px; }.packaging-table header div { align-items: flex-start; flex-direction: column; }.packaging-row { grid-template-columns: minmax(150px, 1fr) 55px 86px; padding: 0 14px; font-size: 12px; }.packaging-row > span:first-child { gap: 8px; }.live-caption { font-size: 12px; }.sync-message { right: auto; left: 0; } }
 
+/* Labs: a calm, separate ingredient and batch workspace. */
+.workspace--labs { max-width: 1320px; }
+.labs-header { align-items: center; }
+.labs-header .workspace-description { max-width: 620px; }
+.labs-section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 4px 0 14px; }
+.labs-section-heading h2 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 28px; font-weight: 400; letter-spacing: -0.035em; }
+.labs-section-heading p { margin-top: 5px; color: var(--ink-soft); font-size: 13px; }
+.labs-formula-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.labs-formula-card { display: flex; align-items: center; gap: 15px; min-height: 125px; padding: 20px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); box-shadow: 0 1px 2px rgba(61, 32, 48, 0.03); transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease; }
+.labs-formula-card:hover { border-color: #dca8c9; box-shadow: var(--shadow-soft); transform: translateY(-2px); }
+.labs-formula-card:focus-visible, .labs-edit-button:focus-visible { outline: 3px solid rgba(193, 58, 155, 0.28); outline-offset: 3px; }
+.labs-formula-card__mark, .labs-formula-header__mark, .labs-batch-row__icon { display: grid; flex: 0 0 auto; place-items: center; border: 1px solid #e7cddd; border-radius: 12px; background: #fff5fa; color: var(--plum); }
+.labs-formula-card__mark { width: 48px; height: 48px; }.labs-formula-card__body { display: grid; min-width: 0; gap: 4px; }.labs-formula-card__body strong { color: var(--ink); font-size: 16px; }.labs-formula-card__body small { overflow: hidden; color: var(--ink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.labs-formula-card__body em { color: var(--plum); font-size: 11px; font-style: normal; font-weight: 700; }.labs-formula-card__arrow { margin-left: auto; color: var(--ink-faint); transition: color 160ms ease, transform 160ms ease; }.labs-formula-card:hover .labs-formula-card__arrow { color: var(--magenta); transform: translateX(3px); }
+.labs-recent { margin-top: 38px; }.labs-batch-list, .labs-empty, .labs-ingredients-frame, .labs-recipe, .labs-formula-note { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }.labs-batch-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; min-height: 66px; padding: 0 18px; border-bottom: 1px solid var(--line); }.labs-batch-row:last-child { border-bottom: 0; }.labs-batch-row__icon { width: 32px; height: 32px; border-radius: 9px; }.labs-batch-row div { display: grid; gap: 2px; }.labs-batch-row strong { color: var(--ink); font-size: 13px; }.labs-batch-row small { color: var(--ink-soft); font-size: 11px; }.labs-batch-row > span:last-child { color: var(--plum-dark); font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums; }.labs-empty { display: flex; align-items: center; gap: 10px; padding: 25px; color: var(--ink-soft); font-size: 13px; }
+.labs-back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 22px; color: var(--plum); font-size: 13px; font-weight: 700; }.labs-back:hover { color: var(--magenta); }.labs-formula-header { display: flex; align-items: center; gap: 16px; padding-bottom: 26px; }.labs-formula-header__mark { width: 58px; height: 58px; }.labs-formula-header h1 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: clamp(34px, 4vw, 54px); font-weight: 400; letter-spacing: -0.05em; line-height: .98; }.labs-formula-header p { margin-top: 6px; color: var(--ink-soft); font-size: 14px; }.labs-formula-header .ui-button { margin-left: auto; }.labs-formula-note { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 28px; padding: 15px 17px; border-color: #eadce4; background: #fffafd; color: #705560; }.labs-formula-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--magenta); }.labs-formula-note p { font-size: 12px; line-height: 1.55; }
+.labs-recipe { padding-top: 18px; }.labs-recipe .labs-section-heading { padding: 0 20px; }.labs-recipe-table-wrap, .labs-ingredients-scroll { overflow-x: auto; }.labs-recipe-table, .labs-ingredients-table { width: 100%; min-width: 680px; border-collapse: collapse; text-align: left; }.labs-recipe-table th, .labs-ingredients-table th { height: 42px; padding: 0 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: #75626c; font-size: 10px; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; }.labs-recipe-table td, .labs-ingredients-table td { height: 57px; padding: 0 18px; border-bottom: 1px solid #eee8eb; color: #57464f; font-size: 12px; font-variant-numeric: tabular-nums; }.labs-recipe-table tbody tr:last-child td, .labs-ingredients-table tbody tr:last-child td { border-bottom: 0; }.labs-recipe-table td strong, .labs-ingredients-table td strong { display: block; color: var(--ink); font-size: 12px; }.labs-recipe-table td small { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 10px; }.labs-not-counted { color: #a85b0b !important; font-style: italic; }
+.labs-ingredients-frame { box-shadow: 0 1px 2px rgba(61, 32, 48, 0.03); }.labs-ingredients-table tbody tr:hover td { background: #fff9fc; }.labs-edit-button { display: grid; place-items: center; width: 33px; height: 33px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--plum); }.labs-edit-button:hover { border-color: #dba6c6; background: #fff4f9; color: var(--magenta); }
+.lab-batch-dialog { width: min(94vw, 690px); }.lab-batch-dialog__header { display: grid; gap: 8px; margin-bottom: 22px; padding-right: 35px; }.lab-batch-dialog__header h2 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 31px; font-weight: 400; letter-spacing: -0.04em; }.lab-batch-dialog__header p { color: var(--ink-soft); font-size: 12px; line-height: 1.5; }.lab-batch-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.lab-batch-fields label { display: grid; gap: 7px; color: #594651; font-size: 11px; font-weight: 750; }.lab-batch-preview { display: grid; gap: 0; margin-top: 22px; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; }.lab-batch-preview h3 { padding: 12px 14px; background: #fffafd; color: var(--plum-dark); font-size: 12px; }.lab-batch-preview div { display: grid; grid-template-columns: 1fr auto; gap: 2px 15px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); color: var(--ink); font-size: 12px; }.lab-batch-preview strong { color: var(--plum-dark); font-variant-numeric: tabular-nums; }.lab-batch-preview small { grid-column: 1 / -1; color: var(--ink-soft); font-size: 10px; }.lab-batch-preview p { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 11px 14px; border-top: 1px solid var(--line); background: #fffdf8; color: #806247; font-size: 11px; line-height: 1.45; }.lab-batch-preview p svg { flex: 0 0 auto; margin-top: 1px; }.lab-form-error { display: flex; align-items: flex-start; gap: 7px; margin-top: 14px; color: #a92d42; font-size: 12px; line-height: 1.45; }.lab-form-error svg { flex: 0 0 auto; }.lab-batch-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+@media (max-width: 700px) { .labs-header { align-items: flex-start; }.labs-formula-grid { grid-template-columns: 1fr; }.labs-formula-header { flex-wrap: wrap; }.labs-formula-header .ui-button { width: 100%; margin: 3px 0 0; }.lab-batch-fields { grid-template-columns: 1fr; }.labs-recipe .labs-section-heading { padding: 0 15px; }.labs-section-heading h2 { font-size: 25px; } }
+
+/* Labs formula library: compact, text-led cards keep the collection easy to grow without invented imagery. */
+.labs-formula-grid { grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 14px; }
+.labs-formula-card { display: flex; min-height: 174px; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 22px; padding: 19px 18px 16px; border-radius: 13px; box-shadow: none; }
+.labs-formula-card__body { gap: 7px; }
+.labs-formula-card__body strong { font-size: 15px; font-weight: 750; line-height: 1.28; }
+.labs-formula-card__body small { overflow: visible; color: var(--ink-soft); font-size: 12px; line-height: 1.45; text-overflow: clip; white-space: normal; }
+.labs-formula-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid #f0e7ea; }
+.labs-formula-card__footer em { color: var(--plum); font-size: 10px; font-style: normal; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; }
+.labs-formula-card__footer > span { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); font-size: 11px; font-weight: 700; transition: color 160ms ease; }
+.labs-formula-card:hover .labs-formula-card__footer > span { color: var(--magenta); }
+.labs-ingredients-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 59px; padding: 9px 16px; border-top: 1px solid var(--line); background: #fffdfd; }
+.labs-ingredients-footer .pagination { margin-left: auto; }
+.ui-dialog.lab-formula-dialog { width: min(96vw, 960px); max-height: min(860px, calc(100dvh - 30px)); overflow-y: auto; }
+.lab-formula-builder__details { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.lab-formula-builder__details > label:last-child { grid-column: 1 / -1; }
+.lab-formula-builder__details label, .lab-formula-builder__row label { display: grid; gap: 7px; color: #594651; font-size: 11px; font-weight: 750; }
+.lab-formula-builder__details textarea { min-height: 78px; resize: vertical; padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: 10px; outline: none; background: var(--paper-strong); color: var(--ink); font: inherit; font-size: 12px; line-height: 1.5; }
+.lab-formula-builder__details textarea:focus { border-color: #b66191; box-shadow: 0 0 0 3px rgba(193, 58, 155, .12); }
+.lab-formula-builder__heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 26px 0 10px; }
+.lab-formula-builder__heading h3 { color: var(--ink); font-size: 14px; font-weight: 750; }
+.lab-formula-builder__heading p { max-width: 590px; margin-top: 4px; color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
+.lab-formula-builder__rows { overflow: hidden; border: 1px solid var(--line); border-radius: 11px; }
+.lab-formula-builder__row { display: grid; grid-template-columns: minmax(170px, 1.25fr) minmax(130px, .8fr) minmax(90px, .55fr) 76px minmax(140px, 1fr) 34px; grid-template-areas: "ingredient calculation ratio phase note remove"; align-items: end; gap: 9px; padding: 12px; border-top: 1px solid var(--line); background: #fffefd; }
+.lab-formula-builder__row > label:nth-of-type(1) { grid-area: ingredient; }
+.lab-formula-builder__row > label:nth-of-type(2) { grid-area: calculation; }
+.lab-formula-builder__row > label:nth-of-type(3) { grid-area: ratio; }
+.lab-formula-builder__row > label:nth-of-type(4) { grid-area: phase; }
+.lab-formula-builder__row > label:nth-of-type(5) { grid-area: note; }
+.lab-formula-builder__row > .lab-formula-builder__remove { grid-area: remove; }
+.lab-formula-builder__row:first-child { border-top: 0; }
+.lab-formula-builder__row select { height: 43px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 10px; outline: none; background: var(--paper-strong); color: var(--ink); font: inherit; font-size: 12px; }
+.lab-formula-builder__row .ui-input { height: 43px; min-height: 43px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--paper-strong); font-size: 12px; }
+.lab-formula-builder__row .ui-input:focus { border-color: #b66191; box-shadow: 0 0 0 3px rgba(193, 58, 155, .12); }
+.lab-formula-builder__row select:focus { border-color: #b66191; box-shadow: 0 0 0 3px rgba(193, 58, 155, .12); }
+.lab-formula-builder__row label i { color: var(--ink-faint); font-size: 10px; font-style: normal; font-weight: 500; }
+.lab-formula-builder__calculation-note { min-height: 43px; padding: 7px 9px; border-radius: 9px; background: #fff7fa; color: #805a6b; font-size: 10px; line-height: 1.35; }
+.lab-formula-builder__remove { align-self: end; color: #a45164; }
+.lab-formula-builder__remove:hover { color: var(--red); }
+@media (max-width: 860px) { .lab-formula-builder__row { grid-template-columns: minmax(160px, 1.2fr) minmax(128px, .8fr) minmax(100px, .55fr) 34px; grid-template-areas: "ingredient calculation ratio remove" "phase note note note"; }.lab-formula-builder__note { min-width: 0; } }
+@media (max-width: 700px) { .labs-section-heading { align-items: flex-start; }.labs-section-heading > .ui-button { flex: 0 0 auto; }.labs-formula-grid { grid-template-columns: 1fr; }.labs-formula-card { min-height: 147px; }.labs-ingredients-footer { align-items: flex-start; flex-direction: column; }.labs-ingredients-footer .pagination { margin-left: 0; }.lab-formula-builder__details { grid-template-columns: 1fr; }.lab-formula-builder__details > label:last-child { grid-column: auto; }.lab-formula-builder__heading { align-items: flex-start; flex-direction: column; }.lab-formula-builder__row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; grid-template-areas: "ingredient ingredient ingredient" "calculation ratio remove" "phase phase phase" "note note note"; }.lab-formula-builder__calculation-note { grid-column: 1 / -1; }.lab-formula-builder__remove { align-self: end; } }
+
 /* Orders table: clean, data-dense Shopify-inspired layout */
 .orders-table-frame { overflow: visible; border-color: #e4dce0; border-radius: 10px; background: #fffefd; box-shadow: 0 1px 2px rgba(61, 32, 48, 0.03); }
 .orders-tabs { min-height: 52px; padding: 0 10px 0 7px; background: #fffefd; }
@@ -366,6 +427,32 @@ h1, h2, h3, p { margin: 0; }
 .pagination button.is-current { border-color: #d88fb4; background: #fffafd; color: var(--magenta); }
 .pagination button:disabled { opacity: 0.34; }
 .pagination-ellipsis { display: grid; width: 23px; place-items: center; color: #967e8b; }
+
+/* Shared operations table language — the Products table is the system reference. */
+:is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table) th,
+.shadcn-table__head {
+  height: 46px;
+  padding: 0 13px;
+  border-bottom-color: #d9c8ce;
+  background: #f8f1f4;
+  color: #4d2c3d;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: .025em;
+  text-transform: none;
+}
+:is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table) td,
+.shadcn-table__cell {
+  height: 54px;
+  padding: 9px 13px;
+  border-bottom-color: #eee8ea;
+  color: #56434d;
+  font-size: 11px;
+}
+:is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table) tbody tr:hover,
+.shadcn-table__row:hover {
+  background: #fff8fb;
+}
 
 @media (max-width: 640px) {
   .orders-tabs { min-height: 50px; padding-right: 7px; }
@@ -1499,10 +1586,11 @@ th.ci-qty--active { color: var(--accent-deep); }
 .physical-products-card__header, .physical-detail-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .physical-products-card__content, .physical-detail-card__content { padding: 0; }
 .physical-products-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.physical-products-table { min-width: 800px; }.physical-products-row { transition: background 150ms ease; }.physical-products-row:hover { background: #fff8fb; }
+.physical-products-table { min-width: 835px; }.physical-products-row { transition: background 150ms ease; }.physical-products-row:hover { background: #fff8fb; }
 .physical-product-link { display: flex; align-items: center; gap: 11px; color: inherit; text-decoration: none; }.physical-product-link strong { display: block; color: #49323e; font-size: 12px; font-weight: 740; }.physical-product-link small { display: block; margin-top: 3px; color: #9a808b; font-size: 10px; }
 .physical-product-thumb { width: 37px; height: 37px; flex: 0 0 auto; border-radius: 8px; background: #f4ecef; object-fit: contain; }.physical-products-open { width: 42px; text-align: right; }.physical-products-open a { color: #a38290; }.physical-products-row:hover .physical-products-open a { color: var(--magenta); }
 .physical-inventory-footer { display: flex; align-items: center; gap: 7px; color: #866d79; }
+.physical-products-table .shadcn-table__head, .physical-channel-table .shadcn-table__head { height: 46px; border-bottom-color: #d9c8ce; background: #f8f1f4; color: #4d2c3d; font-size: 11px; font-weight: 780; letter-spacing: .025em; }.physical-cover-value { display: grid; gap: 2px; min-width: max-content; }.physical-cover-value strong { color: #52253e; font-size: 12px; font-variant-numeric: tabular-nums; }.physical-cover-value small { color: #8b737d; font-size: 10px; font-variant-numeric: tabular-nums; }.physical-cover-state { color: #947b86; font-size: 11px; }
 
 .physical-detail-page { max-width: 1320px; padding-top: 25px; }.physical-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.42fr); gap: clamp(40px, 5vw, 76px); align-items: start; }.physical-detail-heading { max-width: 730px; padding-top: 31px; }.physical-detail-heading .workspace-kicker { display: none; }.physical-detail-heading h1 { color: #30212b; font-size: clamp(48px, 5.15vw, 78px); font-weight: 500; letter-spacing: -0.045em; line-height: .96; text-wrap: balance; }.physical-detail-heading > p:last-of-type { max-width: 640px; margin-top: 26px; color: #5d4a54; font-size: 15px; line-height: 1.72; }
 .physical-detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 650px; margin-top: 94px; border: 0; }.physical-detail-meta > div { min-height: 100px; padding: 14px 26px; border-right: 1px solid #dfd2d7; }.physical-detail-meta > div:first-child { padding-left: 24px; }.physical-detail-meta > div:last-child { border-right: 0; }.physical-detail-meta dt { color: #5d4753; font-size: 10px; font-weight: 720; letter-spacing: .13em; text-transform: uppercase; }.physical-detail-meta dd { margin-top: 11px; color: #c13a7c; font-family: "Iowan Old Style", Georgia, serif; font-size: 35px; font-weight: 500; letter-spacing: -.025em; }.physical-detail-meta > div:nth-child(2) dd { color: #3e2a35; font-family: "Avenir Next", Arial, sans-serif; font-size: 16px; font-weight: 650; letter-spacing: 0; }
@@ -1618,6 +1706,25 @@ th.ci-qty--active { color: var(--accent-deep); }
 .physical-reference-table-card .shadcn-table__container { overflow-x: auto; }
 .physical-reference-table-card .physical-reference-variant-table { min-width: 0; table-layout: auto; }
 
+/* Product runway: one calculation surface, with the chart and inputs visible together. */
+.physical-runway { overflow: hidden; margin-top: 30px; border: 1px solid #dfd1d6; border-radius: 13px; background: #fffefd; box-shadow: 0 18px 50px rgba(74, 33, 57, .06); }
+.physical-runway__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 21px 23px 17px; border-bottom: 1px solid #eee3e6; }
+.physical-runway__header h2 { margin: 0; color: #372932; font-family: "Iowan Old Style", Georgia, serif; font-size: 25px; font-weight: 500; letter-spacing: -.025em; line-height: 1.05; }
+.physical-runway__header p { max-width: 520px; margin: 6px 0 0; color: #806a74; font-size: 12px; line-height: 1.5; }
+.physical-runway__controls { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.physical-runway__segment { display: inline-flex; padding: 3px; border: 1px solid #e3d6db; border-radius: 8px; background: #fbf6f7; }
+.physical-runway__segment button { min-height: 28px; border: 0; border-radius: 5px; background: transparent; color: #876e79; cursor: pointer; font: inherit; font-size: 10px; font-weight: 720; padding: 0 9px; }
+.physical-runway__segment button:hover { color: #622943; }.physical-runway__segment button.is-active { background: #fff; box-shadow: 0 2px 7px rgba(77, 30, 58, .13); color: #602844; }.physical-runway__segment button:focus-visible { outline: 2px solid #c13a9b; outline-offset: 1px; }
+.physical-runway__body { display: grid; grid-template-columns: minmax(270px, .74fr) minmax(0, 1.26fr); }
+.physical-runway__result { display: flex; min-height: 247px; flex-direction: column; justify-content: space-between; padding: 24px; border-right: 1px solid #eee3e6; background: #fffafb; }
+.physical-runway__label { color: #806673; font-size: 10px; font-weight: 760; letter-spacing: .07em; text-transform: uppercase; }.physical-runway__days { display: flex; align-items: baseline; gap: 8px; margin-top: 2px; color: #432537; font-family: "Iowan Old Style", Georgia, serif; font-size: clamp(54px, 6vw, 76px); font-weight: 500; letter-spacing: -.065em; line-height: .85; font-variant-numeric: tabular-nums; }.physical-runway__days small { color: #694655; font-family: "Avenir Next", "Segoe UI", sans-serif; font-size: 14px; font-weight: 650; letter-spacing: -.01em; }.physical-runway__date { display: inline-flex; align-items: center; gap: 6px; margin: 13px 0 0; color: #705964; font-size: 11px; line-height: 1.45; }
+.physical-runway__inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 20px 0 0; }.physical-runway__inputs div { min-width: 0; }.physical-runway__inputs dt { color: #9a828b; font-size: 9px; font-weight: 720; line-height: 1.25; }.physical-runway__inputs dd { overflow: hidden; margin: 4px 0 0; color: #503943; font-size: 11px; font-weight: 720; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.physical-runway__unavailable { display: grid; align-content: center; justify-items: start; height: 100%; gap: 8px; color: #89566a; }.physical-runway__unavailable strong { color: #493440; font-family: "Iowan Old Style", Georgia, serif; font-size: 22px; font-weight: 500; line-height: 1.1; }.physical-runway__unavailable p { max-width: 310px; margin: 0; color: #816b75; font-size: 12px; line-height: 1.5; }
+.physical-runway__trend { min-width: 0; padding: 20px 22px 14px; }.physical-runway__trend-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.physical-runway__trend-heading div { display: grid; gap: 3px; }.physical-runway__trend-heading strong { color: #513a45; font-size: 12px; font-weight: 760; }.physical-runway__trend-heading span { color: #967d87; font-size: 10px; }.physical-runway__source { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: #775264 !important; font-size: 10px !important; font-weight: 720; text-transform: capitalize; }.physical-runway__chart { width: 100%; height: 188px; margin-top: 11px; }.physical-runway__chart .recharts-wrapper:focus { outline: none; }.physical-runway__chart-empty { display: grid; height: 188px; margin-top: 11px; border: 1px dashed #e5cfd7; background: #fffafb; color: #987e89; font-size: 11px; line-height: 1.5; place-items: center; text-align: center; }.physical-runway__chart-empty p { max-width: 250px; margin: 0; }.physical-runway__method { margin: 0; padding: 11px 23px; border-top: 1px solid #eee3e6; color: #896f7a; font-size: 10px; line-height: 1.5; }
+
+@media (max-width: 840px) { .physical-runway__header { align-items: stretch; flex-direction: column; }.physical-runway__controls { justify-content: flex-start; }.physical-runway__body { grid-template-columns: 1fr; }.physical-runway__result { min-height: auto; border-right: 0; border-bottom: 1px solid #eee3e6; }.physical-runway__trend { min-height: 260px; } }
+@media (max-width: 520px) { .physical-runway { margin-top: 24px; border-radius: 11px; }.physical-runway__header { padding: 18px 16px 15px; gap: 15px; }.physical-runway__header h2 { font-size: 24px; }.physical-runway__controls { display: grid; grid-template-columns: 1fr; }.physical-runway__segment { width: fit-content; }.physical-runway__result { min-height: 236px; padding: 21px 16px; }.physical-runway__inputs { gap: 6px; }.physical-runway__inputs dd { white-space: normal; }.physical-runway__trend { padding: 18px 16px 12px; }.physical-runway__trend-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.physical-runway__chart { height: 174px; }.physical-runway__method { padding: 10px 16px; } }
+
 @media (max-width: 640px) {
   .physical-detail-definition-list { grid-template-columns: 118px minmax(0, 1fr); padding-inline: 14px; }
   .physical-detail-mapping-list > section > header { align-items: flex-start; flex-direction: column; gap: 7px; }
@@ -1633,6 +1740,33 @@ th.ci-qty--active { color: var(--accent-deep); }
 @media (max-width: 640px) {
   html, body, .operations-main { overflow-x: clip; }
 }
+
+/* Phone navigation is a single fixed thumb-zone, never a wrapped grid hidden below the workspace. */
+@media (max-width: 640px) {
+  .sh-sidebar-provider .operations-main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); scroll-padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  .sh-sidebar { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; top: auto; height: calc(76px + env(safe-area-inset-bottom)); overflow: visible; }
+  .mobile-navigation { grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 7px 7px calc(8px + env(safe-area-inset-bottom)); }
+  .mobile-navigation__link { min-width: 44px; min-height: 54px; gap: 4px; border-radius: 12px; font-size: 9px; }
+  .mobile-navigation__link svg { width: 19px; height: 19px; }
+  .mobile-navigation__link:focus-visible { outline: 3px solid rgba(240, 138, 199, .55); outline-offset: -2px; }
+  .mobile-nav-dialog { top: auto; bottom: calc(88px + env(safe-area-inset-bottom)); left: 12px; width: calc(100vw - 24px); max-height: min(55dvh, 390px); padding: 20px; border-radius: 15px; transform: none; animation: mobile-nav-sheet-in 190ms cubic-bezier(.16, 1, .3, 1) both; }
+  .mobile-nav-dialog__header { padding-right: 34px; }
+  .mobile-nav-dialog__header h2 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 28px; font-weight: 400; letter-spacing: -0.035em; line-height: 1; }
+  .mobile-nav-dialog__header p { margin-top: 7px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+  .mobile-nav-dialog__links { display: grid; gap: 7px; margin-top: 18px; }
+  .mobile-nav-dialog__links a { display: flex; min-height: 52px; align-items: center; gap: 12px; padding: 0 13px; border: 1px solid var(--line); border-radius: 10px; background: #fffefd; color: var(--ink); font-size: 13px; font-weight: 720; }
+  .mobile-nav-dialog__links a:active { border-color: #d88db7; background: #fff4fa; color: var(--plum); transform: scale(.99); }
+  .mobile-nav-dialog__links svg { width: 18px; height: 18px; color: var(--plum); }
+}
+@keyframes mobile-nav-sheet-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Labs keeps batch history on its own route so formula selection stays focused. */
+.labs-header-actions, .labs-formula-header__actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+.labs-formula-header__actions { margin-left: auto; }
+.labs-formula-header .labs-formula-header__actions .ui-button { margin-left: 0; }
+.labs-batches-panel { max-width: 920px; }
+.labs-batch-list--history .labs-batch-row { min-height: 74px; }
+@media (max-width: 700px) { .labs-header-actions, .labs-formula-header__actions { width: 100%; justify-content: stretch; }.labs-header-actions > .ui-button, .labs-formula-header__actions > .ui-button { flex: 1 1 auto; }.labs-formula-header .labs-formula-header__actions { width: 100%; margin: 3px 0 0; }.labs-formula-header .labs-formula-header__actions .ui-button { width: auto; }.labs-batch-row { align-items: start; padding-top: 13px; padding-bottom: 13px; }.labs-batch-row > span:last-child { padding-top: 4px; } }
 
 /* Variant-aware physical inventory updates. */
 .physical-products-toolbar__actions { display: flex; align-items: center; gap: 10px; }
@@ -1652,6 +1786,86 @@ th.ci-qty--active { color: var(--accent-deep); }
 .physical-adjust-trigger { min-height: 32px; padding-inline: 11px; border-color: #decbd2; color: #6e2d45; font-size: 11px; font-weight: 720; white-space: nowrap; }
 .physical-adjust-trigger:hover { border-color: #b8768c; background: #fff6f8; color: #702640; }
 .physical-reference-table-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Product-detail reference composition: a light editorial header, square asset, and one runway surface. */
+.physical-reference-main { max-width: 1250px; padding-top: 19px; }
+.physical-reference-breadcrumb-row { height: 32px; gap: 0; }
+.physical-reference-breadcrumb-row .shadcn-breadcrumb__list { color: #51434a; font-size: 14px; }
+.physical-reference-hero { grid-template-columns: minmax(0, 1fr) auto; gap: 48px; margin-top: 21px; }
+.physical-reference-summary { padding-top: 0; }
+.physical-reference-summary h1 { font-size: clamp(40px, 3.3vw, 46px); letter-spacing: -.045em; }
+.physical-reference-title-row { display: block; }
+.physical-reference-variant-label { display: inline-flex; align-items: center; gap: 8px; margin: 16px 0 0; color: #4b3c43; font-size: 14px; }
+.physical-reference-facts { display: grid; grid-template-columns: 1fr; gap: 11px; margin-top: 13px; font-size: 14px; }
+.physical-reference-facts > div { display: flex; align-items: center; gap: 5px; }
+.physical-reference-facts dt { display: inline-flex; align-items: center; gap: 8px; color: #4b3c43; }
+.physical-reference-facts dd { color: #4b3c43; }
+.physical-reference-actions { margin-top: 24px; padding-top: 0; gap: 8px; }
+.physical-reference-actions .ui-button { min-height: 35px; border-radius: 5px; padding-inline: 14px; }
+.physical-reference-media { width: 252px; height: 252px; max-height: none; margin-top: -1px; justify-self: end; border-color: #ded2cc; border-radius: 0; background: #f5f0ec; }
+.physical-reference-media .shadcn-card__content { height: 250px; }
+.physical-reference-image { width: 250px; height: 250px; max-height: none; object-fit: contain; }
+.physical-reference-image--empty { width: 100%; min-height: 250px; }
+
+.physical-runway { margin-top: 23px; border-color: #cdbcbc; border-radius: 5px; background: #fffefd; box-shadow: none; }
+.physical-runway__header { display: grid; grid-template-columns: minmax(360px, .64fr) minmax(0, 1.36fr); gap: 0; padding: 17px 22px 0; border-bottom: 0; }
+.physical-runway__header h2 { font-size: 28px; letter-spacing: -.04em; }
+.physical-runway__header p { max-width: 360px; margin-top: 7px; color: #5e5156; font-size: 12px; }
+.physical-runway__controls { align-items: start; justify-content: space-between; padding-top: 3px; }
+.physical-runway__segment { padding: 0; border-color: #cfbec0; border-radius: 5px; background: #fffefd; overflow: hidden; }
+.physical-runway__segment button { min-width: 127px; min-height: 33px; border-radius: 0; color: #493b43; font-size: 12px; font-weight: 600; }
+.physical-runway__segment button + button { border-left: 1px solid #dfd1d3; }
+.physical-runway__segment:last-child button { min-width: 74px; }
+.physical-runway__segment button.is-active { background: #640947; box-shadow: none; color: #fff; }
+.physical-runway__body { grid-template-columns: minmax(360px, .64fr) minmax(0, 1.36fr); }
+.physical-runway__result { min-height: 287px; padding: 20px 22px 14px; border-right: 0; background: transparent; }
+.physical-runway__label { color: #30252b; font-size: 14px; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.physical-runway__days { gap: 7px; margin-top: 9px; color: #5d174b; font-size: clamp(44px, 4vw, 52px); line-height: .88; }
+.physical-runway__days small { color: #5d174b; font-family: "Iowan Old Style", Georgia, serif; font-size: .69em; font-weight: 500; }
+.physical-runway__date { margin-top: 9px; color: #3e3438; font-size: 13px; }
+.physical-runway__date svg { display: none; }
+.physical-runway__inputs { display: grid; grid-template-columns: 1fr; gap: 0; margin-top: 18px; }
+.physical-runway__inputs div { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 28px; border-top: 1px solid #e8dedf; }
+.physical-runway__inputs dt { display: inline-flex; align-items: center; gap: 7px; color: #352c31; font-size: 12px; font-weight: 500; }
+.physical-runway__inputs dt svg { color: #74646a; }
+.physical-runway__inputs dd { margin: 0; color: #32282d; font-size: 12px; font-weight: 650; }
+.physical-runway__unavailable { min-height: 208px; }
+.physical-runway__trend { min-height: 287px; padding: 26px 18px 13px 39px; border-left: 1px solid #e6dcdd; }
+.physical-runway__trend-heading strong { color: #34272d; font-family: "Iowan Old Style", Georgia, serif; font-size: 21px; font-weight: 500; }
+.physical-runway__trend-heading span { color: #4a3f44; font-size: 12px; }
+.physical-runway__source { color: #4a3f44 !important; font-size: 12px !important; font-weight: 500; text-transform: none; }
+.physical-runway__source svg { display: none; }
+.physical-runway__chart { height: 188px; margin-top: 8px; }
+.physical-runway__chart-empty { height: 188px; margin-top: 8px; }
+.physical-reference-tabs { margin-top: 14px; }
+.physical-reference-tabs .shadcn-tabs__content { margin-top: 0; }
+.physical-reference-table-card { border-color: #e0d7d5; border-radius: 4px; }
+.physical-reference-table-card .shadcn-card__header { min-height: 44px; padding-inline: 14px; }
+.physical-reference-table-card .shadcn-card__title { font-size: 18px; }
+
+@media (max-width: 840px) {
+  .physical-reference-hero { grid-template-columns: minmax(0, 1fr) 220px; gap: 28px; }
+  .physical-reference-media, .physical-reference-image { width: 220px; height: 220px; }
+  .physical-reference-media .shadcn-card__content { height: 218px; }
+  .physical-runway__header, .physical-runway__body { grid-template-columns: minmax(300px, .72fr) minmax(0, 1.28fr); }
+  .physical-runway__segment button { min-width: 92px; }
+  .physical-runway__segment:last-child button { min-width: 57px; }
+  .physical-runway__trend { padding-left: 24px; }
+}
+
+@media (max-width: 680px) {
+  .physical-reference-main { padding: 16px; }
+  .physical-reference-hero { grid-template-columns: 1fr; }
+  .physical-reference-media { order: -1; width: min(252px, 100%); height: auto; justify-self: start; }
+  .physical-reference-image { width: 100%; height: auto; }
+  .physical-runway__header { display: flex; padding: 18px 16px 0; }
+  .physical-runway__controls { align-items: stretch; flex-direction: column; }
+  .physical-runway__body { grid-template-columns: 1fr; }
+  .physical-runway__result { min-height: auto; padding-inline: 16px; }
+  .physical-runway__trend { min-height: 260px; padding: 20px 16px 12px; border-top: 1px solid #e6dcdd; border-left: 0; }
+  .physical-runway__segment button { min-width: 86px; }
+  .physical-runway__segment:last-child button { min-width: 56px; }
+}
 
 .physical-adjust-sheet { display: flex; flex-direction: column; width: min(534px, 100vw); }
 .physical-adjust-sheet__header { padding: 43px 30px 22px; border-bottom: 1px solid #eadfe2; }
@@ -1784,3 +1998,112 @@ th.ci-qty--active { color: var(--accent-deep); }
 .physical-channel-table .physical-channel-listing__inner { width: 100%; }
 .physical-channel-table .physical-channel-listing__inner > div:last-child { min-width: 0; flex: 1 1 auto; }
 .physical-channel-table .physical-channel-listing a.physical-channel-listing__title { display: block; width: 100%; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.mobile-topbar { display: none; }
+
+/* Phone navigation is a single, quiet header. Content gets the whole screen. */
+@media (max-width: 640px) {
+  .sh-sidebar-provider .operations-main { padding-top: calc(64px + env(safe-area-inset-top)); padding-bottom: 28px; scroll-padding-top: calc(64px + env(safe-area-inset-top)); }
+  .sh-sidebar { top: 0; right: 0; bottom: auto; left: 0; display: block; width: auto; height: calc(64px + env(safe-area-inset-top)); overflow: visible; border: 0; border-bottom: 1px solid var(--line); background: rgba(255, 254, 253, .97); box-shadow: 0 5px 18px rgba(67, 34, 49, .07); backdrop-filter: blur(14px); }
+  .sh-sidebar__header, .sh-sidebar__content, .sh-sidebar__footer, .sh-sidebar__rail, .mobile-navigation { display: none !important; }
+  .mobile-topbar { display: flex; height: 100%; align-items: center; justify-content: space-between; padding: env(safe-area-inset-top) 16px 0; }
+  .mobile-topbar__brand { display: grid; gap: 1px; color: var(--ink); line-height: 1; text-decoration: none; }
+  .mobile-topbar__brand span { font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 21px; letter-spacing: -.035em; }
+  .mobile-topbar__brand small { color: var(--ink-soft); font-size: 10px; font-weight: 720; letter-spacing: .04em; text-transform: uppercase; }
+  .mobile-topbar__menu { display: grid; width: 44px; height: 44px; padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--paper); color: var(--plum-dark); cursor: pointer; place-items: center; }
+  .mobile-topbar__menu svg { width: 21px; height: 21px; }
+  .mobile-topbar__menu:active { background: #fff2f8; transform: scale(.97); }
+  .mobile-topbar__menu:focus-visible { outline: 3px solid rgba(193, 58, 155, .28); outline-offset: 2px; }
+  .mobile-menu-dialog { top: calc(72px + env(safe-area-inset-top)); right: 12px; bottom: auto; left: 12px; width: auto; max-height: calc(100dvh - 84px - env(safe-area-inset-top)); padding: 20px; overflow-y: auto; border-radius: 15px; transform: none; animation: mobile-menu-in 180ms cubic-bezier(.16, 1, .3, 1) both; }
+  .mobile-menu-dialog__header { padding-right: 34px; }
+  .mobile-menu-dialog__header h2 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 29px; font-weight: 400; letter-spacing: -.035em; line-height: 1; }
+  .mobile-menu-dialog__header p { margin-top: 7px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+  .mobile-menu-dialog__links { display: grid; gap: 6px; margin-top: 18px; }
+  .mobile-menu-dialog__links a { display: flex; min-height: 48px; align-items: center; gap: 12px; padding: 0 13px; border: 1px solid transparent; border-radius: 10px; color: var(--ink); font-size: 13px; font-weight: 720; text-decoration: none; }
+  .mobile-menu-dialog__links a svg { width: 18px; height: 18px; color: var(--plum); }
+  .mobile-menu-dialog__links a[data-active] { border-color: #e3b8ce; background: #fff1f7; color: var(--plum-dark); }
+  .mobile-menu-dialog__links a:active { background: #fff4f9; transform: scale(.99); }
+}
+@keyframes mobile-menu-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Overview has its own grid and scrollable orders region, so contain it explicitly on phones. */
+@media (max-width: 640px) {
+  html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
+  .sh-sidebar { position: fixed !important; width: 100dvw; max-width: 100dvw; }
+  .operations-main, .workspace--overview, .workspace--overview > *, .overview-grid--primary, .overview-grid--primary > *, .overview-panel, .overview-panel__header, .channel-summary__item, .stock-summary, .overview-snapshot-cell { min-width: 0; max-width: 100%; }
+  .overview-grid--primary { width: 100%; grid-template-columns: minmax(0, 1fr); }
+  .overview-panel__header > div, .channel-summary__item > div, .overview-snapshot-cell > div { min-width: 0; }
+  .overview-orders { width: 100%; max-width: 100%; overscroll-behavior-x: contain; }
+}
+
+/* Final table baseline: every data table follows the Products inventory treatment. */
+.operations-main :is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table, .shadcn-table) th,
+.operations-main .shadcn-table__head {
+  height: 46px;
+  padding: 0 13px;
+  border-bottom-color: #d9c8ce;
+  background: #f8f1f4;
+  color: #4d2c3d;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: .025em;
+  text-transform: none;
+}
+.operations-main :is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table, .shadcn-table) td,
+.operations-main .shadcn-table__cell {
+  height: 54px;
+  padding: 9px 13px;
+  border-bottom-color: #eee8ea;
+  color: #56434d;
+  font-size: 11px;
+}
+.operations-main :is(.orders-table, .inventory-table, .labs-recipe-table, .labs-ingredients-table, .packaging-table-grid, .employees-table, .overview-orders table, .shadcn-table) tbody tr:hover,
+.operations-main .shadcn-table__row:hover { background: #fff8fb; }
+
+@media (max-width: 640px) {
+  /* The active page must never disappear when compacting a pager. */
+  .pagination button[aria-current="page"] { display: grid !important; }
+}
+
+/* The Overview orders table is intentionally wider than a phone. Its width must
+   stay inside this dedicated scroller, never become page-level overflow. */
+@media (max-width: 640px) {
+  .workspace--overview .overview-orders { contain: paint; }
+}
+
+/* Order detail: a wide, task-focused dialog keeps delivery references readable
+   without forcing staff to scan a narrow side sheet. */
+.ui-dialog.order-dialog { width: min(980px, calc(100vw - 48px)); max-height: min(820px, calc(100dvh - 48px)); padding: 0; overflow: hidden; border-color: rgba(104, 39, 86, 0.18); border-radius: 15px; background: var(--paper); box-shadow: 0 24px 80px rgba(44, 16, 38, 0.22); }
+.order-dialog .ui-dialog-close { z-index: 3; top: 20px; right: 21px; width: 34px; height: 34px; border-radius: 50%; box-shadow: 0 3px 12px rgba(65, 29, 50, 0.07); }
+.order-dialog .order-details { max-height: min(820px, calc(100dvh - 48px)); padding: 34px; overflow-y: auto; }
+.order-dialog .order-detail-header { min-height: 82px; padding: 0 48px 25px 0; border-bottom: 1px solid var(--line); }
+.order-dialog .order-detail-header h2 { margin: 3px 0 0; font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 36px; letter-spacing: -0.045em; }
+.order-dialog .order-detail-header__actions { margin-left: auto; padding-top: 5px; }
+.order-dialog .source-link { width: auto; margin: 0; white-space: nowrap; }
+.order-dialog .source-link--unavailable { width: 100%; margin: 17px 0 0; white-space: normal; }
+.order-detail-grid { display: grid; grid-template-columns: minmax(0, 1.16fr) minmax(300px, 0.84fr); gap: 0; margin-top: 26px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.order-detail-grid__primary, .order-detail-grid__secondary { min-width: 0; padding: 24px; }
+.order-detail-grid__primary { border-right: 1px solid var(--line); }
+.order-detail-grid__secondary { background: #fffafb; }
+.order-dialog .customer-block { padding-bottom: 22px; }
+.order-dialog .detail-section { padding: 22px 0; }
+.order-dialog .detail-section:last-child { border-bottom: 0; }
+.order-dialog .order-totals { padding-top: 0; }
+.order-dialog .delivery-record__meta { grid-template-columns: minmax(0, 1fr); gap: 13px; }
+.order-dialog .delivery-record__meta dd { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.order-dialog .source-row { padding-top: 18px; border-top: 1px solid var(--line); }
+
+@media (max-width: 760px) {
+  .ui-dialog.order-dialog { width: min(100vw - 24px, 640px); max-height: calc(100dvh - 24px); }
+  .order-dialog .order-details { max-height: calc(100dvh - 24px); padding: 26px 20px; }
+  .order-dialog .order-detail-header { min-height: 0; padding: 0 40px 20px 0; }
+  .order-dialog .order-detail-header h2 { font-size: 31px; }
+  .order-dialog .order-detail-header__actions { margin: 16px 0 0; padding: 0; }
+  .order-dialog .order-detail-header { display: block; }
+  .order-dialog .source-link { width: auto; }
+  .order-detail-grid { grid-template-columns: 1fr; margin-top: 20px; }
+  .order-detail-grid__primary { border-right: 0; border-bottom: 1px solid var(--line); }
+  .order-detail-grid__primary, .order-detail-grid__secondary { padding: 20px; }
+  .order-dialog .delivery-linker { grid-template-columns: 1fr; }
+  .order-dialog .delivery-linker .ui-button { width: 100%; }
+}

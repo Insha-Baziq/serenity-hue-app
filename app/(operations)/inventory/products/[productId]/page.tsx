@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { PhysicalProductDetailWorkspace } from "@/components/physical-product-detail-workspace";
 import { requirePageSession } from "@/lib/auth-guard";
-import { getPhysicalChannelListings, getPhysicalProductDetail } from "@/lib/repository";
+import { getPhysicalChannelListings, getPhysicalProductDetail, getPhysicalProductRunway } from "@/lib/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,6 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
   await requirePageSession();
   const product = await getPhysicalProductDetail(productId);
   if (!product) notFound();
-  const [shopifyListings, tiktokListings] = await Promise.all([getPhysicalChannelListings("shopify"), getPhysicalChannelListings("tiktok")]);
-  return <PhysicalProductDetailWorkspace initial={product} channelListings={[...shopifyListings, ...tiktokListings]} />;
+  const [shopifyListings, tiktokListings, runway] = await Promise.all([getPhysicalChannelListings("shopify"), getPhysicalChannelListings("tiktok"), getPhysicalProductRunway(productId)]);
+  return <PhysicalProductDetailWorkspace initial={product} channelListings={[...shopifyListings, ...tiktokListings]} runway={runway} />;
 }

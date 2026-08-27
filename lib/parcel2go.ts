@@ -135,11 +135,28 @@ function deliveryAddress(value: unknown): Parcel2GoDeliveryAddress {
   };
 }
 
+/**
+ * Parcel2Go documents `ImportedItems[].Ref` as the marketplace order
+ * reference. Keep that as the canonical source, while accepting the
+ * equivalent names returned by older Smart Send payloads. The match step
+ * compares these values directly with the channel order number/ID.
+ */
 function importedReferences(value: unknown) {
-  return [...new Set(records(value)
-    .map(recordValue)
-    .map((item) => textOrUndefined(item.Ref))
-    .filter((reference): reference is string => Boolean(reference)))];
+  const referenceFieldNames = new Set([
+    "ref",
+    "reference",
+    "orderreference",
+    "ordernumber",
+    "orderid",
+  ]);
+
+  return [...new Set(records(value).flatMap((entry) => {
+    const item = recordValue(entry);
+    return Object.entries(item)
+      .filter(([key]) => referenceFieldNames.has(key.toLowerCase()))
+      .map(([, reference]) => textOrUndefined(reference))
+      .filter((reference): reference is string => Boolean(reference));
+  }))];
 }
 
 function currentStatus(events: Parcel2GoTrackingEvent[]) {

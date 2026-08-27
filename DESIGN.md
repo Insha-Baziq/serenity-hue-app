@@ -100,7 +100,7 @@ The visual language is editorial at the edges and utilitarian at the center: Iow
 - Dense, Shopify-inspired tables and progressive disclosure through sheets and detail pages.
 - Clear separation between physical, Shopify, and TikTok quantities.
 - Soft borders and tinted shadows instead of heavy chrome.
-- Mobile-first operational access through touch-friendly summaries and bottom navigation.
+- Mobile-first operational access through touch-friendly summaries and a compact top bar with a single navigation menu.
 
 ## Colors
 
@@ -211,12 +211,16 @@ Borders are soft and low-contrast. Active controls may use a thin magenta or plu
 ### Navigation
 
 - **Desktop:** Plum-toned sidebar with labeled grouped navigation, active indicator, nested Inventory links, and a persistent collapse rail.
-- **Mobile:** Compact navigation with direct access to Overview, Orders, Employees, Products, and Packaging; important actions remain reachable by touch.
+- **Mobile:** A slim fixed top bar shows the Serenity Hue Operations lockup and one 44px menu control. The menu reveals every destination in a single clear list; do not cram destinations into a bottom dock. Important actions remain reachable by touch.
 - **Active state:** Magenta edge/indicator plus a tinted surface, not color alone.
 
 ### Tables
 
-Tables are the primary operational surface. Use readable headings, compact but touch-safe rows, visible status labels, configurable columns where useful, pagination, search/filter controls, and a clear empty state. On mobile, replace wide tables with task-focused summary cards when possible.
+Tables are the primary operational surface. The Products table is the visual source of truth: use its muted blush header (`#f8f1f4`), plum header text, `46px` header rhythm, compact rows, restrained pink hover, and clear dividers everywhere. Use the shared pagination helper so page numbers are always ascending with the current page visible; never create a route-specific pagination sequence. Keep visible status labels, configurable columns where useful, search/filter controls, and a clear empty state. On mobile, replace wide tables with task-focused summary cards when possible.
+
+### Labs
+
+Labs is a focused production workflow, not an analytics dashboard. Its home uses a compact, text-led formula-card grid without invented product imagery: title and source-derived subtitle lead, while ingredient count and the open affordance sit in a quiet footer. The grid expands naturally as formulas are added. **Add formula** opens a protected-focus ratio builder, where named ingredients may be selected or created as `Not counted`; there is at most one remainder-to-100% line, and manual q.s. lines are intentionally excluded from automatic deductions. Formula detail pages lead with the formula name, a small lab mark, the source notes, and a dense ratio table. The **Create batch** action opens a protected-focus dialog: batch reference and target weight in grams first, then a plain-language deduction review before confirmation. Ingredient inventory remains a distinct route, is paginated at 10 ingredients per page, and clearly states that it does not affect finished-product or packaging stock.
 
 ## Do's and Don'ts
 
@@ -224,6 +228,7 @@ Tables are the primary operational surface. Use readable headings, compact but t
 
 - **Do** preserve the Avenir Next and Iowan Old Style pairing.
 - **Do** use physical, Shopify, and TikTok labels exactly where quantities could otherwise be confused.
+- **Do** label Labs quantities in grams and show `Not counted` rather than an invented zero.
 - **Do** use real data, reviewed mappings, and explicit Not counted / Needs review states.
 - **Do** keep tables dense but breathable, with clear row hover/focus feedback.
 - **Do** include loading, empty, error, success, and reduced-motion-safe states.
@@ -235,5 +240,6 @@ Tables are the primary operational surface. Use readable headings, compact but t
 - **Don't** replace operational tables with a wall of summary cards.
 - **Don't** invent product quantities, SKUs, mapping relationships, or delivery matches.
 - **Don't** force Shopify and TikTok quantities to match; their display strategies are intentionally independent.
+- **Don't** mix ingredient inventory with product or packaging inventory, or auto-deduct an ingredient whose supplied formula ratio is only `q.s.`.
 - **Don't** use continuous decorative animation or hide important state behind hover alone.
 - **Don't** crop, letterbox, or blend product imagery against the confirmed detail-page behavior.

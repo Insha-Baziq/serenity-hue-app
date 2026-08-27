@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { relativeTime } from "@/lib/format";
+import { getPageItems } from "@/lib/pagination";
 import type { ChannelInventoryRow, ChannelInventorySnapshot, InventoryChannel } from "@/lib/types";
 
 const CHANNELS: { id: InventoryChannel; name: string; sub: string }[] = [
@@ -232,13 +233,4 @@ export function ChannelInventoryWorkspace({ initial }: { initial: ChannelInvento
       </div>
     </section>
   );
-}
-
-function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {
-  if (totalPages <= 6) return Array.from({ length: totalPages }, (_, index) => index + 1);
-  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-  const ordered = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
-  const items: (number | "ellipsis")[] = [];
-  ordered.forEach((item, index) => { if (index > 0 && item - ordered[index - 1] > 1) items.push("ellipsis"); items.push(item); });
-  return items;
 }

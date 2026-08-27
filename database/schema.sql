@@ -286,6 +286,77 @@ CREATE TABLE IF NOT EXISTS inventory_ledger (
 CREATE INDEX IF NOT EXISTS inventory_ledger_created_idx ON inventory_ledger(created_at DESC);
 CREATE INDEX IF NOT EXISTS inventory_ledger_variant_idx ON inventory_ledger(variant_id, created_at DESC);
 
+-- Labs is a separate ingredient domain. Quantities are always stored in grams;
+-- it never affects finished-product or packaging stock.
+CREATE TABLE IF NOT EXISTS lab_ingredients (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL UNIQUE,
+  quantity_grams REAL NOT NULL DEFAULT 0,
+  quantity_known INTEGER NOT NULL DEFAULT 0,
+  reorder_point_grams REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS lab_ingredients_active_title_idx ON lab_ingredients(active, title);
+
+CREATE TABLE IF NOT EXISTS lab_formulas (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL UNIQUE,
+  subtitle TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS lab_formula_ingredients (
+  id TEXT PRIMARY KEY,
+  formula_id TEXT NOT NULL REFERENCES lab_formulas(id) ON DELETE RESTRICT,
+  ingredient_id TEXT NOT NULL REFERENCES lab_ingredients(id) ON DELETE RESTRICT,
+  percentage REAL,
+  calculation TEXT NOT NULL CHECK (calculation IN ('fixed', 'remainder', 'manual')),
+  phase TEXT,
+  note TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(formula_id, ingredient_id)
+);
+CREATE INDEX IF NOT EXISTS lab_formula_ingredients_formula_idx ON lab_formula_ingredients(formula_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS lab_batches (
+  id TEXT PRIMARY KEY,
+  formula_id TEXT NOT NULL REFERENCES lab_formulas(id) ON DELETE RESTRICT,
+  batch_number TEXT NOT NULL UNIQUE,
+  target_grams REAL NOT NULL CHECK (target_grams > 0),
+  actor TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS lab_batches_formula_created_idx ON lab_batches(formula_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS lab_batch_ingredients (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES lab_batches(id) ON DELETE RESTRICT,
+  ingredient_id TEXT NOT NULL REFERENCES lab_ingredients(id) ON DELETE RESTRICT,
+  required_grams REAL NOT NULL CHECK (required_grams > 0),
+  quantity_before REAL NOT NULL,
+  quantity_after REAL NOT NULL,
+  UNIQUE(batch_id, ingredient_id)
+);
+
+CREATE TABLE IF NOT EXISTS lab_ingredient_ledger (
+  id TEXT PRIMARY KEY,
+  ingredient_id TEXT NOT NULL REFERENCES lab_ingredients(id) ON DELETE RESTRICT,
+  batch_id TEXT REFERENCES lab_batches(id) ON DELETE RESTRICT,
+  change_type TEXT NOT NULL CHECK (change_type IN ('manual_count', 'batch_deduct', 'batch_reversal')),
+  actor TEXT NOT NULL,
+  quantity_before REAL NOT NULL,
+  quantity_after REAL NOT NULL,
+  quantity_delta REAL NOT NULL,
+  reference TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS lab_ingredient_ledger_ingredient_created_idx ON lab_ingredient_ledger(ingredient_id, created_at DESC);
+
 -- Canonical physical catalogue. This is intentionally independent from the
 -- Shopify mirror above: channel listings (including bundles) will map to these
 -- rows later, rather than defining what can be counted as stock.

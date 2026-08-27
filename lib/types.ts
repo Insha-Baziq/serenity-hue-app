@@ -82,6 +82,20 @@ export type PhysicalProductDetail = PhysicalInventoryItem & {
   variants: PhysicalInventoryVariant[];
 };
 
+export type PhysicalInventoryRunwayDay = {
+  date: string;
+  shopify: number;
+  tiktok: number;
+};
+
+export type PhysicalInventoryRunway = {
+  daysAvailable: number;
+  generatedAt: string;
+  dailySales: PhysicalInventoryRunwayDay[];
+};
+
+export type PhysicalInventoryRunways = Record<string, PhysicalInventoryRunway>;
+
 export type PhysicalInventoryAdjustment = {
   variantId: string;
   quantity: number;
@@ -174,6 +188,45 @@ export type PackagingMaterial = {
   leadTimeDays: number | null;
   updatedBy: string;
   updatedAt: string;
+};
+
+export type LabIngredient = {
+  id: string;
+  title: string;
+  quantityGrams: number;
+  quantityKnown: boolean;
+  reorderPointGrams: number;
+  usedByFormulaCount: number;
+  updatedAt: string;
+};
+
+export type LabFormulaLine = {
+  ingredientId: string;
+  ingredient: string;
+  percentage: number | null;
+  calculation: "fixed" | "remainder" | "manual";
+  phase: string;
+  note: string;
+  quantityGrams: number;
+  quantityKnown: boolean;
+};
+
+export type LabFormula = {
+  id: string;
+  title: string;
+  subtitle: string;
+  notes: string;
+  ingredientCount: number;
+  lines: LabFormulaLine[];
+};
+
+export type LabBatch = {
+  id: string;
+  formula: string;
+  batchNumber: string;
+  targetGrams: number;
+  actor: string;
+  createdAt: string;
 };
 
 export type InventoryAlert = {

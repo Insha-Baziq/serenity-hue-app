@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TableColumnPicker, type TableColumn } from "@/components/table-column-picker";
 import { ChannelPill, CustomerTypePill } from "@/components/status-pill";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
+import { getPageItems } from "@/lib/pagination";
 import type { Customer, CustomerType, SyncSnapshot } from "@/lib/types";
 
 type CustomerFilter = "all" | "repeat" | "one-time";
@@ -204,16 +205,4 @@ function customerTypeLabel(type: CustomerType) {
   if (type === "repeat") return "Repeat customer";
   if (type === "guest") return "Guest customer";
   return "One-time customer";
-}
-
-function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {
-  if (totalPages <= 6) return Array.from({ length: totalPages }, (_, index) => index + 1);
-  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-  const ordered = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
-  const items: (number | "ellipsis")[] = [];
-  ordered.forEach((page, index) => {
-    if (index > 0 && page - ordered[index - 1] > 1) items.push("ellipsis");
-    items.push(page);
-  });
-  return items;
 }

@@ -591,3 +591,13 @@ Channel sub-labels are plain ("Physical stock" / "Shopify stock" / "TikTok stock
 - Live TikTok claims before TikTok API integration
 - Image storage in the database
 - Automatic public deployment
+
+## Labs — ingredient and batch production (implemented locally, 25 August 2026)
+
+Labs is a separate operational domain for production ingredients. It does not link to, allocate from, or alter the finished-product catalogue or packaging inventory.
+
+- `/labs` presents the four client-supplied formula cards: 7-Peptide Lash Serum, 20% THD Vitamin C Serum, Strong Honey-Coffee Overnight Brow Jelly, and Streamlined Under-Eye Serum.
+- `/labs/[formulaId]` shows the ratio sheet and opens a **Create batch** review dialog. Staff enter a unique batch number and target batch weight in grams. The app calculates fixed `% w/w` ingredient requirements, calculates only `q.s. to 100` water as the remaining percentage, and never invents quantities for plain `q.s.` pH-adjustment ingredients.
+- Confirmation atomically creates the batch, deducts each calculated ingredient, creates batch-ingredient snapshots, and appends immutable ingredient-ledger rows. It blocks an uncounted or insufficient ingredient before any deduction occurs.
+- `/labs/ingredients` is the standalone gram-based ingredient inventory. Staff record physical quantity and optional reorder point; every update is recorded in the immutable ledger.
+- The source formulas are transcribed in `lib/labs-formulas.ts`. Do not substitute ingredients, merge similarly named source ingredients, or infer missing formulation percentages without explicit client approval.

@@ -40,6 +40,13 @@ function referenceKeys(value: string) {
   const shopifyGid = text.match(/gid:\/\/shopify\/order\/(\d+)/i)?.[1];
   if (shopifyGid) keys.add(shopifyGid);
 
+  // Smart Send can combine the marketplace order ID, checkout ID, and line ID
+  // into one dot-separated reference. For example:
+  // 576937617770780675.1154308028247545859.576937617770911747
+  // Each long numeric segment is an identifier in its own right. Keep the
+  // segments so the first one can match TikTok's source order ID directly.
+  for (const segment of text.match(/\d{8,}/g) ?? []) keys.add(segment);
+
   // Parcel2Go can prefix an imported checkout reference with the marketplace
   // name. Extract only a clearly labelled Shopify/TikTok order ID, rather
   // than treating unrelated numbers such as a postcode as an order number.
@@ -75,12 +82,43 @@ function isEligibleForDateBasedMatch(order: Parcel2GoOrderMatchCandidate, shipme
 }
 
 function matchingReferenceOrder(shipment: Parcel2GoShipment, orders: Parcel2GoOrderMatchCandidate[]) {
+  // Smart Send formats TikTok references as
+  // {order-id}.{checkout-id}.{order-line-id}. The later IDs can themselves
+  // look like valid TikTok order IDs, so resolve the leading segment first.
+  // If it identifies one order, it is the authoritative Parcel2Go reference.
+  const leadingReferenceIds = new Set(shipment.importedReferences
+    .map((reference) => reference.trim().split(/[.\s,:;|/]+/, 1)[0]?.replace(/^#/, "").toLocaleLowerCase() ?? "")
+    .filter((reference) => /^\d{8,}$/.test(reference)));
+  if (leadingReferenceIds.size > 0) {
+    const leadingMatches = orders.filter((order) => {
+      const sourceOrderKeys = referenceKeys(order.sourceOrderId);
+      const orderNumberKeys = referenceKeys(order.orderNumber);
+      return [...sourceOrderKeys, ...orderNumberKeys].some((key) => leadingReferenceIds.has(key));
+    });
+    if (leadingMatches.length === 1) return leadingMatches[0];
+  }
+
   const references = new Set(shipment.importedReferences.flatMap((reference) => [...referenceKeys(reference)]));
   if (references.size === 0) return undefined;
   const matches = orders.filter((order) => {
     const sourceOrderKeys = referenceKeys(order.sourceOrderId);
     const orderNumberKeys = referenceKeys(order.orderNumber);
-    return [...sourceOrderKeys, ...orderNumberKeys].some((key) => references.has(key));
+    if ([...sourceOrderKeys, ...orderNumberKeys].some((key) => references.has(key))) return true;
+
+    // Smart Send puts several IDs in one reference, separated by dots. Match
+    // a complete order ID at a clear boundary, never a partial numeric prefix.
+    // This covers values such as:
+    // 576937617770780675.1154308028247545859.576937617770911747
+    const orderIds = [order.sourceOrderId, order.orderNumber]
+      .map((value) => value.trim().toLocaleLowerCase().replace(/^#/, ""))
+      .filter((value) => value.length >= 4);
+    return shipment.importedReferences.some((reference) => {
+      const value = reference.trim().toLocaleLowerCase().replace(/^#/, "");
+      return orderIds.some((orderId) => value === orderId
+        || value.startsWith(`${orderId}.`)
+        || value.includes(`.${orderId}.`)
+        || value.endsWith(`.${orderId}`));
+    });
   });
   return matches.length === 1 ? matches[0] : undefined;
 }

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { relativeTime } from "@/lib/format";
+import { getPageItems } from "@/lib/pagination";
 import type { InventorySnapshot, ProductInventory } from "@/lib/types";
 
 type InventoryFilter = "all" | "reorder" | "low";
@@ -216,13 +217,4 @@ function groupProducts(variants: ProductVariant[]): InventoryProduct[] {
 
 function formatBoxes(value: number) {
   return Number.isInteger(value) ? value : value.toFixed(1);
-}
-
-function getPageItems(currentPage: number, totalPages: number): (number | "ellipsis")[] {
-  if (totalPages <= 6) return Array.from({ length: totalPages }, (_, index) => index + 1);
-  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-  const ordered = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
-  const items: (number | "ellipsis")[] = [];
-  ordered.forEach((item, index) => { if (index > 0 && item - ordered[index - 1] > 1) items.push("ellipsis"); items.push(item); });
-  return items;
 }

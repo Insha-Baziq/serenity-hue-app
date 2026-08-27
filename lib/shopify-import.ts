@@ -63,34 +63,44 @@ type ShopifyVariant = {
   product: { id: string; title: string; handle: string | null; featuredMedia: { preview: { image: { url: string } | null } | null } | null };
 };
 
+const ORDER_FIELDS = `
+  id name createdAt updatedAt cancelledAt email phone displayFinancialStatus displayFulfillmentStatus
+  subtotalPriceSet { shopMoney { amount currencyCode } }
+  totalShippingPriceSet { shopMoney { amount currencyCode } }
+  totalTaxSet { shopMoney { amount currencyCode } }
+  totalPriceSet { shopMoney { amount currencyCode } }
+  customer { displayName email phone }
+  shippingAddress { name address1 address2 city province zip country phone }
+  lineItems(first: 250) {
+    nodes {
+      id title variantTitle sku quantity image { url }
+      originalUnitPriceSet { shopMoney { amount currencyCode } }
+      variant { id sku product { id } }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+  refunds {
+      id processedAt
+      refundLineItems(first: 250) {
+        nodes { id quantity restocked restockType lineItem { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+  }
+`;
+
 const ORDERS_QUERY = `
   query OperationsOrders($cursor: String, $query: String) {
     orders(first: 100, after: $cursor, sortKey: UPDATED_AT, query: $query) {
-      nodes {
-        id name createdAt updatedAt cancelledAt email phone displayFinancialStatus displayFulfillmentStatus
-        subtotalPriceSet { shopMoney { amount currencyCode } }
-        totalShippingPriceSet { shopMoney { amount currencyCode } }
-        totalTaxSet { shopMoney { amount currencyCode } }
-        totalPriceSet { shopMoney { amount currencyCode } }
-        customer { displayName email phone }
-        shippingAddress { name address1 address2 city province zip country phone }
-        lineItems(first: 250) {
-          nodes {
-            id title variantTitle sku quantity image { url }
-            originalUnitPriceSet { shopMoney { amount currencyCode } }
-            variant { id sku product { id } }
-          }
-          pageInfo { hasNextPage endCursor }
-        }
-        refunds {
-            id processedAt
-            refundLineItems(first: 250) {
-              nodes { id quantity restocked restockType lineItem { id } }
-              pageInfo { hasNextPage endCursor }
-            }
-        }
-      }
+      nodes { ${ORDER_FIELDS} }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+const ORDERS_BY_IDS_QUERY = `
+  query OperationsOrdersByIds($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Order { ${ORDER_FIELDS} }
     }
   }
 `;
@@ -154,6 +164,21 @@ async function fetchAllOrders(updatedSince: string | null) {
   return orders;
 }
 
+/**
+ * The normal incremental query cannot revisit an older order after a newer
+ * Shopify order has advanced the watermark. Re-read only incomplete local
+ * order lines by their immutable Shopify order IDs, so a previous partial
+ * import can never permanently hide a mapped sale from runway calculations.
+ */
+async function fetchOrdersByIds(ids: string[]) {
+  const orders: ShopifyOrder[] = [];
+  for (let index = 0; index < ids.length; index += 100) {
+    const data = await shopifyGraphql<{ nodes: Array<ShopifyOrder | null> }>(ORDERS_BY_IDS_QUERY, { ids: ids.slice(index, index + 100) });
+    orders.push(...data.nodes.filter((order): order is ShopifyOrder => order !== null));
+  }
+  return orders;
+}
+
 async function fetchAllVariants(updatedSince: string | null) {
   const variants: ShopifyVariant[] = [];
   let cursor: string | null = null;
@@ -167,14 +192,26 @@ async function fetchAllVariants(updatedSince: string | null) {
 
 export async function importShopifySnapshot() {
   const db = await getTursoClient();
-  const [latestOrder, latestVariant] = await Promise.all([
+  const [latestOrder, latestVariant, incompleteOrders] = await Promise.all([
     db.execute("SELECT MAX(source_updated_at) AS latest FROM orders WHERE source = 'shopify'"),
     db.execute("SELECT MAX(updated_at) AS latest FROM variants"),
+    db.execute(`SELECT DISTINCT o.source_order_id
+                FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE o.source = 'shopify'
+                  AND o.source_order_id IS NOT NULL
+                  AND o.source_created_at >= datetime('now', '-90 days')
+                  AND (oi.source_product_id IS NULL OR trim(oi.source_product_id) = ''
+                    OR oi.source_variant_id IS NULL OR trim(oi.source_variant_id) = '')
+                ORDER BY o.source_created_at DESC`),
   ]);
-  const [orders, variants] = await Promise.all([
+  const incompleteOrderIds = incompleteOrders.rows.flatMap((row) => typeof row.source_order_id === "string" && row.source_order_id ? [row.source_order_id] : []);
+  const [incrementalOrders, repairedOrders, variants] = await Promise.all([
     fetchAllOrders(typeof latestOrder.rows[0]?.latest === "string" ? latestOrder.rows[0].latest : null),
+    fetchOrdersByIds(incompleteOrderIds),
     fetchAllVariants(typeof latestVariant.rows[0]?.latest === "string" ? latestVariant.rows[0].latest : null),
   ]);
+  const orders = [...new Map([...incrementalOrders, ...repairedOrders].map((order) => [order.id, order])).values()];
 
   const variantStatements = variants.flatMap((variant) => {
     const imageUrl = variant.image?.url ?? variant.product.featuredMedia?.preview?.image?.url ?? null;

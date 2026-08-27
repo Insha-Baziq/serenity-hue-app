@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ArchiveIcon, AvatarIcon, ChevronDownIcon, CubeIcon, DashboardIcon, ExitIcon, LayersIcon, PersonIcon } from "@radix-ui/react-icons";
 import { useState, type ElementType } from "react";
+import { FlaskConical, Menu } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   Sidebar as ShadcnSidebar,
   SidebarContent,
@@ -27,15 +29,17 @@ const primaryItems: NavigationItem[] = [
   { href: "/orders", label: "Orders", icon: ArchiveIcon },
   { href: "/customers", label: "Customers", icon: AvatarIcon },
   { href: "/employees", label: "Employees", icon: PersonIcon },
+  { href: "/labs", label: "Labs", icon: FlaskConical },
 ];
 
-const mobileItems: NavigationItem[] = [
+const mobileMenuItems: NavigationItem[] = [
   { href: "/overview", label: "Overview", icon: DashboardIcon },
   { href: "/orders", label: "Orders", icon: ArchiveIcon },
   { href: "/customers", label: "Customers", icon: AvatarIcon },
   { href: "/employees", label: "Employees", icon: PersonIcon },
   { href: "/inventory/products", label: "Products", icon: CubeIcon },
   { href: "/inventory/packaging", label: "Packaging", icon: LayersIcon },
+  { href: "/labs", label: "Labs", icon: FlaskConical },
 ];
 
 export function Sidebar() {
@@ -43,6 +47,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { open, setOpen } = useSidebar();
   const [inventoryOpen, setInventoryOpen] = useState(pathname.startsWith("/inventory"));
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const inventoryActive = pathname.startsWith("/inventory");
 
   async function signOut() {
@@ -62,7 +67,7 @@ export function Sidebar() {
           <nav aria-label="Main navigation">
             <SidebarMenu>
               {primaryItems.map(({ href, label, icon: Icon }) => {
-                const active = pathname === href;
+                const active = href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
                 return <SidebarMenuItem key={href}>
                   <Link className="sh-sidebar__menu-link" data-active={active || undefined} href={href} aria-current={active ? "page" : undefined}>
                     <Icon aria-hidden="true" />
@@ -93,14 +98,20 @@ export function Sidebar() {
         </button>
       </SidebarFooter>
       <SidebarRail />
-      <nav aria-label="Mobile navigation" className="mobile-navigation">
-        {mobileItems.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href;
-          return <Link aria-current={active ? "page" : undefined} className="mobile-navigation__link" data-active={active || undefined} href={href} key={href}>
-            <Icon aria-hidden="true" />
-            <span>{label}</span>
-          </Link>;
-        })}
-      </nav>
+      <header className="mobile-topbar">
+        <Link href="/overview" className="mobile-topbar__brand" aria-label="Serenity Hue Operations home"><span>Serenity Hue</span><small>Operations</small></Link>
+        <button type="button" className="mobile-topbar__menu" aria-label="Open navigation" aria-expanded={mobileMenuOpen} aria-controls="mobile-workspace-navigation" onClick={() => setMobileMenuOpen(true)}><Menu aria-hidden="true" /></button>
+      </header>
+      <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <DialogContent className="mobile-menu-dialog" aria-describedby="mobile-menu-description">
+          <div className="mobile-menu-dialog__header"><DialogTitle>Workspace</DialogTitle><DialogDescription id="mobile-menu-description">Choose where you want to work.</DialogDescription></div>
+          <nav id="mobile-workspace-navigation" className="mobile-menu-dialog__links" aria-label="Workspace navigation">
+            {mobileMenuItems.map(({ href, label, icon: Icon }) => {
+              const active = href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
+              return <Link href={href} key={href} data-active={active || undefined} aria-current={active ? "page" : undefined} onClick={() => setMobileMenuOpen(false)}><Icon aria-hidden="true" /><span>{label}</span></Link>;
+            })}
+          </nav>
+        </DialogContent>
+      </Dialog>
     </ShadcnSidebar>;
 }

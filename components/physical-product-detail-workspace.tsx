@@ -3,8 +3,9 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ImageOff, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, Clock3, ImageOff, Info, Package, Pencil, Plus, Store, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { PhysicalInventoryAdjustSheet } from "@/components/physical-inventory-adjust-sheet";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { channelProductDetailHref, listingVariantLabel, mappingStatusLabel } from "@/lib/physical-channel-products";
-import type { PhysicalChannelListing, PhysicalInventoryVariant, PhysicalProductDetail } from "@/lib/types";
+import type { PhysicalChannelListing, PhysicalInventoryRunway, PhysicalInventoryVariant, PhysicalProductDetail } from "@/lib/types";
 
 function ProductImage({ src, title }: { src: string | null; title: string }) {
   const [failed, setFailed] = useState(false);
@@ -23,7 +24,10 @@ function ProductImage({ src, title }: { src: string | null; title: string }) {
 }
 
 function productFacts(product: PhysicalProductDetail) {
-  return [["Inventory", "Master"], ["Variants", `${product.variantCount}`], ["Packaging", product.packagingType], ["Lead time", product.leadTimeDays ? `${product.leadTimeDays} days` : "Not set"], ["Source", product.sourceLabel]];
+  return [
+    { label: "Packaging", value: product.packagingType, Icon: Package },
+    { label: "Lead time", value: product.leadTimeDays ? `${product.leadTimeDays} days` : "Not set", Icon: Clock3 },
+  ];
 }
 
 function variantSku(variant: PhysicalInventoryVariant) {
@@ -34,7 +38,70 @@ function shadeClass(title: string) {
   return `variant-dot variant-dot--${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
-export function PhysicalProductDetailWorkspace({ initial, channelListings }: { initial: PhysicalProductDetail; channelListings: PhysicalChannelListing[] }) {
+type RunwayChannel = "all" | "shopify" | "tiktok";
+type RunwayWindow = 30 | 60 | 90;
+
+function formatRunwayDate(date: Date) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+function formatChartDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(`${value}T00:00:00Z`));
+}
+
+function InventoryRunway({ product, runway }: { product: PhysicalProductDetail; runway: PhysicalInventoryRunway }) {
+  const [channel, setChannel] = useState<RunwayChannel>("all");
+  const [windowDays, setWindowDays] = useState<RunwayWindow>(30);
+  const chartColor = channel === "shopify" ? "#4e8540" : channel === "tiktok" ? "#b13561" : "#6c285f";
+  const channelLabel = channel === "all" ? "combined channels" : channel === "shopify" ? "Shopify" : "TikTok Shop";
+  const dailySales = useMemo(() => runway.dailySales.slice(-windowDays).map((day) => ({
+    ...day,
+    units: channel === "all" ? day.shopify + day.tiktok : day[channel],
+  })), [channel, runway.dailySales, windowDays]);
+  const unitsSold = dailySales.reduce((total, day) => total + day.units, 0);
+  const dailyRate = unitsSold / windowDays;
+  const daysOfCover = product.quantityKnown && dailyRate > 0 ? product.quantity / dailyRate : null;
+  const estimatedRunout = daysOfCover === null ? null : new Date(new Date(runway.generatedAt).getTime() + Math.ceil(daysOfCover) * 86_400_000);
+  const status = !product.quantityKnown
+    ? { title: "Count stock to estimate cover", detail: "This product has an uncounted variant, so the master quantity is not yet reliable." }
+    : unitsSold === 0
+      ? { title: "No mapped sales in this window", detail: `No net ${channelLabel} withdrawals were recorded in the last ${windowDays} days.` }
+      : null;
+
+  return <section className="physical-runway" aria-labelledby="inventory-runway-title">
+    <div className="physical-runway__header">
+      <div><h2 id="inventory-runway-title">Inventory runway</h2><p>Estimated time this physical stock will last at its recent mapped sales pace.</p></div>
+      <div className="physical-runway__controls" aria-label="Inventory runway controls">
+        <div className="physical-runway__segment" role="group" aria-label="Demand source">
+          {(["all", "shopify", "tiktok"] as const).map((option) => <button key={option} type="button" className={channel === option ? "is-active" : ""} aria-pressed={channel === option} onClick={() => setChannel(option)}>{option === "all" ? "Combined" : option === "shopify" ? "Shopify" : "TikTok"}</button>)}
+        </div>
+        <div className="physical-runway__segment" role="group" aria-label="Sales history window">
+          {([30, 60, 90] as const).map((option) => <button key={option} type="button" className={windowDays === option ? "is-active" : ""} aria-pressed={windowDays === option} onClick={() => setWindowDays(option)}>{option}d</button>)}
+        </div>
+      </div>
+    </div>
+    <div className="physical-runway__body">
+      <div className="physical-runway__result">
+        {status ? <div className="physical-runway__unavailable"><ChartNoAxesCombined size={22} /><strong>{status.title}</strong><p>{status.detail}</p></div> : <>
+          <span className="physical-runway__label">Estimated cover</span>
+          <strong className="physical-runway__days">{Math.max(1, Math.floor(daysOfCover!))}<small>days</small></strong>
+          <p className="physical-runway__date"><CalendarDays size={14} />Likely to run out around {formatRunwayDate(estimatedRunout!)}</p>
+        </>}
+        <dl className="physical-runway__inputs">
+          <div><dt>Master stock <Info size={13} aria-hidden="true" /></dt><dd>{product.quantityKnown ? `${product.quantity.toLocaleString()} units` : "Not counted"}</dd></div>
+          <div><dt>Net units sold <Info size={13} aria-hidden="true" /></dt><dd>{unitsSold.toLocaleString()} units in {windowDays} days</dd></div>
+          <div><dt>Daily pace <Info size={13} aria-hidden="true" /></dt><dd>{dailyRate ? `${dailyRate.toFixed(2)} units/day` : "No sales data"}</dd></div>
+        </dl>
+      </div>
+      <div className="physical-runway__trend">
+        <div className="physical-runway__trend-heading"><div><strong>{channel === "all" ? "Sales trend" : `${channelLabel} sales trend`}</strong><span>Net mapped physical units sold per day</span></div><span className="physical-runway__source"><Store size={13} />{channelLabel}</span></div>
+        {unitsSold > 0 ? <div className="physical-runway__chart" role="img" aria-label={`${unitsSold} mapped units sold from ${channelLabel} in the last ${windowDays} days`}><ResponsiveContainer width="100%" height="100%"><BarChart data={dailySales} margin={{ top: 12, right: 6, left: -20, bottom: 0 }}><CartesianGrid vertical={false} stroke="#eee3e6" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={34} tickMargin={9} tick={{ fill: "#8a747e", fontSize: 10 }} tickFormatter={formatChartDate} /><YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} tick={{ fill: "#8a747e", fontSize: 10 }} /><Tooltip cursor={{ fill: "#f9f1f4" }} contentStyle={{ border: "1px solid #e1d2d7", borderRadius: 7, background: "#fffefd", boxShadow: "0 12px 30px rgba(74, 33, 57, .11)", fontSize: 11 }} labelFormatter={(value) => typeof value === "string" ? formatChartDate(value) : ""} formatter={(value) => [`${Number(value).toLocaleString()} units`, "Net sold"]} /><Bar dataKey="units" fill={chartColor} radius={[3, 3, 0, 0]} maxBarSize={18} /></BarChart></ResponsiveContainer></div> : <div className="physical-runway__chart-empty"><p>No chart is shown until a mapped sale is reconciled for this product.</p></div>}
+      </div>
+    </div>
+  </section>;
+}
+
+export function PhysicalProductDetailWorkspace({ initial, channelListings, runway }: { initial: PhysicalProductDetail; channelListings: PhysicalChannelListing[]; runway: PhysicalInventoryRunway }) {
   const router = useRouter();
   const [product, setProduct] = useState(initial);
   const [editNameOpen, setEditNameOpen] = useState(false);
@@ -105,8 +172,9 @@ export function PhysicalProductDetailWorkspace({ initial, channelListings }: { i
   };
 
   return <section className="physical-reference-page"><main className="physical-reference-main">
-    <div className="physical-reference-breadcrumb-row"><Link className="physical-reference-back" href="/inventory/products" aria-label="Back to products"><ArrowLeft size={20} /></Link><Breadcrumb><BreadcrumbList><BreadcrumbItem><BreadcrumbLink href="/inventory">Inventory</BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbLink href="/inventory/products">Products</BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{product.title}</BreadcrumbPage></BreadcrumbItem></BreadcrumbList></Breadcrumb></div>
-    <div className="physical-reference-hero"><header className="physical-reference-summary"><p className="physical-detail-overline">Master inventory</p><div className="physical-reference-title-row"><h1>{product.title}</h1><div className="physical-reference-actions"><Button variant="outline" size="compact" onClick={() => { setDraftTitle(product.title); setError(""); setEditNameOpen(true); }}><Pencil size={14} />Edit name</Button><Button variant="ghost" size="compact" disabled={hasMappings || saving} onClick={deleteProduct}><Trash2 size={14} />Delete</Button></div></div>{hasMappings && <p className="physical-reference-action-note">Remove the channel mappings before deleting this product.</p>}<p className="physical-reference-variant-label">{product.variantCount} {product.variantCount === 1 ? "variant" : "variants"}</p><p className="physical-reference-description">{product.description}</p><dl className="physical-reference-facts">{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></header><Card className="physical-reference-media"><CardContent><ProductImage src={product.imageUrl} title={product.title} /></CardContent></Card></div>
+    <div className="physical-reference-breadcrumb-row"><Breadcrumb><BreadcrumbList><BreadcrumbItem><BreadcrumbLink href="/inventory">Inventory</BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbLink href="/inventory/products">Products</BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{product.title}</BreadcrumbPage></BreadcrumbItem></BreadcrumbList></Breadcrumb></div>
+    <div className="physical-reference-hero"><header className="physical-reference-summary"><div className="physical-reference-title-row"><h1>{product.title}</h1></div><p className="physical-reference-variant-label"><Tag size={15} aria-hidden="true" />{product.variantCount} {product.variantCount === 1 ? "variant" : "variants"}</p><dl className="physical-reference-facts">{facts.map(({ label, value, Icon }) => <div key={label}><dt><Icon size={15} aria-hidden="true" />{label}:</dt><dd>{value}</dd></div>)}</dl><div className="physical-reference-actions"><Button variant="outline" size="compact" onClick={() => { setDraftTitle(product.title); setError(""); setEditNameOpen(true); }}><Pencil size={14} />Edit name</Button><Button variant="ghost" size="compact" disabled={hasMappings || saving} onClick={deleteProduct}><Trash2 size={14} />Delete</Button></div>{hasMappings && <p className="physical-reference-action-note">Remove the channel mappings before deleting this product.</p>}</header><Card className="physical-reference-media"><CardContent><ProductImage src={product.imageUrl} title={product.title} /></CardContent></Card></div>
+    <InventoryRunway product={product} runway={runway} />
     <Tabs defaultValue="variants" className="physical-reference-tabs"><TabsList><TabsTrigger value="variants">Variants</TabsTrigger><TabsTrigger value="mappings">Mappings</TabsTrigger></TabsList>
       <TabsContent value="variants"><Card className="physical-reference-table-card"><CardHeader><div className="physical-reference-table-heading"><CardTitle>Variants</CardTitle><span>{product.variantCount} total</span></div><div className="physical-reference-table-actions"><PhysicalInventoryAdjustSheet items={[product]} onSaved={applyChanges} /><Button variant="outline" size="compact" onClick={() => { setError(""); setAddVariantOpen(true); }}><Plus size={14} />Add variant</Button></div></CardHeader><CardContent><Table className="physical-reference-variant-table"><TableHeader><TableRow><TableHead>Variant</TableHead><TableHead>SKU</TableHead><TableHead>Stock</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader><TableBody>{product.variants.map((variant) => { const mapped = mappings.some(({ component }) => component.physicalVariantId === variant.id); return <TableRow key={variant.id}><TableCell><span className="physical-reference-shade"><i className={shadeClass(variant.title)} />{variant.title}</span></TableCell><TableCell>{variantSku(variant)}</TableCell><TableCell>{variant.quantityKnown ? variant.quantity : "Not counted"}</TableCell><TableCell><div className="physical-reference-variant-actions"><Button variant="ghost" size="compact" onClick={() => { setVariantBeingEdited(variant); setVariantTitle(variant.title); setVariantSkuValue(variant.sku || ""); setError(""); setEditVariantOpen(true); }}>Edit</Button><Button variant="ghost" size="compact" disabled={mapped || saving} title={mapped ? "Remove mappings before deleting this variant" : undefined} onClick={() => deleteVariant(variant)}><Trash2 size={14} /></Button></div></TableCell></TableRow>; })}</TableBody></Table></CardContent></Card></TabsContent>
       <TabsContent value="mappings"><Card className="physical-reference-table-card physical-reference-mappings-card"><CardHeader><div className="physical-reference-table-heading"><CardTitle>Mappings</CardTitle><span>{mappings.length} variant mapping{mappings.length === 1 ? "" : "s"}</span></div></CardHeader><CardContent>{mappings.length ? <Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Listing</TableHead><TableHead>Channel variant</TableHead><TableHead>Uses this variant</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{mappings.map(({ listing, component }) => <TableRow key={component.id}><TableCell><span className={`physical-channel-name physical-channel-name--${listing.channel}`}>{listing.channel === "shopify" ? "Shopify" : "TikTok Shop"}</span></TableCell><TableCell><Link className="physical-detail-link" href={channelProductDetailHref(listing.channel, listing.externalProductId)}>{listing.title}</Link></TableCell><TableCell>{listingVariantLabel(listing)}</TableCell><TableCell>{component.variantTitle} · {component.quantityPerSale}×</TableCell><TableCell><span className={`physical-mapping-status physical-mapping-status--${listing.mappingStatus}`}>{mappingStatusLabel(listing.mappingStatus)}</span></TableCell></TableRow>)}</TableBody></Table> : <div className="physical-detail-empty"><strong>No channel mappings yet.</strong><p>Map Shopify or TikTok variants to this product from their respective inventory tables.</p></div>}</CardContent></Card></TabsContent>
