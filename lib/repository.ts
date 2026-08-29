@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
+import { revalidatePath } from "next/cache";
 import { getTursoClient } from "@/lib/turso";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
@@ -8,6 +9,7 @@ import { hashPassword } from "better-auth/crypto";
 import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabFormula, LabFormulaLine, LabIngredient, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
+import { buildKpiDashboard, type KpiDashboard, type KpiPeriod, type KpiSale } from "@/lib/kpi-dashboard";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -327,6 +329,119 @@ export async function getCustomers(): Promise<Customer[]> {
       lastOrderAt: stringValue(row.last_order_at),
       type: orders > 1 ? "repeat" : !email && !phone ? "guest" : "one-time",
     };
+  });
+}
+
+function isKpiPeriod(value: KpiPeriod) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.start) || !/^\d{4}-\d{2}-\d{2}$/.test(value.end)) return false;
+  const start = Date.parse(`${value.start}T00:00:00.000Z`);
+  const end = Date.parse(`${value.end}T00:00:00.000Z`);
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start < 365 * 86_400_000;
+}
+
+function shiftKpiDate(date: string, days: number) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function groupKpiSales(rows: QueryRows): KpiSale[] {
+  const sales = new Map<string, KpiSale>();
+  for (const row of rows) {
+    const id = stringValue(row.order_id);
+    if (!id) continue;
+    const channel = stringValue(row.source) === "tiktok" ? "tiktok" : "shopify";
+    const sale = sales.get(id) ?? {
+      id,
+      createdAt: stringValue(row.source_created_at),
+      channel,
+      financialStatus: stringValue(row.financial_status),
+      cancelledAt: optionalString(row.cancelled_at) ?? null,
+      items: [],
+    };
+    sale.items.push({
+      id: stringValue(row.source_line_item_id) || stringValue(row.order_item_id),
+      quantity: numberValue(row.quantity),
+      unitPrice: numberValue(row.unit_price_amount),
+      product: row.physical_item_id ? { id: stringValue(row.physical_item_id), title: stringValue(row.physical_item_title) } : null,
+    });
+    sales.set(id, sale);
+  }
+  return [...sales.values()];
+}
+
+/**
+ * Bounded KPI reporting read. It returns source-backed merchandise figures only:
+ * no tax, delivery, client tracking, or separate analytics store is involved.
+ */
+export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
+  if (!isKpiPeriod(range)) throw new Error("Choose an inclusive reporting period of up to 365 days.");
+  const days = Math.floor((Date.parse(`${range.end}T00:00:00.000Z`) - Date.parse(`${range.start}T00:00:00.000Z`)) / 86_400_000) + 1;
+  const previousStart = shiftKpiDate(range.start, -days);
+  // Widening each SQL edge by one day safely includes London-midnight records;
+  // the calculation core applies the exact Europe/London period boundaries.
+  const queryStart = shiftKpiDate(previousStart, -1);
+  const queryEndExclusive = shiftKpiDate(range.end, 2);
+  const db = await getTursoClient();
+  const [salesResult, shopifyRefunds, tiktokRefunds, freshnessResult] = await Promise.all([
+    db.execute({
+      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
+                   oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
+                   physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN physical_channel_listings listing
+              ON listing.active = 1 AND listing.mapping_status = 'confirmed' AND listing.channel = o.source
+             AND ((o.source = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
+               OR (o.source = 'tiktok' AND listing.external_product_id = oi.source_product_id
+                 AND (listing.external_variant_id = oi.source_variant_id
+                   OR (listing.external_variant_id IS NULL AND NOT EXISTS (
+                     SELECT 1 FROM physical_channel_listings exact_listing
+                     WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                       AND exact_listing.external_product_id = oi.source_product_id
+                       AND exact_listing.external_variant_id = oi.source_variant_id
+                   )))))
+            LEFT JOIN physical_channel_product_links product_link
+              ON product_link.channel = listing.channel AND product_link.external_product_id = listing.external_product_id
+            LEFT JOIN physical_inventory_items physical_item
+              ON physical_item.id = product_link.physical_item_id AND physical_item.active = 1
+            WHERE (o.source_created_at >= ? AND o.source_created_at < ?)
+               OR EXISTS (SELECT 1 FROM shopify_refund_line_items refund
+                          WHERE refund.order_id = o.id AND refund.processed_at >= ? AND refund.processed_at < ?)
+               OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items after_sale
+                          WHERE after_sale.order_id = o.id AND after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?)
+            ORDER BY o.source_created_at ASC, o.id, oi.rowid`,
+      args: [queryStart, queryEndExclusive, queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT order_id, source_line_item_id, quantity, processed_at
+            FROM shopify_refund_line_items
+            WHERE processed_at >= ? AND processed_at < ?`,
+      args: [queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT order_id, source_line_item_id, quantity, source_updated_at
+            FROM tiktok_after_sales_line_items
+            WHERE event_type = 'return' AND return_type = 'RETURN_AND_REFUND'
+              AND status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+              AND source_updated_at >= ? AND source_updated_at < ?`,
+      args: [queryStart, queryEndExclusive],
+    }),
+    db.execute("SELECT finished_at FROM sync_runs WHERE status = 'succeeded' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1"),
+  ]);
+
+  return buildKpiDashboard({
+    range,
+    sales: groupKpiSales(salesResult.rows),
+    refunds: [
+      ...shopifyRefunds.rows.map((row) => ({
+        orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.processed_at),
+      })),
+      ...tiktokRefunds.rows.map((row) => ({
+        orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
+      })),
+    ],
+    freshness: optionalString(freshnessResult.rows[0]?.finished_at) ?? null,
   });
 }
 
@@ -1892,6 +2007,7 @@ export async function savePhysicalListingMappings(input: { mappings: Array<{ lis
   } finally {
     transaction.close();
   }
+  revalidatePath("/kpis");
   return getPhysicalChannelListings([...channels][0]);
 }
 
@@ -1930,6 +2046,7 @@ export async function savePhysicalChannelProductLink(input: { channel: PhysicalC
   } finally {
     transaction.close();
   }
+  revalidatePath("/kpis");
   return getPhysicalChannelListings(input.channel);
 }
 
@@ -2380,6 +2497,7 @@ export async function recordSyncRun(input: {
             records_seen = excluded.records_seen, records_changed = excluded.records_changed, message = excluded.message`,
     args: [input.id, input.trigger, input.provider ?? "direct", input.status, now, input.finished ? now : null, input.recordsSeen ?? 0, input.recordsChanged ?? 0, input.message] as SqlValue[],
   });
+  if (input.finished) revalidatePath("/kpis");
 }
 
 export async function takeSyncLease(ownerId: string, durationSeconds = 240) {

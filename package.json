@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/schema.test.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "db:migrate": "node scripts/migrate-turso-schema.mjs"
   },
   "dependencies": {

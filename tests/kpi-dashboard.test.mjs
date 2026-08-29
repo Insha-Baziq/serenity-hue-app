@@ -1,0 +1,117 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildKpiDashboard } from "../lib/kpi-dashboard.ts";
+
+test("KPI dashboard puts a partial refund on its issued London business day", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales: [
+      {
+        id: "shopify-1",
+        createdAt: "2026-08-01T10:00:00.000Z",
+        channel: "shopify",
+        financialStatus: "paid",
+        cancelledAt: null,
+        items: [{ id: "line-1", quantity: 2, unitPrice: 1000, product: { id: "physical-1", title: "Rose Candle" } }],
+      },
+      {
+        id: "tiktok-1",
+        createdAt: "2026-08-02T10:00:00.000Z",
+        channel: "tiktok",
+        financialStatus: "paid",
+        cancelledAt: null,
+        items: [{ id: "line-2", quantity: 1, unitPrice: 2500, product: { id: "physical-2", title: "Amber Diffuser" } }],
+      },
+      {
+        id: "cancelled-order",
+        createdAt: "2026-08-02T12:00:00.000Z",
+        channel: "shopify",
+        financialStatus: "paid",
+        cancelledAt: "2026-08-02T12:30:00.000Z",
+        items: [{ id: "line-cancelled", quantity: 1, unitPrice: 9999, product: { id: "physical-3", title: "Ignored" } }],
+      },
+      {
+        id: "previous-order",
+        createdAt: "2026-07-29T10:00:00.000Z",
+        channel: "shopify",
+        financialStatus: "paid",
+        cancelledAt: null,
+        items: [{ id: "line-previous", quantity: 1, unitPrice: 500, product: { id: "physical-1", title: "Rose Candle" } }],
+      },
+    ],
+    refunds: [
+      { orderId: "shopify-1", lineItemId: "line-1", quantity: 1, processedAt: "2026-08-03T16:00:00.000Z" },
+      { orderId: "previous-order", lineItemId: "line-previous", quantity: 1, processedAt: "2026-07-30T16:00:00.000Z" },
+    ],
+    freshness: "2026-08-03T17:00:00.000Z",
+  });
+
+  assert.deepEqual(dashboard.metrics, {
+    netSales: 3500,
+    orders: 2,
+    averageOrderValue: 1750,
+    netUnits: 2,
+  });
+  assert.deepEqual(dashboard.previous.metrics, {
+    netSales: 0,
+    orders: 1,
+    averageOrderValue: 0,
+    netUnits: 0,
+  });
+  assert.deepEqual(dashboard.trend.map((day) => [day.date, day.netSales, day.orders]), [
+    ["2026-08-01", 2000, 1],
+    ["2026-08-02", 2500, 1],
+    ["2026-08-03", -1000, 0],
+  ]);
+  assert.deepEqual(dashboard.products, [
+    { id: "physical-2", title: "Amber Diffuser", netUnits: 1, netRevenue: 2500, shopifyUnits: 0, tiktokUnits: 1 },
+    { id: "physical-1", title: "Rose Candle", netUnits: 1, netRevenue: 1000, shopifyUnits: 1, tiktokUnits: 0 },
+  ]);
+  assert.deepEqual(dashboard.channels, [
+    { channel: "shopify", netSales: 1000, orders: 1, averageOrderValue: 1000, netUnits: 1, unitShare: 0.5 },
+    { channel: "tiktok", netSales: 2500, orders: 1, averageOrderValue: 2500, netUnits: 1, unitShare: 0.5 },
+  ]);
+});
+
+test("KPI dashboard keeps safely unmapped sales visible without inventing a product", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-01" },
+    sales: [{
+      id: "unmapped",
+      createdAt: "2026-08-01T10:00:00.000Z",
+      channel: "shopify",
+      financialStatus: "paid",
+      cancelledAt: null,
+      items: [{ id: "line-unmapped", quantity: 2, unitPrice: 1200, product: null }],
+    }],
+    refunds: [],
+    freshness: null,
+  });
+
+  assert.equal(dashboard.metrics.netSales, 2400);
+  assert.deepEqual(dashboard.products, []);
+  assert.deepEqual(dashboard.unassigned, { netUnits: 2, netRevenue: 2400 });
+});
+
+test("KPI dashboard is zero-safe and recomputes the visible product row from refreshed source data", () => {
+  const base = {
+    range: { start: "2026-08-01", end: "2026-08-01" },
+    refunds: [],
+    freshness: "2026-08-01T12:00:00.000Z",
+  };
+  const empty = buildKpiDashboard({ ...base, sales: [] });
+  const refreshed = buildKpiDashboard({
+    ...base,
+    sales: [{
+      id: "mapped-after-refresh",
+      createdAt: "2026-08-01T10:00:00.000Z",
+      channel: "shopify",
+      financialStatus: "paid",
+      cancelledAt: null,
+      items: [{ id: "mapped-line", quantity: 3, unitPrice: 700, product: { id: "physical-rose", title: "Rose Candle" } }],
+    }],
+  });
+
+  assert.deepEqual(empty.metrics, { netSales: 0, orders: 0, averageOrderValue: 0, netUnits: 0 });
+  assert.deepEqual(refreshed.products, [{ id: "physical-rose", title: "Rose Candle", netUnits: 3, netRevenue: 2100, shopifyUnits: 3, tiktokUnits: 0 }]);
+});
