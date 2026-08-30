@@ -39,7 +39,9 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - **Owns**: reads/writes for orders, customers, employees, packaging, channel/physical inventory, mappings, alerts, sync state, TikTok connection state, shipments, and Labs.
 - **Public interface**:
   ```text
-  getOrders / getOrdersPage / getOrdersForExport / getKpiDashboard
+  getOrders / getOrdersPage / getOrdersForExport
+  getKpiDashboard(period) -> server-shaped dashboard with sales/product/channel metrics,
+    conservative customer performance, and fixed-window physical-variant restock decisions
   getCustomers / getEmployees / createEmployee
   getInventory / getChannelInventory / getPhysicalInventory / getProductDetail
   create/update/deletePackagingMaterial

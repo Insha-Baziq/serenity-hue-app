@@ -9,7 +9,7 @@ import { hashPassword } from "better-auth/crypto";
 import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabFormula, LabFormulaLine, LabIngredient, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
-import { buildKpiDashboard, type KpiDashboard, type KpiPeriod, type KpiSale } from "@/lib/kpi-dashboard";
+import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -357,6 +357,11 @@ function groupKpiSales(rows: QueryRows): KpiSale[] {
       channel,
       financialStatus: stringValue(row.financial_status),
       cancelledAt: optionalString(row.cancelled_at) ?? null,
+      customer: {
+        name: stringValue(row.customer_name),
+        email: optionalString(row.customer_email) ?? null,
+        phone: optionalString(row.customer_phone) ?? null,
+      },
       items: [],
     };
     sale.items.push({
@@ -368,6 +373,50 @@ function groupKpiSales(rows: QueryRows): KpiSale[] {
     sales.set(id, sale);
   }
   return [...sales.values()];
+}
+
+function groupKpiCustomerOrders(rows: QueryRows): KpiCustomerOrder[] {
+  return rows.map((row) => ({
+    id: stringValue(row.id),
+    createdAt: stringValue(row.source_created_at),
+    financialStatus: stringValue(row.financial_status),
+    cancelledAt: optionalString(row.cancelled_at) ?? null,
+    customer: {
+      name: stringValue(row.customer_name),
+      email: optionalString(row.customer_email) ?? null,
+      phone: optionalString(row.customer_phone) ?? null,
+    },
+  })).filter((order) => order.id && order.createdAt);
+}
+
+function groupKpiRestockDemandLines(rows: QueryRows): KpiRestockDemandLine[] {
+  return rows.map((row) => ({
+    orderId: stringValue(row.order_id),
+    lineItemId: stringValue(row.source_line_item_id) || stringValue(row.order_item_id),
+    variantId: stringValue(row.physical_variant_id),
+    createdAt: stringValue(row.source_created_at),
+    financialStatus: stringValue(row.financial_status),
+    cancelledAt: optionalString(row.cancelled_at) ?? null,
+    quantity: numberValue(row.quantity),
+    quantityPerSale: numberValue(row.quantity_per_sale),
+  })).filter((line) => line.orderId && line.lineItemId && line.variantId && line.createdAt && line.quantityPerSale > 0);
+}
+
+function groupKpiRestockVariants(rows: QueryRows): KpiRestockVariant[] {
+  return rows.map((row) => ({
+    id: stringValue(row.id),
+    productTitle: stringValue(row.product_title),
+    variantTitle: stringValue(row.variant_title),
+    countedStock: row.counted_stock === null || row.counted_stock === undefined ? null : numberValue(row.counted_stock),
+    leadTimeDays: nullableNumber(row.lead_time_days),
+    firstPaidSaleAt: optionalString(row.first_paid_sale_at) ?? null,
+  })).filter((variant) => variant.id);
+}
+
+function londonKpiToday() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
 /**
@@ -382,10 +431,16 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
   // the calculation core applies the exact Europe/London period boundaries.
   const queryStart = shiftKpiDate(previousStart, -1);
   const queryEndExclusive = shiftKpiDate(range.end, 2);
+  const restockToday = londonKpiToday();
+  const restockQueryStart = shiftKpiDate(restockToday, -90);
+  const restockQueryEndExclusive = shiftKpiDate(restockToday, 2);
+  const refundQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
+  const refundQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
   const db = await getTursoClient();
-  const [salesResult, shopifyRefunds, tiktokRefunds, freshnessResult] = await Promise.all([
+  const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, freshnessResult] = await Promise.all([
     db.execute({
       sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
+                   o.customer_name, o.customer_email, o.customer_phone,
                    oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
                    physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
             FROM orders o
@@ -417,7 +472,7 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
       sql: `SELECT order_id, source_line_item_id, quantity, processed_at
             FROM shopify_refund_line_items
             WHERE processed_at >= ? AND processed_at < ?`,
-      args: [queryStart, queryEndExclusive],
+      args: [refundQueryStart, refundQueryEndExclusive],
     }),
     db.execute({
       sql: `SELECT order_id, source_line_item_id, quantity, source_updated_at
@@ -425,14 +480,71 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
             WHERE event_type = 'return' AND return_type = 'RETURN_AND_REFUND'
               AND status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
               AND source_updated_at >= ? AND source_updated_at < ?`,
-      args: [queryStart, queryEndExclusive],
+      args: [refundQueryStart, refundQueryEndExclusive],
     }),
+    db.execute(`SELECT id, source_created_at, financial_status, cancelled_at, customer_name, customer_email, customer_phone
+                FROM orders
+                ORDER BY source_created_at ASC, id ASC`),
+    db.execute({
+      sql: `SELECT o.id AS order_id, o.source_created_at, o.financial_status, o.cancelled_at,
+                   oi.id AS order_item_id, oi.source_line_item_id, oi.quantity,
+                   component.physical_variant_id, component.quantity_per_sale
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            JOIN physical_channel_listings listing
+              ON listing.active = 1 AND listing.mapping_status = 'confirmed' AND listing.channel = o.source
+             AND ((o.source = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
+               OR (o.source = 'tiktok' AND listing.external_product_id = oi.source_product_id
+                 AND (listing.external_variant_id = oi.source_variant_id
+                   OR (listing.external_variant_id IS NULL AND NOT EXISTS (
+                     SELECT 1 FROM physical_channel_listings exact_listing
+                     WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                       AND exact_listing.external_product_id = oi.source_product_id
+                       AND exact_listing.external_variant_id = oi.source_variant_id
+                   )))))
+            JOIN physical_listing_components component ON component.listing_id = listing.id
+            JOIN physical_inventory_variants physical_variant ON physical_variant.id = component.physical_variant_id AND physical_variant.active = 1
+            WHERE (o.source_created_at >= ? AND o.source_created_at < ?)
+               OR EXISTS (SELECT 1 FROM shopify_refund_line_items refund
+                          WHERE refund.order_id = o.id AND refund.processed_at >= ? AND refund.processed_at < ?)
+               OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items after_sale
+                          WHERE after_sale.order_id = o.id AND after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?)
+            ORDER BY o.source_created_at ASC, o.id, oi.rowid, component.physical_variant_id`,
+      args: [restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive],
+    }),
+    db.execute(`SELECT physical_variant.id, physical_item.title AS product_title, physical_variant.title AS variant_title,
+                       CASE WHEN physical_variant.quantity_known = 1 THEN physical_variant.quantity ELSE NULL END AS counted_stock,
+                       physical_item.lead_time_days,
+                       (
+                         SELECT MIN(o.source_created_at)
+                         FROM physical_listing_components component
+                         JOIN physical_channel_listings listing ON listing.id = component.listing_id
+                           AND listing.active = 1 AND listing.mapping_status = 'confirmed'
+                         JOIN order_items oi
+                           ON ((listing.channel = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
+                             OR (listing.channel = 'tiktok' AND listing.external_product_id = oi.source_product_id
+                               AND (listing.external_variant_id = oi.source_variant_id
+                                 OR (listing.external_variant_id IS NULL AND NOT EXISTS (
+                                   SELECT 1 FROM physical_channel_listings exact_listing
+                                   WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                                     AND exact_listing.external_product_id = oi.source_product_id
+                                     AND exact_listing.external_variant_id = oi.source_variant_id
+                                 )))))
+                         JOIN orders o ON o.id = oi.order_id AND o.source = listing.channel
+                         WHERE component.physical_variant_id = physical_variant.id
+                           AND o.cancelled_at IS NULL AND o.financial_status <> 'pending'
+                       ) AS first_paid_sale_at
+                FROM physical_inventory_variants physical_variant
+                JOIN physical_inventory_items physical_item ON physical_item.id = physical_variant.physical_item_id
+                WHERE physical_variant.active = 1 AND physical_item.active = 1
+                ORDER BY physical_item.title ASC, physical_variant.sort_order ASC, physical_variant.title ASC`),
     db.execute("SELECT finished_at FROM sync_runs WHERE status = 'succeeded' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1"),
   ]);
 
   return buildKpiDashboard({
     range,
     sales: groupKpiSales(salesResult.rows),
+    customerOrders: groupKpiCustomerOrders(customerOrdersResult.rows),
     refunds: [
       ...shopifyRefunds.rows.map((row) => ({
         orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.processed_at),
@@ -441,6 +553,11 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
         orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
       })),
     ],
+    restock: {
+      today: restockToday,
+      variants: groupKpiRestockVariants(restockVariantsResult.rows),
+      demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
+    },
     freshness: optionalString(freshnessResult.rows[0]?.finished_at) ?? null,
   });
 }

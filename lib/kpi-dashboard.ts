@@ -9,13 +9,28 @@ export type KpiSaleLine = {
   product: KpiProductReference | null;
 };
 
+export type KpiCustomerIdentity = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+};
+
 export type KpiSale = {
   id: string;
   createdAt: string;
   channel: KpiChannel;
   financialStatus: string;
   cancelledAt: string | null;
+  customer?: KpiCustomerIdentity | null;
   items: KpiSaleLine[];
+};
+
+export type KpiCustomerOrder = {
+  id: string;
+  createdAt: string;
+  financialStatus: string;
+  cancelledAt: string | null;
+  customer: KpiCustomerIdentity | null;
 };
 
 export type KpiRefund = {
@@ -52,6 +67,42 @@ export type KpiChannelPerformance = {
   unitShare: number;
 };
 
+export type KpiCustomerPerformance = {
+  summary: { new: number; repeat: number; total: number };
+  topCustomers: Array<{ name: string; netSpend: number; qualifyingOrders: number; latestPurchase: string }>;
+};
+
+export type KpiRestockVariant = {
+  id: string;
+  productTitle: string;
+  variantTitle: string;
+  countedStock: number | null;
+  leadTimeDays: number | null;
+  firstPaidSaleAt: string | null;
+};
+
+export type KpiRestockDemandLine = {
+  orderId: string;
+  lineItemId: string;
+  variantId: string;
+  createdAt: string;
+  financialStatus: string;
+  cancelledAt: string | null;
+  quantity: number;
+  quantityPerSale: number;
+};
+
+export type KpiRestockPlan = {
+  variantId: string;
+  productTitle: string;
+  variantTitle: string;
+  countedStock: number;
+  dailyDemand: number;
+  forecastStockout: string;
+  reorderBy: string;
+  urgency: "overdue" | "due-soon";
+};
+
 export type KpiDashboard = {
   range: KpiPeriod;
   previous: { range: KpiPeriod; metrics: KpiMetricSet };
@@ -60,6 +111,8 @@ export type KpiDashboard = {
   products: KpiProductPerformance[];
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
+  customers: KpiCustomerPerformance;
+  restock: KpiRestockPlan[];
   freshness: string | null;
 };
 
@@ -171,6 +224,183 @@ function eligibleSale(sale: KpiSale) {
   return !sale.cancelledAt && sale.financialStatus !== "pending";
 }
 
+function eligibleCustomerOrder(order: KpiCustomerOrder) {
+  return !order.cancelledAt && order.financialStatus !== "pending";
+}
+
+function normalizedEmail(value: string | null | undefined) {
+  const email = value?.trim().toLowerCase() ?? "";
+  return email || null;
+}
+
+function normalizedPhone(value: string | null | undefined) {
+  const phone = value?.replace(/\D/g, "") ?? "";
+  return phone || null;
+}
+
+function normalizedName(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function compatibleNames(left: string[], right: string[]) {
+  if (left.length < 2 || right.length < 2) return false;
+  if (left[0] !== right[0] || left.at(-1) !== right.at(-1)) return false;
+  const leftMiddle = left.slice(1, -1);
+  const rightMiddle = right.slice(1, -1);
+  if (!leftMiddle.length || !rightMiddle.length) return true;
+  return leftMiddle.some((token) => rightMiddle.some((other) => token === other || token[0] === other[0]));
+}
+
+type CustomerGroup = {
+  id: string;
+  orders: KpiCustomerOrder[];
+  names: string[][];
+  phone: string | null;
+};
+
+function groupCustomers(orders: KpiCustomerOrder[]) {
+  const groups: CustomerGroup[] = [];
+  const groupByOrderId = new Map<string, CustomerGroup>();
+  const emailGroups = new Map<string, CustomerGroup>();
+
+  for (const order of orders.filter(eligibleCustomerOrder)) {
+    const customer = order.customer;
+    if (!customer) continue;
+    const email = normalizedEmail(customer.email);
+    const phone = normalizedPhone(customer.phone);
+    const name = normalizedName(customer.name);
+    let group: CustomerGroup | undefined;
+    if (email) {
+      group = emailGroups.get(email);
+      if (!group) {
+        group = { id: `email:${email}`, orders: [], names: [], phone: null };
+        emailGroups.set(email, group);
+        groups.push(group);
+      }
+    } else if (phone && name.length >= 2) {
+      group = groups.find((candidate) => candidate.phone === phone && candidate.names.some((candidateName) => compatibleNames(candidateName, name)));
+      if (!group) {
+        group = { id: `phone:${phone}:${name.join("-")}`, orders: [], names: [], phone };
+        groups.push(group);
+      }
+    }
+    if (!group) continue;
+    group.orders.push(order);
+    if (name.length) group.names.push(name);
+    groupByOrderId.set(order.id, group);
+  }
+  return { groups, groupByOrderId };
+}
+
+function buildCustomerPerformance(input: {
+  range: KpiPeriod;
+  sales: KpiSale[];
+  refunds: KpiRefund[];
+  customerOrders: KpiCustomerOrder[];
+}): KpiCustomerPerformance {
+  const ordersById = new Map(input.customerOrders.map((order) => [order.id, order]));
+  for (const sale of input.sales) {
+    if (!ordersById.has(sale.id)) ordersById.set(sale.id, {
+      id: sale.id,
+      createdAt: sale.createdAt,
+      financialStatus: sale.financialStatus,
+      cancelledAt: sale.cancelledAt,
+      customer: sale.customer ?? null,
+    });
+  }
+  const { groups, groupByOrderId } = groupCustomers([...ordersById.values()]);
+  const activeGroups = groups.filter((group) => group.orders.some((order) => contains(input.range, londonDate(order.createdAt))));
+  const spendByGroup = new Map(activeGroups.map((group) => [group.id, 0]));
+  const sourceLines = new Map<string, { sale: KpiSale; line: KpiSaleLine }>();
+
+  for (const sale of input.sales) {
+    for (const line of sale.items) sourceLines.set(`${sale.id}:${line.id}`, { sale, line });
+    if (!eligibleSale(sale) || !contains(input.range, londonDate(sale.createdAt))) continue;
+    const group = groupByOrderId.get(sale.id);
+    if (!group || !spendByGroup.has(group.id)) continue;
+    spendByGroup.set(group.id, (spendByGroup.get(group.id) ?? 0) + sale.items.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0));
+  }
+
+  const refundedByLine = new Map<string, number>();
+  for (const refund of [...input.refunds].sort((left, right) => left.processedAt.localeCompare(right.processedAt))) {
+    if (!contains(input.range, londonDate(refund.processedAt))) continue;
+    const key = `${refund.orderId}:${refund.lineItemId}`;
+    const source = sourceLines.get(key);
+    if (!source || !eligibleSale(source.sale)) continue;
+    const group = groupByOrderId.get(source.sale.id);
+    if (!group || !spendByGroup.has(group.id)) continue;
+    const alreadyRefunded = refundedByLine.get(key) ?? 0;
+    const units = Math.max(0, Math.min(refund.quantity, source.line.quantity - alreadyRefunded));
+    if (!units) continue;
+    refundedByLine.set(key, alreadyRefunded + units);
+    spendByGroup.set(group.id, (spendByGroup.get(group.id) ?? 0) - units * source.line.unitPrice);
+  }
+
+  const topCustomers = activeGroups.map((group) => {
+    const activeOrders = group.orders.filter((order) => contains(input.range, londonDate(order.createdAt)));
+    const latest = [...activeOrders].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]!;
+    return {
+      name: latest.customer?.name.trim() || "Unnamed customer",
+      netSpend: spendByGroup.get(group.id) ?? 0,
+      qualifyingOrders: group.orders.length,
+      latestPurchase: londonDate(latest.createdAt),
+    };
+  }).sort((left, right) => right.netSpend - left.netSpend || right.qualifyingOrders - left.qualifyingOrders || right.latestPurchase.localeCompare(left.latestPurchase) || left.name.localeCompare(right.name)).slice(0, 5);
+
+  const repeat = activeGroups.filter((group) => group.orders.length > 1).length;
+  return { summary: { new: activeGroups.length - repeat, repeat, total: activeGroups.length }, topCustomers };
+}
+
+function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] }, refunds: KpiRefund[]) {
+  const demandStart = shiftDate(restock.today, -89);
+  const demandByVariant = new Map<string, number>();
+  const sourceQuantity = new Map<string, number>();
+  for (const line of restock.demandLines) sourceQuantity.set(`${line.orderId}:${line.lineItemId}`, Math.max(sourceQuantity.get(`${line.orderId}:${line.lineItemId}`) ?? 0, line.quantity));
+  const refundedByLine = new Map<string, number>();
+  for (const refund of [...refunds].sort((left, right) => left.processedAt.localeCompare(right.processedAt))) {
+    if (!contains({ start: demandStart, end: restock.today }, londonDate(refund.processedAt))) continue;
+    const key = `${refund.orderId}:${refund.lineItemId}`;
+    const maximum = sourceQuantity.get(key) ?? 0;
+    const alreadyRefunded = refundedByLine.get(key) ?? 0;
+    refundedByLine.set(key, alreadyRefunded + Math.max(0, Math.min(refund.quantity, maximum - alreadyRefunded)));
+  }
+  for (const line of restock.demandLines) {
+    if (line.cancelledAt || line.financialStatus === "pending") continue;
+    const saleIsInWindow = contains({ start: demandStart, end: restock.today }, londonDate(line.createdAt));
+    const refundUnits = refundedByLine.get(`${line.orderId}:${line.lineItemId}`) ?? 0;
+    const next = (saleIsInWindow ? line.quantity : 0) - refundUnits;
+    demandByVariant.set(line.variantId, (demandByVariant.get(line.variantId) ?? 0) + next * line.quantityPerSale);
+  }
+
+  return restock.variants.flatMap((variant) => {
+    const demand = demandByVariant.get(variant.id) ?? 0;
+    const firstSale = variant.firstPaidSaleAt ? londonDate(variant.firstPaidSaleAt) : null;
+    if (variant.countedStock === null || variant.leadTimeDays === null || variant.leadTimeDays < 0 || !firstSale || firstSale > shiftDate(restock.today, -30) || demand <= 0) return [];
+    const dailyDemand = demand / 90;
+    const stockoutDays = Math.ceil(variant.countedStock / dailyDemand);
+    const forecastStockout = shiftDate(restock.today, stockoutDays);
+    const reorderBy = shiftDate(forecastStockout, -(variant.leadTimeDays + 7));
+    if (reorderBy > shiftDate(restock.today, 30)) return [];
+    return [{
+      variantId: variant.id,
+      productTitle: variant.productTitle,
+      variantTitle: variant.variantTitle,
+      countedStock: variant.countedStock,
+      dailyDemand,
+      forecastStockout,
+      reorderBy,
+      urgency: reorderBy < restock.today ? "overdue" as const : "due-soon" as const,
+    }];
+  }).sort((left, right) => left.reorderBy.localeCompare(right.reorderBy) || left.productTitle.localeCompare(right.productTitle) || left.variantTitle.localeCompare(right.variantTitle));
+}
+
 /**
  * Applies sales on their purchase day and partial refunds on their processed
  * day. Inputs are already bounded by the repository query; this pure function
@@ -180,6 +410,8 @@ export function buildKpiDashboard(input: {
   range: KpiPeriod;
   sales: KpiSale[];
   refunds: KpiRefund[];
+  customerOrders?: KpiCustomerOrder[];
+  restock?: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
   freshness: string | null;
 }): KpiDashboard {
   const previousRange = precedingRange(input.range);
@@ -246,6 +478,8 @@ export function buildKpiDashboard(input: {
       .slice(0, 10),
     unassigned: selected.unassigned,
     channels,
+    customers: buildCustomerPerformance({ range: input.range, sales: input.sales, refunds: input.refunds, customerOrders: input.customerOrders ?? [] }),
+    restock: input.restock ? buildRestockPlan(input.restock, input.refunds) : [],
     freshness: input.freshness,
   };
 }

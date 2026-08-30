@@ -115,3 +115,81 @@ test("KPI dashboard is zero-safe and recomputes the visible product row from ref
   assert.deepEqual(empty.metrics, { netSales: 0, orders: 0, averageOrderValue: 0, netUnits: 0 });
   assert.deepEqual(refreshed.products, [{ id: "physical-rose", title: "Rose Candle", netUnits: 3, netRevenue: 2100, shopifyUnits: 3, tiktokUnits: 0 }]);
 });
+
+test("KPI dashboard classifies only safely identified active customers and ranks their refund-aware spend", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales: [
+      {
+        id: "ada-current", createdAt: "2026-08-01T10:00:00.000Z", channel: "shopify", financialStatus: "paid", cancelledAt: null,
+        customer: { name: "Ada Lovelace", email: "ADA@example.com", phone: null },
+        items: [{ id: "ada-line", quantity: 1, unitPrice: 1000, product: null }],
+      },
+      {
+        id: "iris-current", createdAt: "2026-08-02T10:00:00.000Z", channel: "tiktok", financialStatus: "paid", cancelledAt: null,
+        customer: { name: "Iris Rose", email: null, phone: "+44 20 7000 0000" },
+        items: [{ id: "iris-line", quantity: 2, unitPrice: 1000, product: null }],
+      },
+      {
+        id: "malik-current", createdAt: "2026-08-02T12:00:00.000Z", channel: "shopify", financialStatus: "paid", cancelledAt: null,
+        customer: { name: "Malik Rose", email: null, phone: "+44 20 7000 0000" },
+        items: [{ id: "malik-line", quantity: 1, unitPrice: 3000, product: null }],
+      },
+      {
+        id: "unsafe-current", createdAt: "2026-08-02T14:00:00.000Z", channel: "shopify", financialStatus: "paid", cancelledAt: null,
+        customer: { name: "", email: null, phone: "+44 20 7000 9999" },
+        items: [{ id: "unsafe-line", quantity: 1, unitPrice: 2500, product: null }],
+      },
+    ],
+    customerOrders: [
+      { id: "ada-current", createdAt: "2026-08-01T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada Lovelace", email: "ADA@example.com", phone: null } },
+      { id: "ada-history", createdAt: "2026-07-15T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada Lovelace", email: "ada@example.com", phone: null } },
+      { id: "iris-current", createdAt: "2026-08-02T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Iris Rose", email: null, phone: "+44 20 7000 0000" } },
+      { id: "iris-history", createdAt: "2026-06-21T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Iris M. Rose", email: null, phone: "442070000000" } },
+      { id: "malik-current", createdAt: "2026-08-02T12:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Malik Rose", email: null, phone: "+44 20 7000 0000" } },
+      { id: "unsafe-current", createdAt: "2026-08-02T14:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "", email: null, phone: "+44 20 7000 9999" } },
+    ],
+    refunds: [{ orderId: "iris-current", lineItemId: "iris-line", quantity: 1, processedAt: "2026-08-03T10:00:00.000Z" }],
+    freshness: null,
+  });
+
+  assert.deepEqual(dashboard.customers.summary, { new: 1, repeat: 2, total: 3 });
+  assert.deepEqual(dashboard.customers.topCustomers.map((customer) => [customer.name, customer.netSpend, customer.qualifyingOrders]), [
+    ["Malik Rose", 3000, 1],
+    ["Iris Rose", 1000, 2],
+    ["Ada Lovelace", 1000, 2],
+  ]);
+});
+
+test("KPI dashboard forecasts only complete, urgent physical-variant restock decisions", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales: [],
+    refunds: [
+      { orderId: "rose-demand", lineItemId: "rose-line", quantity: 10, processedAt: "2026-08-28T09:00:00.000Z" },
+    ],
+    restock: {
+      today: "2026-08-30",
+      variants: [
+        { id: "urgent", productTitle: "Brow Pomade", variantTitle: "Deep", countedStock: 5, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+        { id: "rose", productTitle: "Brow Pomade", variantTitle: "Rose", countedStock: 20, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+        { id: "later", productTitle: "Brow Pomade", variantTitle: "Later", countedStock: 80, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+        { id: "uncounted", productTitle: "Brow Pomade", variantTitle: "Uncounted", countedStock: null, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+        { id: "too-new", productTitle: "Brow Pomade", variantTitle: "Too new", countedStock: 5, leadTimeDays: 7, firstPaidSaleAt: "2026-08-12T10:00:00.000Z" },
+      ],
+      demandLines: [
+        { orderId: "urgent-demand", lineItemId: "urgent-line", variantId: "urgent", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 90, quantityPerSale: 1 },
+        { orderId: "rose-demand", lineItemId: "rose-line", variantId: "rose", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 100, quantityPerSale: 1 },
+        { orderId: "later-demand", lineItemId: "later-line", variantId: "later", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 90, quantityPerSale: 1 },
+        { orderId: "uncounted-demand", lineItemId: "uncounted-line", variantId: "uncounted", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 90, quantityPerSale: 1 },
+        { orderId: "new-demand", lineItemId: "new-line", variantId: "too-new", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 90, quantityPerSale: 1 },
+      ],
+    },
+    freshness: null,
+  });
+
+  assert.deepEqual(dashboard.restock, [
+    { variantId: "urgent", productTitle: "Brow Pomade", variantTitle: "Deep", countedStock: 5, dailyDemand: 1, forecastStockout: "2026-09-04", reorderBy: "2026-08-21", urgency: "overdue" },
+    { variantId: "rose", productTitle: "Brow Pomade", variantTitle: "Rose", countedStock: 20, dailyDemand: 1, forecastStockout: "2026-09-19", reorderBy: "2026-09-05", urgency: "due-soon" },
+  ]);
+});
