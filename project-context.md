@@ -106,7 +106,7 @@ Note: a full **signed-in browser click-through was not performed** for Batch B b
 - The repository layer switches to Turso when `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are present; no app code should need a large rewrite for that move.
 - The production app is deployed to Vercel via the CLI at `https://serenity-hue-operations.vercel.app`, with server functions configured for Vercel's Dublin (`dub1`) region.
 - Supabase, Neon, Cloudflare D1, and Cloudflare hosting are not selected.
-- Upstash QStash EU is intended to call the production reconciliation endpoint every 30 minutes (`*/30 * * * *`). The manual **Sync now** control remains available for an immediate refresh.
+- Upstash QStash EU calls the production reconciliation endpoint every five minutes (`*/5 * * * *`). The manual **Sync now** control remains available for an immediate refresh.
 
 ### Inventory philosophy
 
@@ -262,7 +262,7 @@ The Parcel2Go client-credentials flow is server-side only. `PARCEL2GO_CLIENT_ID`
 - The response contains courier/service, parcel/transaction IDs, tracking milestone timestamps, estimate, a `tracking-page` link, booking/collection dates, and delivery-recipient details. Recipient email, phone, name, and address are used in memory only to make high-confidence matches and are not copied into the delivery tables.
 - The importer links a delivery automatically only when an exact source reference is found or when the recipient and delivery-address evidence agrees with a Shopify order in the 45-day booking window. Ties and weak matches remain unlinked; never show delivery status against an uncertain order.
 - `POST /api/webhooks/parcel2go` is deployed and deliberately excluded from Basic Auth. It verifies the Parcel2Go HMAC-SHA256 signature, rejects stale/duplicate events, and is active when Parcel2Go is configured with the deployed webhook URL and its matching secret.
-- The scheduled 30-minute reconciliation refreshes Parcel2Go deliveries once the deployed code is active. Webhooks will prompt an additional refresh once configured.
+- The scheduled five-minute reconciliation refreshes Parcel2Go deliveries once the deployed code is active. Webhooks will prompt an additional refresh once configured.
 
 ### TikTok Shop
 
@@ -273,14 +273,14 @@ TikTok is implemented as a direct server-side integration:
 - `lib/tiktok.ts` signs every Open API request, refreshes expiring access tokens, and never exposes a credential to the browser.
 - `lib/tiktok-import.ts` enumerates authorized shops, pages through order updates, retrieves full order details in batches of 50, and normalizes them into `orders` and `order_items` with source `tiktok`.
 - The first history import is written as an inventory baseline, preventing historic TikTok sales from changing current stock. Later orders are eligible for existing inventory operations only when a confirmed one-to-one mapping has multiplier `1`.
-- TikTok webhooks are signature-checked, deduplicated, and acknowledged immediately. The 30-minute reconciliation imports the authoritative order state, which covers lost, duplicated, or out-of-order webhook events.
+- TikTok webhooks are signature-checked, deduplicated, and acknowledged immediately. The five-minute reconciliation imports the authoritative order state, which covers lost, duplicated, or out-of-order webhook events.
 
 ### Manual and scheduled sync
 
 - `POST /api/sync` runs a manual direct-channel reconciliation and is used by the **Sync now** button.
 - `POST /api/jobs/reconcile` is the scheduled endpoint. It verifies QStash signatures only when both QStash signing keys are configured.
 - Sync leases in the database prevent overlapping reconciliation jobs.
-- QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/30 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
+- QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/5 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
 
 ## Authentication (Better Auth)
 
@@ -450,7 +450,7 @@ In Parcel2Go's API credential settings, configure the webhook URL as `https://se
 2. Decide the exact TikTok Shop API access path and obtain real credentials; then implement the direct adapter and test order/stock normalization.
 3. Confirm the client’s desired stock-alert rules before surfacing alerts on Overview or elsewhere.
 4. Decide whether packaging counts should be editable in-app and, if so, implement an audited adjustment workflow instead of a cosmetic button.
-5. Monitor the 30-minute direct-channel reconciliation and keep the TikTok importer incremental as order volume grows.
+5. Monitor the five-minute direct-channel reconciliation and keep the TikTok importers incremental as order volume grows.
 6. Keep the Turso database and Vercel function region aligned with the client's location if the hosting region changes.
 7. Confirm the Vercel plan is suitable for commercial client use before long-term production operation.
 8. Better Auth staff authentication now replaces Basic Auth. Remaining: verify it end-to-end in production, remove the `INITIAL_ADMIN_*` bootstrap and `INTERNAL_APP_*` fallback env values once the first admin exists, and add roles/permissions if staff responsibilities diverge.

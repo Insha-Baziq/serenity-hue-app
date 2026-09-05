@@ -915,7 +915,7 @@ export async function markTikTokBackfillCompleted() {
   });
 }
 
-export type TikTokSyncStream = "orders" | "after_sales_cancel" | "after_sales_return";
+export type TikTokSyncStream = "orders" | "after_sales_cancel" | "after_sales_return" | "affiliate_orders";
 
 export async function getTikTokSyncCursor(input: { connectionId: string; shopId: string; stream: TikTokSyncStream }) {
   const db = await getTursoClient();
@@ -942,6 +942,131 @@ export async function advanceTikTokSyncCursor(input: {
             cursor_at = CASE WHEN excluded.cursor_at > tiktok_sync_cursors.cursor_at THEN excluded.cursor_at ELSE tiktok_sync_cursors.cursor_at END,
             updated_at = excluded.updated_at`,
     args: [input.connectionId, input.shopId, input.stream, input.cursorAt, now],
+  });
+}
+
+export type TikTokAffiliateOrderRecord = {
+  id: string;
+  connectionId: string;
+  shopId: string;
+  sourceOrderId: string;
+  sourceLineItemId: string;
+  sourceProductId?: string;
+  sourceSkuId?: string;
+  productTitle?: string;
+  creatorOpenId?: string;
+  creatorUsername?: string;
+  quantity: number;
+  grossAmountMinor: number;
+  estimatedCommissionMinor: number;
+  currency: string;
+  status?: string;
+  sourceCreatedAt?: string;
+  sourceUpdatedAt?: string;
+};
+
+/** Saves TikTok's affiliate authority records; ordinary TikTok orders remain separate. */
+export async function saveTikTokAffiliateOrders(records: TikTokAffiliateOrderRecord[]) {
+  if (records.length === 0) return 0;
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.batch(records.map((record) => ({
+    sql: `INSERT INTO tiktok_affiliate_orders
+      (id, connection_id, shop_id, source_order_id, source_line_item_id, source_product_id, source_sku_id,
+       product_title, creator_open_id, creator_username, quantity, gross_amount_minor, estimated_commission_minor,
+       currency, status, source_created_at, source_updated_at, imported_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(shop_id, source_order_id, source_line_item_id) DO UPDATE SET
+        source_product_id=excluded.source_product_id, source_sku_id=excluded.source_sku_id, product_title=excluded.product_title,
+        creator_open_id=excluded.creator_open_id, creator_username=excluded.creator_username, quantity=excluded.quantity,
+        gross_amount_minor=excluded.gross_amount_minor, estimated_commission_minor=excluded.estimated_commission_minor,
+        currency=excluded.currency, status=excluded.status, source_created_at=excluded.source_created_at,
+        source_updated_at=excluded.source_updated_at, imported_at=excluded.imported_at, updated_at=excluded.updated_at`,
+    args: [
+      record.id, record.connectionId, record.shopId, record.sourceOrderId, record.sourceLineItemId,
+      record.sourceProductId ?? null, record.sourceSkuId ?? null, record.productTitle ?? null,
+      record.creatorOpenId ?? null, record.creatorUsername ?? null, record.quantity, record.grossAmountMinor,
+      record.estimatedCommissionMinor, record.currency, record.status ?? null, record.sourceCreatedAt ?? null,
+      record.sourceUpdatedAt ?? null, now, now,
+    ],
+  })), "write");
+  return records.length;
+}
+
+export type TikTokAffiliateVideoRecord = {
+  id: string;
+  connectionId: string;
+  shopId: string;
+  sourceVideoId: string;
+  sourceProductId?: string;
+  creatorOpenId?: string;
+  creatorUsername?: string;
+  videoTitle?: string;
+  publishedAt?: string;
+  grossAmountMinor: number;
+  attributedOrderCount: number;
+  currency: string;
+  sourceUpdatedAt?: string;
+};
+
+export async function saveTikTokAffiliateVideos(records: TikTokAffiliateVideoRecord[]) {
+  if (records.length === 0) return 0;
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.batch(records.map((record) => ({
+    sql: `INSERT INTO tiktok_affiliate_videos
+      (id, connection_id, shop_id, source_video_id, source_product_id, creator_open_id, creator_username,
+       video_title, published_at, gross_amount_minor, attributed_order_count, currency, source_updated_at, imported_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(shop_id, source_video_id) DO UPDATE SET
+        source_product_id=excluded.source_product_id, creator_open_id=excluded.creator_open_id,
+        creator_username=excluded.creator_username, video_title=excluded.video_title, published_at=excluded.published_at,
+        gross_amount_minor=excluded.gross_amount_minor, attributed_order_count=excluded.attributed_order_count,
+        currency=excluded.currency, source_updated_at=excluded.source_updated_at, imported_at=excluded.imported_at,
+        updated_at=excluded.updated_at`,
+    args: [
+      record.id, record.connectionId, record.shopId, record.sourceVideoId, record.sourceProductId ?? null,
+      record.creatorOpenId ?? null, record.creatorUsername ?? null, record.videoTitle ?? null, record.publishedAt ?? null,
+      record.grossAmountMinor, record.attributedOrderCount, record.currency, record.sourceUpdatedAt ?? null, now, now,
+    ],
+  })), "write");
+  return records.length;
+}
+
+export async function recordTikTokAffiliateSyncSuccess(input: {
+  connectionId: string;
+  shopId: string;
+  initialBaseline: boolean;
+}) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO tiktok_affiliate_sync_status
+      (connection_id, shop_id, last_successful_at, last_attempted_at, last_error_at, last_error_message,
+       initial_baseline_started_at, initial_baseline_completed_at, updated_at)
+      VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+      ON CONFLICT(connection_id, shop_id) DO UPDATE SET
+        last_successful_at=excluded.last_successful_at, last_attempted_at=excluded.last_attempted_at,
+        last_error_at=NULL, last_error_message=NULL,
+        initial_baseline_started_at=COALESCE(tiktok_affiliate_sync_status.initial_baseline_started_at, excluded.initial_baseline_started_at),
+        initial_baseline_completed_at=COALESCE(tiktok_affiliate_sync_status.initial_baseline_completed_at, excluded.initial_baseline_completed_at),
+        updated_at=excluded.updated_at`,
+    args: [input.connectionId, input.shopId, now, now, input.initialBaseline ? now : null, input.initialBaseline ? now : null, now],
+  });
+}
+
+/** Failure status never clears the last successful snapshot or its data. */
+export async function recordTikTokAffiliateSyncFailure(input: { connectionId: string; shopId: string; message: string }) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO tiktok_affiliate_sync_status
+      (connection_id, shop_id, last_attempted_at, last_error_at, last_error_message, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, shop_id) DO UPDATE SET
+        last_attempted_at=excluded.last_attempted_at, last_error_at=excluded.last_error_at,
+        last_error_message=excluded.last_error_message, updated_at=excluded.updated_at`,
+    args: [input.connectionId, input.shopId, now, now, input.message.slice(0, 500), now],
   });
 }
 

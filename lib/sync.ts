@@ -5,6 +5,7 @@ import { importRecentParcel2GoShipments } from "@/lib/parcel2go-import";
 import { importShopifySnapshot } from "@/lib/shopify-import";
 import { hasShopifyCredentials } from "@/lib/shopify";
 import { importTikTokOrders, TikTokNotConnectedError, type TikTokRedactedSample } from "@/lib/tiktok-import";
+import { importTikTokAffiliateReporting } from "@/lib/tiktok-affiliate-import";
 import { storeTikTokInventory } from "@/lib/tiktok-inventory";
 
 export type SyncTrigger = "manual" | "scheduled" | "webhook";
@@ -34,7 +35,7 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
   }
 
   try {
-    await recordSyncRun({ id, trigger, provider: "direct", status: "running", message: "Importing Shopify and TikTok Shop orders" });
+    await recordSyncRun({ id, trigger, provider: "direct", status: "running", message: "Importing Shopify, TikTok Shop, and TikTok affiliate reporting" });
 
     if (!hasShopifyCredentials()) {
       const message = "Live sync needs Shopify credentials in .env.local";
@@ -45,6 +46,7 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
     const imported = await importShopifySnapshot();
     let tiktokOrders = 0;
     let tiktokInventorySkus = 0;
+    let tiktokAffiliateOrders = 0;
     let tiktokSample: TikTokRedactedSample | undefined;
     let tiktokNote = " TikTok Shop is awaiting seller authorization.";
     const failures: string[] = [];
@@ -63,6 +65,19 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
       if (!(error instanceof TikTokNotConnectedError)) {
         failures.push("TikTok Shop order sync needs attention");
         tiktokNote = " TikTok Shop order sync needs attention.";
+      }
+    }
+
+    let tiktokAffiliateNote = "";
+    try {
+      const affiliate = await importTikTokAffiliateReporting();
+      tiktokAffiliateOrders = affiliate.orders;
+      tiktokAffiliateNote = ` TikTok affiliate reporting refreshed ${affiliate.orders} attributed order lines and ${affiliate.videos} affiliate videos from ${affiliate.shops} ${affiliate.shops === 1 ? "shop" : "shops"}.`;
+      if (affiliate.baselineOrders > 0) tiktokAffiliateNote += ` ${affiliate.baselineOrders} initial affiliate records were retained as the all-time baseline.`;
+    } catch (error) {
+      if (!(error instanceof TikTokNotConnectedError)) {
+        failures.push("TikTok affiliate reporting sync needs attention");
+        tiktokAffiliateNote = " TikTok affiliate reporting sync needs attention; the last successful affiliate snapshot is retained.";
       }
     }
 
@@ -96,8 +111,8 @@ export async function syncDirectChannels(trigger: SyncTrigger): Promise<SyncResu
       : operational.packagingMovements > 0 || operational.stockMovements > 0
         ? ` Recorded ${operational.stockMovements} order movements and ${operational.packagingMovements} packaging movements.`
         : "";
-    const message = `Shopify synced ${imported.orders} orders and ${imported.variants} variants.${tiktokNote}${tiktokInventoryNote}${parcel2GoNote} ${operational.alerts} active inventory alerts${baselineNote}`;
-    const recordsSeen = imported.orders + imported.variants + tiktokOrders + tiktokInventorySkus + parcel2GoRecords;
+    const message = `Shopify synced ${imported.orders} orders and ${imported.variants} variants.${tiktokNote}${tiktokAffiliateNote}${tiktokInventoryNote}${parcel2GoNote} ${operational.alerts} active inventory alerts${baselineNote}`;
+    const recordsSeen = imported.orders + imported.variants + tiktokOrders + tiktokAffiliateOrders + tiktokInventorySkus + parcel2GoRecords;
     const status = failures.length > 0 ? "failed" : "succeeded";
     await recordSyncRun({ id, trigger, provider: "direct", status, message, recordsSeen, recordsChanged: recordsSeen, finished: true });
     if (status === "succeeded") await markWebhookEventsProcessed({ before: startedAt });

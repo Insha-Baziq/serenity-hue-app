@@ -26,10 +26,53 @@ test("schema creates and maintains the full-text order index", async () => {
     await db.execute({ sql: "UPDATE orders SET customer_name = ? WHERE id = ?", args: ["Shabina Khan", "order-1"] });
     const updated = await db.execute("SELECT order_id FROM order_search WHERE order_search MATCH 'shabina*'");
     assert.deepEqual(updated.rows.map((row) => row.order_id), ["order-1"]);
+
   } finally {
     db.close();
     // libSQL's Windows handle may be released just after close returns. A
     // best-effort cleanup keeps that platform detail from masking assertions.
+    await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
+  }
+});
+
+test("schema keeps TikTok affiliate attribution and sync freshness separate from ordinary orders", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "serenity-hue-affiliate-schema-"));
+  const databasePath = join(directory, "schema-test.db");
+  const db = createClient({ url: pathToFileURL(databasePath).href });
+  try {
+    await db.executeMultiple(await readFile(new URL("../database/schema.sql", import.meta.url), "utf8"));
+    await db.execute({
+      sql: `INSERT INTO tiktok_connections (id, access_token, refresh_token) VALUES (?, ?, ?)`,
+      args: ["connection-1", "encrypted-token", "encrypted-refresh"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_affiliate_orders
+        (id, connection_id, shop_id, source_order_id, source_line_item_id, quantity, gross_amount_minor, estimated_commission_minor, currency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(shop_id, source_order_id, source_line_item_id) DO UPDATE SET gross_amount_minor=excluded.gross_amount_minor`,
+      args: ["affiliate-1", "connection-1", "shop-1", "order-1", "line-1", 1, 1995, 250, "GBP"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_affiliate_orders
+        (id, connection_id, shop_id, source_order_id, source_line_item_id, quantity, gross_amount_minor, estimated_commission_minor, currency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(shop_id, source_order_id, source_line_item_id) DO UPDATE SET gross_amount_minor=excluded.gross_amount_minor`,
+      args: ["affiliate-1-retry", "connection-1", "shop-1", "order-1", "line-1", 1, 2095, 250, "GBP"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_affiliate_sync_status (connection_id, shop_id, last_successful_at, updated_at) VALUES (?, ?, ?, ?)`,
+      args: ["connection-1", "shop-1", "2026-09-05T00:00:00.000Z", "2026-09-05T00:00:00.000Z"],
+    });
+    await db.execute({
+      sql: `UPDATE tiktok_affiliate_sync_status SET last_error_at=?, last_error_message=? WHERE connection_id=? AND shop_id=?`,
+      args: ["2026-09-05T00:05:00.000Z", "Provider unavailable", "connection-1", "shop-1"],
+    });
+    const snapshot = await db.execute("SELECT gross_amount_minor, estimated_commission_minor FROM tiktok_affiliate_orders");
+    const status = await db.execute("SELECT last_successful_at, last_error_message FROM tiktok_affiliate_sync_status");
+    assert.deepEqual(snapshot.rows, [{ gross_amount_minor: 2095, estimated_commission_minor: 250 }]);
+    assert.deepEqual(status.rows, [{ last_successful_at: "2026-09-05T00:00:00.000Z", last_error_message: "Provider unavailable" }]);
+  } finally {
+    db.close();
     await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
   }
 });

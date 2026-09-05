@@ -615,6 +615,71 @@ CREATE TABLE IF NOT EXISTS tiktok_sync_cursors (
 CREATE INDEX IF NOT EXISTS tiktok_sync_cursors_stream_updated_idx
   ON tiktok_sync_cursors(stream, updated_at DESC);
 
+-- TikTok affiliate data is kept independently from ordinary TikTok Shop
+-- orders: TikTok's seller affiliate records are the attribution authority.
+CREATE TABLE IF NOT EXISTS tiktok_affiliate_orders (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES tiktok_connections(id) ON DELETE CASCADE,
+  shop_id TEXT NOT NULL,
+  source_order_id TEXT NOT NULL,
+  source_line_item_id TEXT NOT NULL,
+  source_product_id TEXT,
+  source_sku_id TEXT,
+  product_title TEXT,
+  creator_open_id TEXT,
+  creator_username TEXT,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  gross_amount_minor INTEGER NOT NULL DEFAULT 0,
+  estimated_commission_minor INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'GBP',
+  status TEXT,
+  source_created_at TEXT,
+  source_updated_at TEXT,
+  imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (shop_id, source_order_id, source_line_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_affiliate_orders_period_idx
+  ON tiktok_affiliate_orders(shop_id, source_created_at DESC);
+CREATE INDEX IF NOT EXISTS tiktok_affiliate_orders_creator_idx
+  ON tiktok_affiliate_orders(shop_id, creator_open_id, creator_username);
+
+CREATE TABLE IF NOT EXISTS tiktok_affiliate_videos (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES tiktok_connections(id) ON DELETE CASCADE,
+  shop_id TEXT NOT NULL,
+  source_video_id TEXT NOT NULL,
+  source_product_id TEXT,
+  creator_open_id TEXT,
+  creator_username TEXT,
+  video_title TEXT,
+  published_at TEXT,
+  gross_amount_minor INTEGER NOT NULL DEFAULT 0,
+  attributed_order_count INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'GBP',
+  source_updated_at TEXT,
+  imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (shop_id, source_video_id)
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_affiliate_videos_period_idx
+  ON tiktok_affiliate_videos(shop_id, published_at DESC);
+
+CREATE TABLE IF NOT EXISTS tiktok_affiliate_sync_status (
+  connection_id TEXT NOT NULL REFERENCES tiktok_connections(id) ON DELETE CASCADE,
+  shop_id TEXT NOT NULL,
+  last_successful_at TEXT,
+  last_attempted_at TEXT,
+  last_error_at TEXT,
+  last_error_message TEXT,
+  initial_baseline_started_at TEXT,
+  initial_baseline_completed_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (connection_id, shop_id)
+);
+
 -- Better Auth staff accounts and sessions.
 CREATE TABLE IF NOT EXISTS "user" (
   id TEXT NOT NULL PRIMARY KEY,

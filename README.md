@@ -42,4 +42,4 @@ After deployment, create one schedule to call:
 POST https://YOUR_APP_URL/api/jobs/reconcile
 ```
 
-with cron expression `*/30 * * * *`. The route verifies QStash signatures when both signing keys are present. Direct webhooks deliver the live path, and this job closes gaps with a 30-minute reconciliation cadence.
+with cron expression `*/5 * * * *`. The route verifies QStash signatures when both signing keys are present. Direct webhooks deliver the live path, and this job closes gaps with a five-minute reconciliation cadence for Shopify, TikTok Shop, and TikTok affiliate reporting.
