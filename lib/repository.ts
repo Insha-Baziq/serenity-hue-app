@@ -580,7 +580,7 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
     db.execute({
       sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
                     affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
-                    affiliate.creator_open_id, affiliate.creator_username,
+                    affiliate.creator_open_id, affiliate.creator_username, affiliate.product_title,
                     ordinary.financial_status, ordinary.cancelled_at
              FROM tiktok_affiliate_orders affiliate
              LEFT JOIN orders ordinary ON ordinary.source = 'tiktok' AND ordinary.source_order_id = affiliate.source_order_id
@@ -618,6 +618,7 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
       createdAt: stringValue(row.source_created_at), quantity: numberValue(row.quantity), grossAmount: numberValue(row.gross_amount_minor),
       estimatedCommission: numberValue(row.estimated_commission_minor),
       creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      product: optionalString(row.product_title) ?? null,
       linked: row.financial_status == null ? null : { financialStatus: stringValue(row.financial_status), cancelledAt: optionalString(row.cancelled_at) ?? null },
     })),
     refunds: refunds.rows.map((row) => ({ orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at) })),
