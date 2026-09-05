@@ -670,6 +670,7 @@ CREATE INDEX IF NOT EXISTS tiktok_affiliate_videos_period_idx
 CREATE TABLE IF NOT EXISTS tiktok_affiliate_sync_status (
   connection_id TEXT NOT NULL REFERENCES tiktok_connections(id) ON DELETE CASCADE,
   shop_id TEXT NOT NULL,
+  cursor_at TEXT,
   last_successful_at TEXT,
   last_attempted_at TEXT,
   last_error_at TEXT,

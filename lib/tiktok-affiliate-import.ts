@@ -1,9 +1,9 @@
 import "server-only";
 
 import {
-  advanceTikTokSyncCursor,
+  advanceTikTokAffiliateSyncCursor,
   getActiveTikTokConnections,
-  getTikTokSyncCursor,
+  getTikTokAffiliateSyncCursor,
   recordTikTokAffiliateSyncFailure,
   recordTikTokAffiliateSyncSuccess,
   saveTikTokAffiliateOrders,
@@ -180,7 +180,7 @@ export async function importTikTokAffiliateReporting(): Promise<TikTokAffiliateI
       for (const shop of authorized) {
         try {
           await updateTikTokConnectionShop({ id: connection.id, shopId: shop.id, shopCipher: shop.cipher });
-          const cursor = await getTikTokSyncCursor({ connectionId: connection.id, shopId: shop.id, stream: "affiliate_orders" });
+          const cursor = await getTikTokAffiliateSyncCursor({ connectionId: connection.id, shopId: shop.id });
           const initialBaseline = !cursor;
           const sourceOrders = await searchAffiliateOrders({ accessToken, shopCipher: shop.cipher, updatedAfter: cursor });
           const normalized = sourceOrders.flatMap((order) => {
@@ -194,10 +194,9 @@ export async function importTikTokAffiliateReporting(): Promise<TikTokAffiliateI
             return value ? [value] : [];
           });
           await saveTikTokAffiliateVideos(normalizedVideos as TikTokAffiliateVideoRecord[]);
-          await advanceTikTokSyncCursor({
+          await advanceTikTokAffiliateSyncCursor({
             connectionId: connection.id,
             shopId: shop.id,
-            stream: "affiliate_orders",
             cursorAt: latestUpdatedAt(sourceOrders) ?? new Date().toISOString(),
           });
           await recordTikTokAffiliateSyncSuccess({ connectionId: connection.id, shopId: shop.id, initialBaseline });

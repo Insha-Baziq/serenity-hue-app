@@ -60,17 +60,17 @@ test("schema keeps TikTok affiliate attribution and sync freshness separate from
       args: ["affiliate-1-retry", "connection-1", "shop-1", "order-1", "line-1", 1, 2095, 250, "GBP"],
     });
     await db.execute({
-      sql: `INSERT INTO tiktok_affiliate_sync_status (connection_id, shop_id, last_successful_at, updated_at) VALUES (?, ?, ?, ?)`,
-      args: ["connection-1", "shop-1", "2026-09-05T00:00:00.000Z", "2026-09-05T00:00:00.000Z"],
+      sql: `INSERT INTO tiktok_affiliate_sync_status (connection_id, shop_id, cursor_at, last_successful_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      args: ["connection-1", "shop-1", "2026-09-05T00:00:00.000Z", "2026-09-05T00:00:00.000Z", "2026-09-05T00:00:00.000Z"],
     });
     await db.execute({
       sql: `UPDATE tiktok_affiliate_sync_status SET last_error_at=?, last_error_message=? WHERE connection_id=? AND shop_id=?`,
       args: ["2026-09-05T00:05:00.000Z", "Provider unavailable", "connection-1", "shop-1"],
     });
     const snapshot = await db.execute("SELECT gross_amount_minor, estimated_commission_minor FROM tiktok_affiliate_orders");
-    const status = await db.execute("SELECT last_successful_at, last_error_message FROM tiktok_affiliate_sync_status");
+    const status = await db.execute("SELECT cursor_at, last_successful_at, last_error_message FROM tiktok_affiliate_sync_status");
     assert.deepEqual(snapshot.rows, [{ gross_amount_minor: 2095, estimated_commission_minor: 250 }]);
-    assert.deepEqual(status.rows, [{ last_successful_at: "2026-09-05T00:00:00.000Z", last_error_message: "Provider unavailable" }]);
+    assert.deepEqual(status.rows, [{ cursor_at: "2026-09-05T00:00:00.000Z", last_successful_at: "2026-09-05T00:00:00.000Z", last_error_message: "Provider unavailable" }]);
   } finally {
     db.close();
     await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);

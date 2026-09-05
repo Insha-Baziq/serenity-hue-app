@@ -19,6 +19,7 @@
     ["orders", "cancelled_at", "TEXT"],
     ["orders", "source_shop_id", "TEXT"],
     ["order_items", "source_product_id", "TEXT"],
-    ["order_items", "source_variant_id", "TEXT"]
+    ["order_items", "source_variant_id", "TEXT"],
+    ["tiktok_affiliate_sync_status", "cursor_at", "TEXT"]
   ]
 }

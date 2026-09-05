@@ -10,6 +10,7 @@ import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, 
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
 import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
+import { buildTikTokAffiliateDashboard, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -562,6 +563,75 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
   });
 }
 
+/** Server-shaped affiliate reporting read. TikTok affiliate records remain distinct from ordinary orders until a stable ID join succeeds. */
+export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<TikTokAffiliateDashboard> {
+  if (!isKpiPeriod(range)) throw new Error("Choose a valid inclusive reporting period.");
+  const db = await getTursoClient();
+  let reportingRange = range;
+  const allTime = "allTime" in range && range.allTime === true;
+  if (allTime) {
+    const earliest = await db.execute("SELECT MIN(source_created_at) AS first_record_at FROM tiktok_affiliate_orders");
+    const firstRecordAt = optionalString(earliest.rows[0]?.first_record_at);
+    reportingRange = { start: firstRecordAt ? affiliateKpiLondonDate(firstRecordAt) : range.end, end: range.end, allTime: true };
+  }
+  const queryStart = shiftKpiDate(reportingRange.start, -1);
+  const queryEndExclusive = shiftKpiDate(reportingRange.end, 2);
+  const [orders, refunds, videos, freshness] = await Promise.all([
+    db.execute({
+      sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
+                    affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
+                    affiliate.creator_open_id, affiliate.creator_username,
+                    ordinary.financial_status, ordinary.cancelled_at
+             FROM tiktok_affiliate_orders affiliate
+             LEFT JOIN orders ordinary ON ordinary.source = 'tiktok' AND ordinary.source_order_id = affiliate.source_order_id
+             WHERE affiliate.source_created_at >= ? AND affiliate.source_created_at < ?
+                OR EXISTS (
+                  SELECT 1 FROM tiktok_after_sales_line_items refund
+                  WHERE refund.order_id = ordinary.id AND refund.source_line_item_id = affiliate.source_line_item_id
+                    AND refund.event_type = 'return' AND refund.return_type = 'RETURN_AND_REFUND'
+                    AND refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+                    AND refund.source_updated_at >= ? AND refund.source_updated_at < ?
+                )
+             ORDER BY affiliate.source_created_at ASC, affiliate.id ASC`,
+      args: [queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT ordinary.source_order_id, refund.source_line_item_id, refund.quantity, refund.source_updated_at
+             FROM tiktok_after_sales_line_items refund
+             JOIN orders ordinary ON ordinary.id = refund.order_id
+             WHERE ordinary.source = 'tiktok' AND refund.event_type = 'return' AND refund.return_type = 'RETURN_AND_REFUND'
+               AND refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+               AND refund.source_updated_at >= ? AND refund.source_updated_at < ?`,
+      args: [queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT id, creator_open_id, creator_username, published_at
+             FROM tiktok_affiliate_videos WHERE published_at >= ? AND published_at < ? ORDER BY published_at ASC, id ASC`,
+      args: [queryStart, queryEndExclusive],
+    }),
+    db.execute(`SELECT MAX(last_successful_at) AS last_successful_at, MAX(last_error_at) AS last_error_at FROM tiktok_affiliate_sync_status`),
+  ]);
+  return buildTikTokAffiliateDashboard({
+    range: reportingRange,
+    orders: orders.rows.map((row) => ({
+      id: stringValue(row.id), orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id),
+      createdAt: stringValue(row.source_created_at), quantity: numberValue(row.quantity), grossAmount: numberValue(row.gross_amount_minor),
+      estimatedCommission: numberValue(row.estimated_commission_minor),
+      creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      linked: row.financial_status == null ? null : { financialStatus: stringValue(row.financial_status), cancelledAt: optionalString(row.cancelled_at) ?? null },
+    })),
+    refunds: refunds.rows.map((row) => ({ orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at) })),
+    videos: videos.rows.map((row) => ({ id: stringValue(row.id), creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null, publishedAt: optionalString(row.published_at) ?? null })),
+    freshness: freshness.rows[0] ? { lastSuccessfulAt: optionalString(freshness.rows[0].last_successful_at) ?? null, lastErrorAt: optionalString(freshness.rows[0].last_error_at) ?? null } : null,
+  });
+}
+
+function affiliateKpiLondonDate(date: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(date));
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
 function labIngredientId(title: string) {
   return `lab-ingredient-${createHash("sha256").update(title).digest("hex").slice(0, 16)}`;
 }
@@ -915,7 +985,7 @@ export async function markTikTokBackfillCompleted() {
   });
 }
 
-export type TikTokSyncStream = "orders" | "after_sales_cancel" | "after_sales_return" | "affiliate_orders";
+export type TikTokSyncStream = "orders" | "after_sales_cancel" | "after_sales_return";
 
 export async function getTikTokSyncCursor(input: { connectionId: string; shopId: string; stream: TikTokSyncStream }) {
   const db = await getTursoClient();
@@ -942,6 +1012,31 @@ export async function advanceTikTokSyncCursor(input: {
             cursor_at = CASE WHEN excluded.cursor_at > tiktok_sync_cursors.cursor_at THEN excluded.cursor_at ELSE tiktok_sync_cursors.cursor_at END,
             updated_at = excluded.updated_at`,
     args: [input.connectionId, input.shopId, input.stream, input.cursorAt, now],
+  });
+}
+
+/** Affiliate reporting has its own cursor because provider records are not ordinary TikTok order events. */
+export async function getTikTokAffiliateSyncCursor(input: { connectionId: string; shopId: string }) {
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: `SELECT cursor_at FROM tiktok_affiliate_sync_status
+          WHERE connection_id = ? AND shop_id = ? LIMIT 1`,
+    args: [input.connectionId, input.shopId],
+  });
+  return optionalString(result.rows[0]?.cursor_at);
+}
+
+export async function advanceTikTokAffiliateSyncCursor(input: { connectionId: string; shopId: string; cursorAt: string }) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO tiktok_affiliate_sync_status (connection_id, shop_id, cursor_at, last_attempted_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(connection_id, shop_id) DO UPDATE SET
+            cursor_at = CASE WHEN tiktok_affiliate_sync_status.cursor_at IS NULL OR excluded.cursor_at > tiktok_affiliate_sync_status.cursor_at THEN excluded.cursor_at ELSE tiktok_affiliate_sync_status.cursor_at END,
+            last_attempted_at = excluded.last_attempted_at,
+            updated_at = excluded.updated_at`,
+    args: [input.connectionId, input.shopId, input.cursorAt, now, now],
   });
 }
 
