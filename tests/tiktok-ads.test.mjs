@@ -6,6 +6,10 @@ const originalEnvironment = {
   appId: process.env.TIKTOK_ADS_APP_ID,
   secret: process.env.TIKTOK_ADS_APP_SECRET,
   redirectUri: process.env.TIKTOK_ADS_REDIRECT_URI,
+  appUrl: process.env.APP_URL,
+  vercel: process.env.VERCEL,
+  vercelProjectProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+  nodeEnv: process.env.NODE_ENV,
 };
 
 test.after(() => {
@@ -13,10 +17,27 @@ test.after(() => {
     TIKTOK_ADS_APP_ID: originalEnvironment.appId,
     TIKTOK_ADS_APP_SECRET: originalEnvironment.secret,
     TIKTOK_ADS_REDIRECT_URI: originalEnvironment.redirectUri,
+    APP_URL: originalEnvironment.appUrl,
+    VERCEL: originalEnvironment.vercel,
+    VERCEL_PROJECT_PRODUCTION_URL: originalEnvironment.vercelProjectProductionUrl,
+    NODE_ENV: originalEnvironment.nodeEnv,
   })) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
+});
+
+test("deployed TikTok Ads OAuth ignores a stale localhost callback and uses Vercel's production URL", () => {
+  process.env.TIKTOK_ADS_APP_ID = "app-123";
+  process.env.TIKTOK_ADS_APP_SECRET = "secret-value";
+  process.env.TIKTOK_ADS_REDIRECT_URI = "http://localhost:3000/api/tiktok-ads/callback";
+  process.env.APP_URL = "http://localhost:3000";
+  process.env.VERCEL = "1";
+  process.env.VERCEL_PROJECT_PRODUCTION_URL = "serenity-hue-operations.vercel.app";
+  process.env.NODE_ENV = "production";
+
+  const url = new URL(tiktokAdsAuthorizationUrl("state-value"));
+  assert.equal(url.searchParams.get("redirect_uri"), "https://serenity-hue-operations.vercel.app/api/tiktok-ads/callback");
 });
 
 test("TikTok Ads authorization URL contains only the public OAuth parameters", () => {

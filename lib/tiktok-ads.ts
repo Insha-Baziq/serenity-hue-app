@@ -32,6 +32,19 @@ function requiredEnvironment(name: "TIKTOK_ADS_APP_ID" | "TIKTOK_ADS_APP_SECRET"
   return value;
 }
 
+function isProductionRuntime() {
+  return process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build";
+}
+
+function isLoopbackUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 export function hasTikTokAdsAppCredentials() {
   return Boolean(process.env.TIKTOK_ADS_APP_ID?.trim() && process.env.TIKTOK_ADS_APP_SECRET?.trim());
 }
@@ -48,8 +61,15 @@ export function tiktokAdsAdvertiserId() {
 
 export function tiktokAdsRedirectUri() {
   const configured = process.env.TIKTOK_ADS_REDIRECT_URI?.trim();
-  if (configured) return configured;
-  const appUrl = process.env.APP_URL?.trim()
+  // A localhost callback is valid for local development but must never leak
+  // into a deployed OAuth request when a stale Vercel environment variable is
+  // present. Vercel's production URL is the stable OAuth callback host; the
+  // deployment URL can change on every deploy and is not a safe fallback.
+  if (configured && !(isProductionRuntime() && isLoopbackUrl(configured))) return configured;
+  const appUrl = (isProductionRuntime()
+    ? (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim()}` : undefined)
+    : undefined)
+    || process.env.APP_URL?.trim()
     || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined)
     || "http://localhost:3000";
   return `${appUrl.replace(/\/$/, "")}/api/tiktok-ads/callback`;

@@ -1,6 +1,5 @@
 import { consumeTikTokAdsOAuthState, saveTikTokAdsConnection } from "@/lib/repository";
-import { exchangeTikTokAdsAuthorizationCode, hashTikTokAdsOAuthState, tiktokAdsAdvertiserId } from "@/lib/tiktok-ads";
-import { getCanonicalAppUrl } from "@/lib/auth";
+import { exchangeTikTokAdsAuthorizationCode, hashTikTokAdsOAuthState, tiktokAdsAdvertiserId, tiktokAdsRedirectUri } from "@/lib/tiktok-ads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,9 +30,13 @@ function redirectToKpis(status: "connected" | "error", origin: string) {
   });
 }
 
+function tiktokAdsCallbackOrigin() {
+  return new URL(tiktokAdsRedirectUri()).origin;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const origin = getCanonicalAppUrl();
+  const origin = tiktokAdsCallbackOrigin();
   const authCode = url.searchParams.get("auth_code")?.trim() || url.searchParams.get("code")?.trim() || "";
   const state = url.searchParams.get("state")?.trim() ?? "";
   const error = url.searchParams.get("error")?.trim() ?? "";
