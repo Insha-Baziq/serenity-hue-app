@@ -18,6 +18,7 @@ import {
   fetchTikTokAdsReport,
   normalizeTikTokAdsReportRows,
   tiktokAdsReportingWindow,
+  type TikTokAdsDataLevel,
 } from "@/lib/tiktok-ads-reporting";
 import {
   refreshTikTokAdsAccessToken,
@@ -84,9 +85,28 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
     }
 
     const fetchedAt = new Date().toISOString();
-    const providerRows = await fetchTikTokAdsReport({ accessToken, advertiserId, startDate: window.startDate, endDate: window.endDate });
-    const normalized = normalizeTikTokAdsReportRows({ advertiserId, fetchedAt, rows: providerRows });
-    const rowsWritten = await saveTikTokAdsReportRows(normalized.records);
+    const reportLevels: TikTokAdsDataLevel[] = [
+      "AUCTION_ADVERTISER",
+      "AUCTION_CAMPAIGN",
+      "AUCTION_ADGROUP",
+      "AUCTION_AD",
+    ];
+    let rowsFetched = 0;
+    let rowsWritten = 0;
+    let rowsSkipped = 0;
+    let failedBreakdownReports = 0;
+    for (const dataLevel of reportLevels) {
+      try {
+        const providerRows = await fetchTikTokAdsReport({ accessToken, advertiserId, startDate: window.startDate, endDate: window.endDate, dataLevel });
+        const normalized = normalizeTikTokAdsReportRows({ advertiserId, fetchedAt, rows: providerRows, dataLevel });
+        rowsFetched += providerRows.length;
+        rowsSkipped += normalized.skippedRows;
+        rowsWritten += await saveTikTokAdsReportRows(normalized.records);
+      } catch {
+        if (dataLevel === "AUCTION_ADVERTISER") throw new Error("TikTok Ads advertiser report failed");
+        failedBreakdownReports += 1;
+      }
+    }
     await deleteTikTokAdsReportRowsBefore({ advertiserId, beforeDate: window.retainedBeforeDate });
     await recordTikTokAdsSyncSuccess({
       advertiserId,
@@ -94,22 +114,22 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
       startDate: window.startDate,
       endDate: window.endDate,
       rowsWritten,
-      rowsSkipped: normalized.skippedRows,
+      rowsSkipped: rowsSkipped + failedBreakdownReports,
     });
 
     return {
       ok: true,
       status: "succeeded",
-      reportStatus: normalized.skippedRows > 0 ? "partial" : "fresh",
+      reportStatus: rowsSkipped > 0 || failedBreakdownReports > 0 ? "partial" : "fresh",
       fetchMode: window.kind,
-      rowsFetched: providerRows.length,
+      rowsFetched,
       rowsWritten,
-      rowsSkipped: normalized.skippedRows,
+      rowsSkipped: rowsSkipped + failedBreakdownReports,
       startDate: window.startDate,
       endDate: window.endDate,
       completedAt: new Date().toISOString(),
-      message: normalized.skippedRows > 0
-        ? "TikTok Ads report refreshed with some provider rows omitted as malformed."
+      message: rowsSkipped > 0 || failedBreakdownReports > 0
+        ? "TikTok Ads report refreshed with some provider rows or breakdowns unavailable."
         : "TikTok Ads report refreshed.",
     };
   } catch {

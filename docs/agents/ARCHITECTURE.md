@@ -48,7 +48,9 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
     bounded calendar-bucket trends for long reporting periods
   create/consumeTikTokAdsOAuthState; save/getActiveTikTokAdsConnection;
   getTikTokAdsConnectionState -> safe connected/configuration state without tokens
-  getTikTokAdsReport(period) -> retained, provider-attributed Ads KPI view model
+  getTikTokAdsReport(period) -> retained, provider-attributed Ads KPI view model;
+    advertiser rows drive headline metrics while campaign/ad-group/ad and product
+    breakdowns are exposed only when the provider returns those identifiers
   getCustomers / getEmployees / createEmployee
   getInventory / getChannelInventory / getPhysicalInventory / getProductDetail
   create/update/deletePackagingMaterial
@@ -80,11 +82,12 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   fetch/import Shopify data; fetch/store TikTok inventory, orders, and affiliate reporting
   authorize/callback handlers for TikTok Shop and TikTok Ads; webhook handlers for TikTok and Parcel2Go
   syncDirectChannels / importTikTokAffiliateReporting / refreshTikTokAdsReporting / reconcileInventoryOperations
-  fetchTikTokAdsReport / normalizeTikTokAdsReportRows / tiktokAdsReportingWindow
+  fetchTikTokAdsReport / normalizeTikTokAdsReportRows / aggregateTikTokAdsReportRows /
+  tiktokAdsReportingWindow
   `lib/tiktok-ads-report-store`: report rows, status, token refresh persistence, retention, and Ads-only lease
   match/link Parcel2Go shipments
   ```
-- **Hides**: provider payloads, pagination, cursoring, token crypto, external retries, and provider-specific identifiers. TikTok Ads credentials and OAuth state use a separate persistence namespace from TikTok Shop.
+- **Hides**: provider payloads, pagination, cursoring, token crypto, external retries, and provider-specific identifiers from page callers. The Ads view model deliberately preserves provider report type, data level, currency, attribution metadata, and source identifiers for evidence and breakdown display. TikTok Ads credentials and OAuth state use a separate persistence namespace from TikTok Shop.
 - **Depends on**: repository, `lib/turso.ts`, provider environment keys, QStash signature verification.
 - **Tested at**: `tests/tiktok-ads-reporting.test.mjs` covers the official report request contract, pagination, safe errors, London windows, minor-unit money, provider attribution fields, and malformed-row omission; broader provider/webhook replay coverage remains absent.
 - **Depth**: mixed; importers contain substantial hidden behavior, but cross-provider orchestration is coupled to repository state.

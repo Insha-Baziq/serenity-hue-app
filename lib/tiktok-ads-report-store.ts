@@ -128,11 +128,17 @@ function effectiveTikTokAdsReportPeriod(period: TikTokAdsReportPeriod): TikTokAd
 
 export async function getTikTokAdsReport(period: TikTokAdsReportPeriod): Promise<TikTokAdsReport> {
   const effectiveRange = effectiveTikTokAdsReportPeriod(period);
+  const configuredAdvertiserId = process.env.TIKTOK_ADS_ADVERTISER_ID?.trim() ?? "";
+  const configuredAdvertiserName = process.env.TIKTOK_ADS_ADVERTISER_NAME?.trim() || null;
   if (!effectiveRange || !process.env.TIKTOK_ADS_ADVERTISER_ID?.trim()) {
-    return { ...aggregateTikTokAdsReportRows([], period), requestedRange: period, effectiveRange: null };
+    return {
+      ...aggregateTikTokAdsReportRows([], period, { advertiserId: configuredAdvertiserId, advertiserName: configuredAdvertiserName }),
+      requestedRange: period,
+      effectiveRange: null,
+    };
   }
 
-  const advertiserId = process.env.TIKTOK_ADS_ADVERTISER_ID.trim();
+  const advertiserId = configuredAdvertiserId;
   const db = await getTursoClient();
   const result = await db.execute({
     sql: `SELECT id, advertiser_id, report_date, report_type, service_type, data_level, dimension_key,
@@ -163,7 +169,7 @@ export async function getTikTokAdsReport(period: TikTokAdsReportPeriod): Promise
     fetchedAt: stringValue(row.fetched_at),
   }));
   return {
-    ...aggregateTikTokAdsReportRows(records, effectiveRange),
+    ...aggregateTikTokAdsReportRows(records, effectiveRange, { advertiserId, advertiserName: configuredAdvertiserName }),
     requestedRange: period,
     effectiveRange,
   };
