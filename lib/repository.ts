@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getTursoClient } from "@/lib/turso";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
+import { hasTikTokAdsAppCredentials, type TikTokAdsTokenBundle } from "@/lib/tiktok-ads";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import { hashPassword } from "better-auth/crypto";
 import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabFormula, LabFormulaLine, LabIngredient, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
@@ -833,6 +834,135 @@ export async function consumeTikTokOAuthState(stateHash: string) {
     args: [now, stateHash, now],
   });
   return result.rowsAffected > 0;
+}
+
+export async function createTikTokAdsOAuthState(input: { id: string; stateHash: string; expiresAt: string }) {
+  const db = await getTursoClient();
+  await db.execute({
+    sql: `INSERT INTO tiktok_ads_oauth_states (id, state_hash, expires_at) VALUES (?, ?, ?)`,
+    args: [input.id, input.stateHash, input.expiresAt],
+  });
+}
+
+export async function consumeTikTokAdsOAuthState(stateHash: string) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const result = await db.execute({
+    sql: `UPDATE tiktok_ads_oauth_states SET used_at = ?
+          WHERE state_hash = ? AND used_at IS NULL AND expires_at > ?`,
+    args: [now, stateHash, now],
+  });
+  return result.rowsAffected > 0;
+}
+
+export type TikTokAdsConnection = {
+  id: string;
+  advertiserId: string;
+  accessToken: string;
+  refreshToken?: string;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  authorizedAdvertiserIds: string[];
+  grantedScopes: string[];
+};
+
+export type TikTokAdsConnectionState = {
+  status: "not_configured" | "not_connected" | "connected" | "reconnect_required";
+  advertiserId?: string;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  updatedAt?: string;
+  grantedScopes: string[];
+};
+
+export async function saveTikTokAdsConnection(input: TikTokAdsTokenBundle & { advertiserId: string }) {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const id = `tiktok-ads:${input.advertiserId}`;
+  await db.execute({
+    sql: `INSERT INTO tiktok_ads_connections
+            (id, advertiser_id, access_token, refresh_token, access_token_expires_at,
+             refresh_token_expires_at, authorized_advertiser_ids, granted_scopes, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+          ON CONFLICT(advertiser_id) DO UPDATE SET
+            access_token = excluded.access_token,
+            refresh_token = excluded.refresh_token,
+            access_token_expires_at = excluded.access_token_expires_at,
+            refresh_token_expires_at = excluded.refresh_token_expires_at,
+            authorized_advertiser_ids = excluded.authorized_advertiser_ids,
+            granted_scopes = excluded.granted_scopes,
+            status = 'active',
+            updated_at = excluded.updated_at`,
+    args: [
+      id,
+      input.advertiserId,
+      encryptTikTokToken(input.accessToken),
+      input.refreshToken ? encryptTikTokToken(input.refreshToken) : null,
+      input.accessTokenExpiresAt ?? null,
+      input.refreshTokenExpiresAt ?? null,
+      JSON.stringify(input.advertiserIds),
+      JSON.stringify(input.grantedScopes),
+      now,
+      now,
+    ] as SqlValue[],
+  });
+  return id;
+}
+
+export async function getActiveTikTokAdsConnection(): Promise<TikTokAdsConnection | null> {
+  const db = await getTursoClient();
+  const configuredAdvertiserId = process.env.TIKTOK_ADS_ADVERTISER_ID?.trim();
+  const result = await db.execute({
+    sql: `SELECT id, advertiser_id, access_token, refresh_token, access_token_expires_at,
+                 refresh_token_expires_at, authorized_advertiser_ids, granted_scopes
+          FROM tiktok_ads_connections
+          WHERE status = 'active' ${configuredAdvertiserId ? "AND advertiser_id = ?" : ""}
+          ORDER BY updated_at DESC LIMIT 1`,
+    args: configuredAdvertiserId ? [configuredAdvertiserId] : [],
+  });
+  const row = result.rows[0];
+  if (!row) return null;
+  const accessToken = decryptTikTokToken(stringValue(row.access_token));
+  const refreshToken = row.refresh_token === null || row.refresh_token === undefined
+    ? undefined
+    : decryptTikTokToken(stringValue(row.refresh_token));
+  if (accessToken.needsEncryption || refreshToken?.needsEncryption) {
+    await db.execute({
+      sql: `UPDATE tiktok_ads_connections SET access_token = ?, refresh_token = ?, updated_at = ? WHERE id = ?`,
+      args: [encryptTikTokToken(accessToken.value), refreshToken ? encryptTikTokToken(refreshToken.value) : null, new Date().toISOString(), stringValue(row.id)],
+    });
+  }
+  return {
+    id: stringValue(row.id),
+    advertiserId: stringValue(row.advertiser_id),
+    accessToken: accessToken.value,
+    refreshToken: refreshToken?.value,
+    accessTokenExpiresAt: optionalString(row.access_token_expires_at),
+    refreshTokenExpiresAt: optionalString(row.refresh_token_expires_at),
+    authorizedAdvertiserIds: stringArray(row.authorized_advertiser_ids),
+    grantedScopes: stringArray(row.granted_scopes),
+  };
+}
+
+export async function getTikTokAdsConnectionState(): Promise<TikTokAdsConnectionState> {
+  const advertiserId = process.env.TIKTOK_ADS_ADVERTISER_ID?.trim();
+  if (!hasTikTokAdsAppCredentials() || !advertiserId) return { status: "not_configured", grantedScopes: [] };
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: `SELECT advertiser_id, access_token_expires_at, refresh_token_expires_at, granted_scopes, status, updated_at
+          FROM tiktok_ads_connections WHERE advertiser_id = ? LIMIT 1`,
+    args: [advertiserId],
+  });
+  const row = result.rows[0];
+  if (!row) return { status: "not_connected", advertiserId, grantedScopes: [] };
+  return {
+    status: stringValue(row.status) === "active" ? "connected" : "reconnect_required",
+    advertiserId: stringValue(row.advertiser_id),
+    accessTokenExpiresAt: optionalString(row.access_token_expires_at),
+    refreshTokenExpiresAt: optionalString(row.refresh_token_expires_at),
+    updatedAt: optionalString(row.updated_at),
+    grantedScopes: stringArray(row.granted_scopes),
+  };
 }
 
 export async function saveTikTokConnection(input: {

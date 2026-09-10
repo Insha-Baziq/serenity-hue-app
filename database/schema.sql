@@ -577,6 +577,34 @@ CREATE TABLE IF NOT EXISTS tiktok_oauth_states (
 
 CREATE INDEX IF NOT EXISTS tiktok_oauth_states_expires_idx ON tiktok_oauth_states(expires_at);
 
+-- TikTok Ads has a separate OAuth and credential namespace from TikTok Shop.
+-- Ads tokens authorize Marketing API reporting and never grant Shop APIs.
+CREATE TABLE IF NOT EXISTS tiktok_ads_oauth_states (
+  id TEXT PRIMARY KEY,
+  state_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_ads_oauth_states_expires_idx ON tiktok_ads_oauth_states(expires_at);
+
+CREATE TABLE IF NOT EXISTS tiktok_ads_connections (
+  id TEXT PRIMARY KEY,
+  advertiser_id TEXT NOT NULL UNIQUE,
+  access_token TEXT NOT NULL,
+  refresh_token TEXT,
+  access_token_expires_at TEXT,
+  refresh_token_expires_at TEXT,
+  authorized_advertiser_ids TEXT NOT NULL DEFAULT '[]',
+  granted_scopes TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deauthorized', 'expired')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_ads_connections_status_idx ON tiktok_ads_connections(status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS tiktok_connections (
   id TEXT PRIMARY KEY,
   shop_id TEXT UNIQUE,
