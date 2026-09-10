@@ -3,7 +3,13 @@ import "server-only";
 import { getActiveTikTokAdsConnection, getTikTokAdsConnectionState } from "@/lib/repository";
 import { hasTikTokAdsAppCredentials } from "@/lib/tiktok-ads";
 import { encryptTikTokToken } from "@/lib/tiktok-token-crypto";
-import type { TikTokAdsReportRecord } from "@/lib/tiktok-ads-reporting";
+import {
+  aggregateTikTokAdsReportRows,
+  tiktokAdsReportingWindow,
+  type TikTokAdsReport,
+  type TikTokAdsReportPeriod,
+  type TikTokAdsReportRecord,
+} from "@/lib/tiktok-ads-reporting";
 import { getTursoClient } from "@/lib/turso";
 
 type SqlValue = string | number | null;
@@ -19,6 +25,27 @@ function numberValue(value: unknown) {
 function optionalString(value: unknown) {
   const text = stringValue(value);
   return text || undefined;
+}
+
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseRecord(value: unknown): Record<string, string> {
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [key, item] of Object.entries(parsed)) {
+      if (typeof item === "string") result[key] = item;
+    }
+    return result;
+  } catch {
+    return {};
+  }
 }
 
 export async function updateTikTokAdsConnectionTokens(input: {
@@ -89,6 +116,56 @@ export async function getTikTokAdsSyncStatus(advertiserId: string): Promise<TikT
     lastReportEndDate: optionalString(row.last_report_end_date),
     lastRowsWritten: numberValue(row.last_rows_written),
     lastRowsSkipped: numberValue(row.last_rows_skipped),
+  };
+}
+
+function effectiveTikTokAdsReportPeriod(period: TikTokAdsReportPeriod): TikTokAdsReportPeriod | null {
+  const retained = tiktokAdsReportingWindow(new Date(), "baseline");
+  const start = period.allTime || period.start < retained.startDate ? retained.startDate : period.start;
+  const end = period.end > retained.endDate ? retained.endDate : period.end;
+  return start <= end ? { start, end } : null;
+}
+
+export async function getTikTokAdsReport(period: TikTokAdsReportPeriod): Promise<TikTokAdsReport> {
+  const effectiveRange = effectiveTikTokAdsReportPeriod(period);
+  if (!effectiveRange || !process.env.TIKTOK_ADS_ADVERTISER_ID?.trim()) {
+    return { ...aggregateTikTokAdsReportRows([], period), requestedRange: period, effectiveRange: null };
+  }
+
+  const advertiserId = process.env.TIKTOK_ADS_ADVERTISER_ID.trim();
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: `SELECT id, advertiser_id, report_date, report_type, service_type, data_level, dimension_key,
+                 provider_currency, spend_minor, attributed_revenue_minor, attributed_purchases,
+                 impressions, clicks, source_dimensions_json, source_metrics_json, attribution_window, fetched_at
+          FROM tiktok_ads_report_rows
+          WHERE advertiser_id = ? AND report_date BETWEEN ? AND ?
+          ORDER BY report_date ASC, dimension_key ASC`,
+    args: [advertiserId, effectiveRange.start, effectiveRange.end],
+  });
+  const records: TikTokAdsReportRecord[] = result.rows.map((row) => ({
+    id: stringValue(row.id),
+    advertiserId: stringValue(row.advertiser_id),
+    reportDate: stringValue(row.report_date),
+    reportType: stringValue(row.report_type) as TikTokAdsReportRecord["reportType"],
+    serviceType: stringValue(row.service_type) as TikTokAdsReportRecord["serviceType"],
+    dataLevel: stringValue(row.data_level) as TikTokAdsReportRecord["dataLevel"],
+    dimensionKey: stringValue(row.dimension_key),
+    providerCurrency: stringValue(row.provider_currency),
+    spendMinor: numberValue(row.spend_minor),
+    attributedRevenueMinor: nullableNumber(row.attributed_revenue_minor),
+    attributedPurchases: nullableNumber(row.attributed_purchases),
+    impressions: nullableNumber(row.impressions),
+    clicks: nullableNumber(row.clicks),
+    sourceDimensions: parseRecord(row.source_dimensions_json),
+    sourceMetrics: parseRecord(row.source_metrics_json),
+    attributionWindow: optionalString(row.attribution_window) ?? null,
+    fetchedAt: stringValue(row.fetched_at),
+  }));
+  return {
+    ...aggregateTikTokAdsReportRows(records, effectiveRange),
+    requestedRange: period,
+    effectiveRange,
   };
 }
 

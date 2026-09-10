@@ -56,6 +56,40 @@ export type TikTokAdsReportingWindow = {
   retainedBeforeDate: string;
 };
 
+export type TikTokAdsReportPeriod = {
+  start: string;
+  end: string;
+  allTime?: boolean;
+};
+
+export type TikTokAdsDailyReport = {
+  date: string;
+  spendMinor: number;
+  attributedRevenueMinor: number | null;
+  attributedPurchases: number | null;
+  impressions: number | null;
+  clicks: number | null;
+};
+
+export type TikTokAdsReport = {
+  requestedRange: TikTokAdsReportPeriod;
+  effectiveRange: TikTokAdsReportPeriod | null;
+  currency: string | null;
+  metrics: {
+    spendMinor: number | null;
+    attributedRevenueMinor: number | null;
+    attributedPurchases: number | null;
+    impressions: number | null;
+    clicks: number | null;
+    roas: number | null;
+  };
+  trend: TikTokAdsDailyReport[];
+  rowCount: number;
+  attributionEvidenceRows: number;
+  earliestReportDate: string | null;
+  latestReportDate: string | null;
+};
+
 function textValue(value: unknown) {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -130,6 +164,17 @@ function optionalMetric(metrics: Record<string, unknown>, key: string, parser: (
   return parser(metrics[key]);
 }
 
+function nullableSum(values: Array<number | null | undefined>) {
+  let total = 0;
+  let observed = false;
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    total += value;
+    observed = true;
+  }
+  return observed ? total : null;
+}
+
 export function normalizeTikTokAdsReportRows(input: {
   advertiserId: string;
   fetchedAt: string;
@@ -189,6 +234,51 @@ export function normalizeTikTokAdsReportRows(input: {
   }
 
   return { records, skippedRows };
+}
+
+export function aggregateTikTokAdsReportRows(records: TikTokAdsReportRecord[], range: TikTokAdsReportPeriod): TikTokAdsReport {
+  const filtered = records
+    .filter((record) => record.reportDate >= range.start && record.reportDate <= range.end)
+    .sort((left, right) => left.reportDate.localeCompare(right.reportDate));
+  const currencies = [...new Set(filtered.map((record) => record.providerCurrency).filter(Boolean))];
+  const currency = currencies.length === 1 ? currencies[0] : null;
+  const daily = new Map<string, TikTokAdsDailyReport>();
+
+  for (const record of filtered) {
+    const current = daily.get(record.reportDate) ?? {
+      date: record.reportDate,
+      spendMinor: 0,
+      attributedRevenueMinor: null,
+      attributedPurchases: null,
+      impressions: null,
+      clicks: null,
+    };
+    current.spendMinor += record.spendMinor;
+    current.attributedRevenueMinor = nullableSum([current.attributedRevenueMinor, record.attributedRevenueMinor]);
+    current.attributedPurchases = nullableSum([current.attributedPurchases, record.attributedPurchases]);
+    current.impressions = nullableSum([current.impressions, record.impressions]);
+    current.clicks = nullableSum([current.clicks, record.clicks]);
+    daily.set(record.reportDate, current);
+  }
+
+  const spendMinor = currency ? filtered.reduce((total, record) => total + record.spendMinor, 0) : null;
+  const attributedRevenueMinor = currency ? nullableSum(filtered.map((record) => record.attributedRevenueMinor)) : null;
+  const attributedPurchases = nullableSum(filtered.map((record) => record.attributedPurchases));
+  const impressions = nullableSum(filtered.map((record) => record.impressions));
+  const clicks = nullableSum(filtered.map((record) => record.clicks));
+  const roas = spendMinor && attributedRevenueMinor !== null ? attributedRevenueMinor / spendMinor : null;
+
+  return {
+    requestedRange: range,
+    effectiveRange: filtered.length ? range : null,
+    currency,
+    metrics: { spendMinor, attributedRevenueMinor, attributedPurchases, impressions, clicks, roas },
+    trend: [...daily.values()],
+    rowCount: filtered.length,
+    attributionEvidenceRows: filtered.filter((record) => record.attributedRevenueMinor !== null || record.attributedPurchases !== null).length,
+    earliestReportDate: filtered[0]?.reportDate ?? null,
+    latestReportDate: filtered.at(-1)?.reportDate ?? null,
+  };
 }
 
 function pageNumber(value: unknown, fallback: number) {

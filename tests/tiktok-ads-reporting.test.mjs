@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  aggregateTikTokAdsReportRows,
   fetchTikTokAdsReport,
   normalizeTikTokAdsReportRows,
   tiktokAdsReportingWindow,
@@ -105,6 +106,55 @@ test("TikTok Ads normalization skips rows that cannot carry trustworthy attribut
 
   assert.equal(result.records.length, 0);
   assert.equal(result.skippedRows, 4);
+});
+
+test("TikTok Ads aggregation keeps provider attribution separate from spend and preserves unavailable totals", () => {
+  const normalized = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [
+      {
+        dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-08" },
+        metrics: { currency: "GBP", spend: "10.00", total_onsite_shopping_value: "25.00", shop_total_purchase_by_order_submission: "2", impressions: "100", clicks: "5" },
+      },
+      {
+        dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-09" },
+        metrics: { currency: "GBP", spend: "5.00", impressions: "50", clicks: "2" },
+      },
+    ],
+  });
+
+  const report = aggregateTikTokAdsReportRows(normalized.records, { start: "2026-09-08", end: "2026-09-09" });
+  assert.equal(report.currency, "GBP");
+  assert.deepEqual(report.metrics, {
+    spendMinor: 1500,
+    attributedRevenueMinor: 2500,
+    attributedPurchases: 2,
+    impressions: 150,
+    clicks: 7,
+    roas: 2500 / 1500,
+  });
+  assert.equal(report.attributionEvidenceRows, 1);
+  assert.deepEqual(report.trend.map(({ date, spendMinor, attributedRevenueMinor, attributedPurchases }) => ({ date, spendMinor, attributedRevenueMinor, attributedPurchases })), [
+    { date: "2026-09-08", spendMinor: 1000, attributedRevenueMinor: 2500, attributedPurchases: 2 },
+    { date: "2026-09-09", spendMinor: 500, attributedRevenueMinor: null, attributedPurchases: null },
+  ]);
+});
+
+test("TikTok Ads aggregation returns unavailable money when provider currencies conflict", () => {
+  const normalized = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [
+      { dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-08" }, metrics: { currency: "GBP", spend: "1.00", total_onsite_shopping_value: "2.00" } },
+      { dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-09" }, metrics: { currency: "USD", spend: "1.00", total_onsite_shopping_value: "2.00" } },
+    ],
+  });
+
+  const report = aggregateTikTokAdsReportRows(normalized.records, { start: "2026-09-08", end: "2026-09-09" });
+  assert.equal(report.currency, null);
+  assert.equal(report.metrics.spendMinor, null);
+  assert.equal(report.metrics.attributedRevenueMinor, null);
 });
 
 test("TikTok Ads report fetch uses the official integrated report contract and paginates", async () => {

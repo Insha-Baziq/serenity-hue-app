@@ -41,7 +41,14 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   ```text
   getOrders / getOrdersPage / getOrdersForExport
   getKpiDashboard(period) -> server-shaped dashboard with sales/product/channel metrics,
-    conservative customer performance, and fixed-window physical-variant restock decisions
+    conservative customer performance, fixed-window physical-variant restock decisions,
+    and an explicit all-time period resolved from the earliest recorded order
+  getTikTokAffiliateDashboard(period) -> affiliate-attributed KPI snapshot with
+    linked-order reconciliation, explicit unreconciled GMV, sync freshness, and
+    bounded calendar-bucket trends for long reporting periods
+  create/consumeTikTokAdsOAuthState; save/getActiveTikTokAdsConnection;
+  getTikTokAdsConnectionState -> safe connected/configuration state without tokens
+  getTikTokAdsReport(period) -> retained, provider-attributed Ads KPI view model
   getCustomers / getEmployees / createEmployee
   getInventory / getChannelInventory / getPhysicalInventory / getProductDetail
   create/update/deletePackagingMaterial
@@ -67,17 +74,19 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 ### Provider integrations and sync orchestration
 
-- **Owns**: Shopify/TikTok reads and imports, TikTok OAuth/inventory, Parcel2Go shipment matching, webhooks, and manual/scheduled reconciliation.
+- **Owns**: Shopify/TikTok reads and imports, TikTok Shop OAuth/inventory, TikTok Ads Marketing API OAuth/reporting, Parcel2Go shipment matching, webhooks, and manual/scheduled reconciliation.
 - **Public interface**:
   ```text
-  fetch/import Shopify data; fetch/store TikTok inventory and orders
-  authorize/callback/webhook handlers for TikTok and Parcel2Go
-  syncDirectChannels / reconcileInventoryOperations
+  fetch/import Shopify data; fetch/store TikTok inventory, orders, and affiliate reporting
+  authorize/callback handlers for TikTok Shop and TikTok Ads; webhook handlers for TikTok and Parcel2Go
+  syncDirectChannels / importTikTokAffiliateReporting / refreshTikTokAdsReporting / reconcileInventoryOperations
+  fetchTikTokAdsReport / normalizeTikTokAdsReportRows / tiktokAdsReportingWindow
+  `lib/tiktok-ads-report-store`: report rows, status, token refresh persistence, retention, and Ads-only lease
   match/link Parcel2Go shipments
   ```
-- **Hides**: provider payloads, pagination, cursoring, token crypto, external retries, and provider-specific identifiers.
+- **Hides**: provider payloads, pagination, cursoring, token crypto, external retries, and provider-specific identifiers. TikTok Ads credentials and OAuth state use a separate persistence namespace from TikTok Shop.
 - **Depends on**: repository, `lib/turso.ts`, provider environment keys, QStash signature verification.
-- **Tested at**: production build only; no provider contract or webhook replay tests.
+- **Tested at**: `tests/tiktok-ads-reporting.test.mjs` covers the official report request contract, pagination, safe errors, London windows, minor-unit money, provider attribution fields, and malformed-row omission; broader provider/webhook replay coverage remains absent.
 - **Depth**: mixed; importers contain substantial hidden behavior, but cross-provider orchestration is coupled to repository state.
 
 ### Authentication and request security
@@ -123,5 +132,5 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - Physical catalogue quantities do not silently update Shopify/TikTok channel quantities.
 - Labs quantities are grams and do not affect finished-product or packaging stock.
 - Ledgers and historical application rows are append-only; corrections are new records.
-- Provider payloads are normalized before they reach UI contracts.
+- Provider payloads are normalized before they reach UI contracts; tokens and buyer details remain server-only.
 - Authenticated mutation routes must validate the session before invoking a write.

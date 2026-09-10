@@ -1,6 +1,7 @@
 import { KpisWorkspace } from "@/components/kpis-workspace";
 import { requirePageSession } from "@/lib/auth-guard";
-import { getKpiDashboard } from "@/lib/repository";
+import { getKpiDashboard, getTikTokAdsConnectionState, getTikTokAffiliateDashboard } from "@/lib/repository";
+import { getTikTokAdsReport, getTikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
 import type { KpiPeriod } from "@/lib/kpi-dashboard";
 
 export const dynamic = "force-dynamic";
@@ -19,19 +20,34 @@ function shiftDate(date: string, days: number) {
   return value.toISOString().slice(0, 10);
 }
 
+function isCalendarDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function selectedRange(params: Record<string, string | string[] | undefined>): KpiPeriod {
+  const endDate = londonToday();
+  if (params.period === "all") return { start: endDate, end: endDate, allTime: true };
   const start = typeof params.start === "string" ? params.start : "";
   const end = typeof params.end === "string" ? params.end : "";
-  const valid = /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end);
+  const valid = isCalendarDate(start) && isCalendarDate(end);
   const duration = valid ? Date.parse(`${end}T00:00:00.000Z`) - Date.parse(`${start}T00:00:00.000Z`) : NaN;
-  if (valid && Number.isFinite(duration) && duration >= 0 && duration < 365 * 86_400_000) return { start, end };
-  const endDate = londonToday();
+  if (valid && Number.isFinite(duration) && duration >= 0) return { start, end };
   return { start: shiftDate(endDate, -29), end: endDate };
 }
 
 export default async function KpisPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   await requirePageSession();
-  const range = selectedRange(await searchParams);
-  const dashboard = await getKpiDashboard(range);
-  return <KpisWorkspace dashboard={dashboard} />;
+  const params = await searchParams;
+  const range = selectedRange(params);
+  const initialView = params.view === "ads" ? "ads" : undefined;
+  const [dashboard, affiliateDashboard, adsConnection, adsReportState, adsReport] = await Promise.all([
+    getKpiDashboard(range),
+    getTikTokAffiliateDashboard(range),
+    getTikTokAdsConnectionState(),
+    getTikTokAdsReportState(),
+    getTikTokAdsReport(range),
+  ]);
+  return <KpisWorkspace dashboard={dashboard} affiliateDashboard={affiliateDashboard} adsConnection={adsConnection} adsReportState={adsReportState} adsReport={adsReport} initialView={initialView} />;
 }

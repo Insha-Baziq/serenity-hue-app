@@ -1,199 +1,213 @@
 "use client";
 
+// KPI redesign: chart-led reporting within Serenity Hue's warm paper/plum world.
+// First viewport: shared period controls, four metrics, sales timeline and composition.
+// Signature interaction: revenue/orders/commission changes the affiliate leaderboard.
+// Preserve provider truth, exact-value tables, unavailable states and reduced motion.
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import { Area, Bar, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BarChart3, CalendarDays, Check, ClipboardList, Package, PoundSterling, ShoppingBag, TrendingUp, UsersRound } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useId, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
+import { Area, Bar, CartesianGrid, Cell, ComposedChart, Pie, PieChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ArrowDownRight, ArrowUpRight, BarChart3, CalendarDays, Check, ChevronDown, CircleHelp, LineChart, Megaphone, Package, Search, UsersRound, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatMoney, relativeTime } from "@/lib/format";
-import type { KpiDashboard, KpiMetricSet, KpiPeriod } from "@/lib/kpi-dashboard";
+import type { KpiDashboard, KpiPeriod } from "@/lib/kpi-dashboard";
+import { rankTikTokAffiliates, type AffiliateRankingMode, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
+import type { TikTokAdsConnectionState } from "@/lib/repository";
+import type { TikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
+import type { TikTokAdsReport } from "@/lib/tiktok-ads-reporting";
+import s from "./kpis-workspace.module.css";
 
-type Props = { dashboard: KpiDashboard };
-type TrendMode = "sales" | "orders";
+type View = "business" | "affiliate" | "ads";
+type Props = { dashboard: KpiDashboard; affiliateDashboard: TikTokAffiliateDashboard; adsConnection: TikTokAdsConnectionState; adsReportState: TikTokAdsReportState; adsReport: TikTokAdsReport; initialView?: View };
+type TrendPoint = { date: string; netSales: number; orders: number };
 type PeriodControl = { rangeKey: string; preset: string; start: string; end: string };
+const COLORS = ["#6c285f", "#437d67", "#d88a9e", "#a87b9e", "#b09871"];
+const number = (value: number) => value.toLocaleString("en-GB");
+function dayCount(range: KpiPeriod) { return Math.floor((Date.parse(range.end) - Date.parse(range.start)) / 86_400_000) + 1; }
+function shiftDate(date: string, days: number) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
+function presetFor(range: KpiPeriod) { if (range.allTime) return "all"; const days = dayCount(range); return [7, 30, 90].includes(days) ? String(days) : "custom"; }
+function formatDate(date: string, year = false) { return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", ...(year ? { year: "numeric" as const } : {}), timeZone: "Europe/London" }).format(new Date(date.length === 10 ? `${date}T12:00:00Z` : date)); }
+function rangeLabel(range: KpiPeriod) { return `${formatDate(range.start, true)} – ${formatDate(range.end, true)}`; }
+function subscribeMotion(listener: () => void) { const media = window.matchMedia("(prefers-reduced-motion: reduce)"); media.addEventListener("change", listener); return () => media.removeEventListener("change", listener); }
+function useReducedMotion() { return useSyncExternalStore(subscribeMotion, () => window.matchMedia("(prefers-reduced-motion: reduce)").matches, () => true); }
 
-function dayCount(range: KpiPeriod) {
-  return Math.floor((Date.parse(`${range.end}T00:00:00.000Z`) - Date.parse(`${range.start}T00:00:00.000Z`)) / 86_400_000) + 1;
+function Panel({ title, subtitle, actions, children, className = "" }: { title: string; subtitle?: string; actions?: ReactNode; children: ReactNode; className?: string }) {
+  return <section className={`${s.panel} ${className}`}><header className={s.panelHeader}><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{actions}</header>{children}</section>;
+}
+function Empty({ children }: { children: ReactNode }) { return <div className={s.empty}><BarChart3 size={24} strokeWidth={1.4} /><p>{children}</p></div>; }
+function Metric({ label, value, note, previous, current, primary = false }: { label: string; value: string; note: string; previous?: number; current?: number; primary?: boolean }) {
+  const change = previous && current !== undefined ? (current - previous) / Math.abs(previous) * 100 : null;
+  return <article className={`${s.metric} ${primary ? s.primaryMetric : ""}`}><div className={s.metricLabel}>{label}<span className={s.help} tabIndex={0} aria-label={note}><CircleHelp size={14} /><span role="tooltip">{note}</span></span></div><strong>{value}</strong><div className={s.metricFoot}>{change !== null ? <><span className={change >= 0 ? s.positive : s.negative}>{change >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{Math.abs(change).toFixed(1)}%</span><span>vs prior period</span></> : <span>{previous === 0 ? "No prior activity" : note}</span>}</div></article>;
+}
+function TableDetails({ label = "View detailed breakdown", children }: { label?: string; children: ReactNode }) { return <details className={s.details}><summary>{label}<ChevronDown size={15} /></summary><div className={s.tableScroll}>{children}</div></details>; }
+
+function SalesChart({ data, range, interval, affiliate = false }: { data: TrendPoint[]; range: KpiPeriod; interval: number; affiliate?: boolean }) {
+  const [measure, setMeasure] = useState<"netSales" | "orders">("netSales");
+  const [plot, setPlot] = useState<"line" | "bar">("line");
+  const reduced = useReducedMotion();
+  const id = useId().replace(/:/g, "");
+  useEffect(() => { try { const saved = localStorage.getItem("serenity-hue:kpi-plot"); if (saved === "line" || saved === "bar") { const frame = requestAnimationFrame(() => setPlot(saved)); return () => cancelAnimationFrame(frame); } } catch {} }, []);
+  function choosePlot(value: "line" | "bar") { setPlot(value); try { localStorage.setItem("serenity-hue:kpi-plot", value); } catch {} }
+  const total = data.reduce((sum, point) => sum + point[measure], 0);
+  const hasData = data.some(point => point[measure] !== 0);
+  return <Panel title={affiliate ? "Affiliate sales" : "Sales performance"} subtitle={`${interval > 1 ? `${interval}-day intervals` : "Daily performance"} · Europe/London`} actions={<div className={s.segmented} aria-label="Trend measure" role="group"><button aria-pressed={measure === "netSales"} onClick={() => setMeasure("netSales")}>Net sales</button><button aria-pressed={measure === "orders"} onClick={() => setMeasure("orders")}>Orders</button></div>}>
+    <div className={s.chartHeadline}><div><strong>{measure === "netSales" ? formatMoney(total) : number(total)}</strong><span>{measure === "netSales" ? "over the selected period" : affiliate ? "attributed order lines over the period" : "paid orders over the period"}</span></div><div className={s.plotToggle} role="group" aria-label="Chart style"><button title="Area chart" aria-label="Area chart" aria-pressed={plot === "line"} onClick={() => choosePlot("line")}><LineChart size={17} /></button><button title="Bar chart" aria-label="Bar chart" aria-pressed={plot === "bar"} onClick={() => choosePlot("bar")}><BarChart3 size={17} /></button></div></div>
+    {hasData ? <div className={s.chart} aria-label={`${affiliate ? "Affiliate " : ""}${measure === "netSales" ? "net sales" : "orders"} chart`}><ResponsiveContainer width="100%" height="100%"><ComposedChart accessibilityLayer data={data} margin={{ top: 14, right: 12, left: 0, bottom: 4 }}><defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS[0]} stopOpacity={0.23} /><stop offset="100%" stopColor={COLORS[0]} stopOpacity={0.015} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#eee5e8" strokeDasharray="3 5" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} tickMargin={14} tick={{ fill: "#756a70", fontSize: 11 }} tickFormatter={value => formatDate(String(value), Boolean(range.allTime && dayCount(range) > 365))} /><YAxis width={62} tickLine={false} axisLine={false} tick={{ fill: "#756a70", fontSize: 11 }} allowDecimals={false} tickFormatter={value => measure === "netSales" ? new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", notation: "compact", maximumFractionDigits: 1 }).format(Number(value) / 100) : number(Number(value))} /><ReferenceLine y={0} stroke="#ddcdd3" /><Tooltip cursor={plot === "bar" ? { fill: "#f8f1f5" } : { stroke: "#a87b9e", strokeDasharray: "3 3" }} contentStyle={{ border: "1px solid #e9dfe2", borderRadius: 12, background: "#fffefd", color: "#33212d", fontSize: 12 }} labelFormatter={value => `${interval > 1 ? "From " : ""}${formatDate(String(value), true)}`} formatter={value => [measure === "netSales" ? formatMoney(Number(value)) : number(Number(value)), measure === "netSales" ? "Net sales" : affiliate ? "Order lines" : "Orders"]} />{plot === "line" ? <Area type="linear" dataKey={measure} stroke={COLORS[0]} strokeWidth={2.5} fill={`url(#${id})`} dot={data.length === 1 ? { r: 4 } : false} activeDot={{ r: 5, stroke: "#fffefd", strokeWidth: 3 }} isAnimationActive={!reduced} animationDuration={450} /> : <Bar dataKey={measure} fill={COLORS[0]} maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={!reduced} animationDuration={450} />}</ComposedChart></ResponsiveContainer></div> : <Empty>No qualifying {measure === "netSales" ? "sales" : "orders"} in this period. Try a wider date range.</Empty>}
+    <div className={s.chartFooter}><span><i style={{ background: COLORS[0] }} />{measure === "netSales" ? "Net merchandise sales" : affiliate ? "Attributed order lines" : "Paid orders"}</span><span>{range.allTime ? "All retained history" : rangeLabel(range)}</span></div>
+    <TableDetails label="View chart data"><table className={s.table}><thead><tr><th>Date{interval > 1 ? " (interval begins)" : ""}</th><th>Net sales</th><th>{affiliate ? "Order lines" : "Orders"}</th></tr></thead><tbody>{data.map(point => <tr key={point.date}><td>{formatDate(point.date, true)}</td><td>{formatMoney(point.netSales)}</td><td>{number(point.orders)}</td></tr>)}</tbody></table></TableDetails>
+  </Panel>;
 }
 
-function shiftDate(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
+function Donut({ items, value, label }: { items: Array<{ name: string; value: number; color: string }>; value: string; label: string }) {
+  const reduced = useReducedMotion();
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  return <><div className={s.donut}><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={total ? items : [{ name: "No activity", value: 1, color: "#eee5e8" }]} dataKey="value" nameKey="name" innerRadius="73%" outerRadius="94%" startAngle={90} endAngle={-270} paddingAngle={total && items.filter(item => item.value > 0).length > 1 ? 3 : 0} stroke="none" isAnimationActive={!reduced} animationDuration={450}>{(total ? items : [{ color: "#eee5e8" }]).map((item, i) => <Cell key={i} fill={item.color} />)}</Pie></PieChart></ResponsiveContainer><div className={s.donutCenter}><strong>{value}</strong><span>{label}</span></div></div><div className={s.legend}>{items.map(item => <div key={item.name}><span><i style={{ background: item.color }} />{item.name}</span><strong>{total ? `${(item.value / total * 100).toFixed(1)}%` : "—"}</strong></div>)}</div></>;
 }
 
-function presetFor(range: KpiPeriod) {
-  const days = dayCount(range);
-  return days === 7 || days === 30 || days === 90 ? String(days) : "custom";
-}
-
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(new Date(`${date}T12:00:00.000Z`));
-}
-
-function periodLabel(range: KpiPeriod) {
-  const days = dayCount(range);
-  return days === 1 ? "Today" : `Last ${days} days · including today`;
-}
-
-function comparison(value: number, previous: number) {
-  if (!previous) return { text: "No prior activity", tone: "neutral" } as const;
-  const percentage = ((value - previous) / Math.abs(previous)) * 100;
-  return { text: `${percentage >= 0 ? "+" : ""}${percentage.toFixed(1)}% vs prior period`, tone: percentage >= 0 ? "up" : "down" } as const;
-}
-
-export function KpisWorkspace({ dashboard }: Props) {
-  const router = useRouter();
-  const dashboardRangeKey = `${dashboard.range.start}:${dashboard.range.end}`;
-  const [periodControl, setPeriodControl] = useState<PeriodControl>(() => ({
-    rangeKey: dashboardRangeKey,
-    preset: presetFor(dashboard.range),
-    start: dashboard.range.start,
-    end: dashboard.range.end,
-  }));
-  const [trend, setTrend] = useState<TrendMode>("sales");
-  const [showKde, setShowKde] = useState(false);
-  const [isPending, startTransition] = useTransition();
-  const controls = periodControl.rangeKey === dashboardRangeKey
-    ? periodControl
-    : { rangeKey: dashboardRangeKey, preset: presetFor(dashboard.range), start: dashboard.range.start, end: dashboard.range.end };
-  const { preset, start, end } = controls;
-  const invalidCustomRange = !start || !end || Date.parse(`${end}T00:00:00.000Z`) < Date.parse(`${start}T00:00:00.000Z`) || dayCount({ start, end }) > 365;
+function BusinessView({ dashboard }: { dashboard: KpiDashboard }) {
+  const { metrics, customers } = dashboard;
+  const channels = dashboard.channels.map(channel => ({ name: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.orders, color: channel.channel === "shopify" ? COLORS[1] : COLORS[0] }));
+  const products = dashboard.products.slice(0, 5);
+  const maxUnits = Math.max(1, ...products.map(product => Math.abs(product.netUnits)));
   const hasUnassigned = dashboard.unassigned.netUnits !== 0 || dashboard.unassigned.netRevenue !== 0;
-
-  function setRange(next: KpiPeriod) {
-    startTransition(() => router.push(`/kpis?start=${next.start}&end=${next.end}`));
-  }
-
-  function choosePreset(value: string) {
-    setPeriodControl({ ...controls, preset: value });
-    if (value === "custom") return;
-    const count = Number(value);
-    setRange({ start: shiftDate(dashboard.range.end, -(count - 1)), end: dashboard.range.end });
-  }
-
-  function applyCustomRange() {
-    if (invalidCustomRange) return;
-    setPeriodControl({ ...controls, preset: "custom" });
-    setRange({ start, end });
-  }
-
-  function chooseTrend(next: TrendMode) {
-    setTrend(next);
-  }
-
-  function toggleKde() {
-    setShowKde((value) => !value);
-  }
-
-  const metricCards: Array<{ label: string; value: string; metric: keyof KpiMetricSet; icon: typeof PoundSterling; note: string }> = [
-    { label: "Net sales", value: formatMoney(dashboard.metrics.netSales), metric: "netSales", icon: PoundSterling, note: "Merchandise only; excludes VAT and delivery" },
-    { label: "Orders", value: dashboard.metrics.orders.toLocaleString("en-GB"), metric: "orders", icon: ShoppingBag, note: "Paid, non-cancelled orders" },
-    { label: "AOV", value: formatMoney(dashboard.metrics.averageOrderValue), metric: "averageOrderValue", icon: TrendingUp, note: "Net merchandise sales ÷ paid orders" },
-    { label: "Net units", value: dashboard.metrics.netUnits.toLocaleString("en-GB"), metric: "netUnits", icon: Package, note: "Sold units less refunds issued in period" },
-  ];
-
-  return <section className="workspace workspace--kpis" aria-busy={isPending || undefined}>
-    <header className="kpis-header">
-      <div>
-        <p className="workspace-kicker">Business performance</p>
-        <h1>KPIs</h1>
-        <p>Merchandise performance across Shopify and TikTok Shop.</p>
-      </div>
-      <div className="kpis-controls">
-        <Select value={preset} onValueChange={choosePreset}>
-          <SelectTrigger className="kpis-period-control" aria-label="Reporting period">
-            <CalendarDays aria-hidden="true" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent side="bottom" align="end" avoidCollisions={false}>
-            <SelectItem value="7">Last 7 days</SelectItem>
-            <SelectItem value="30">Last 30 days</SelectItem>
-            <SelectItem value="90">Last 90 days</SelectItem>
-            <SelectItem value="custom">Custom range</SelectItem>
-          </SelectContent>
-        </Select>
-        {preset === "custom" && <div className="kpis-custom-range">
-          <label>From<input type="date" value={start} max={end} onChange={(event) => setPeriodControl({ ...controls, start: event.target.value })} /></label>
-          <label>To<input type="date" value={end} min={start} onChange={(event) => setPeriodControl({ ...controls, end: event.target.value })} /></label>
-          <Button size="compact" variant="outline" disabled={isPending || invalidCustomRange} onClick={applyCustomRange}>Apply</Button>
-        </div>}
-        <p className="kpis-freshness">{dashboard.freshness ? `Data current ${relativeTime(dashboard.freshness)}` : "Awaiting first completed source sync"}</p>
-      </div>
-    </header>
-
-    <section className="kpis-metric-strip" aria-label={`Key performance indicators for ${periodLabel(dashboard.range)}`}>
-      {metricCards.map(({ label, value, metric, icon: Icon, note }) => {
-        const change = comparison(dashboard.metrics[metric], dashboard.previous.metrics[metric]);
-        return <article className="kpis-metric" key={metric} title={note}>
-          <span className="kpis-metric__icon" aria-hidden="true"><Icon size={21} strokeWidth={1.7} /></span>
-          <div><span>{label}</span><strong>{value}</strong><small className={`kpis-change kpis-change--${change.tone}`}>{change.tone === "up" && "↑ "}{change.tone === "down" && "↓ "}{change.text}</small></div>
-        </article>;
-      })}
-    </section>
-
-    <section className="kpis-panel kpis-trend-panel" aria-labelledby="sales-trend-title">
-      <header className="kpis-panel__header">
-        <div><h2 id="sales-trend-title">Sales trend</h2><p>{periodLabel(dashboard.range)} · Europe/London</p></div>
-        <div className="kpis-trend-controls">
-          <div className="kpis-segmented" role="group" aria-label="Trend measure">
-            <button type="button" className={trend === "sales" ? "is-active" : ""} aria-pressed={trend === "sales"} onClick={() => chooseTrend("sales")}>Net sales</button>
-            <button type="button" className={trend === "orders" ? "is-active" : ""} aria-pressed={trend === "orders"} onClick={() => chooseTrend("orders")}>Orders</button>
-          </div>
-          <button type="button" className={`kpis-kde-toggle${showKde ? " is-active" : ""}`} role="checkbox" aria-checked={showKde} aria-label="Show KDE chart" title="Show the current trend as a KDE area" onClick={toggleKde}>
-            <span className="kpis-kde-toggle__box" aria-hidden="true">{showKde && <Check size={10} strokeWidth={3} />}</span>
-            KDE
-          </button>
-        </div>
-      </header>
-      {dashboard.trend.some((day) => trend === "sales" ? day.netSales !== 0 : day.orders !== 0) ? <div className="kpis-chart" role="img" aria-label={`Daily ${trend === "sales" ? "net merchandise sales" : "paid orders"} trend${showKde ? " as a KDE area" : ""}`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={dashboard.trend} margin={{ top: 12, right: 8, left: -18, bottom: 0 }}>
-            <CartesianGrid vertical={false} stroke="#eadfe2" strokeDasharray="3 3" />
-            <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={42} tickMargin={10} tick={{ fill: "#806a74", fontSize: 10 }} tickFormatter={formatDate} />
-            <YAxis tickLine={false} axisLine={false} width={48} allowDecimals={trend === "sales"} tick={{ fill: "#806a74", fontSize: 10 }} tickFormatter={(value) => trend === "sales" ? `£${Math.round(Number(value) / 100)}` : String(value)} />
-            <Tooltip cursor={{ fill: "#fbf3f6" }} contentStyle={{ border: "1px solid #ddcdd3", borderRadius: 8, background: "#fffefd", boxShadow: "0 14px 35px rgba(74, 33, 57, .12)", fontSize: 11 }} labelFormatter={(value) => typeof value === "string" ? formatDate(value) : ""} formatter={(value) => [trend === "sales" ? formatMoney(Number(value)) : Number(value).toLocaleString("en-GB"), trend === "sales" ? "Net sales" : "Orders"]} />
-            {showKde && <Area type="monotone" dataKey={trend === "sales" ? "netSales" : "orders"} name={trend === "sales" ? "Net sales" : "Orders"} stroke="#c13a9b" strokeWidth={2.5} fill="#781450" fillOpacity={1} isAnimationActive={false} />}
-            {!showKde && <Bar dataKey={trend === "sales" ? "netSales" : "orders"} fill="#781450" radius={[3, 3, 0, 0]} maxBarSize={22} />}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div> : <EmptyState text="No qualifying sales or refunds were recorded in this period." />}
-    </section>
-
-    <div className="kpis-data-grid">
-      <section className="kpis-panel" aria-labelledby="top-products-title">
-        <header className="kpis-panel__header"><div><h2 id="top-products-title">Top physical products</h2><p>Ranked by net units sold. Mapped source lines only.</p></div></header>
-        {dashboard.products.length || hasUnassigned ? <div className="kpis-table-scroll"><table className="kpis-table"><thead><tr><th>Physical product</th><th>Net units</th><th>Net revenue</th><th>Shopify</th><th>TikTok</th></tr></thead><tbody>{dashboard.products.map((product) => <tr key={product.id}><td><strong>{product.title}</strong></td><td>{product.netUnits.toLocaleString("en-GB")}</td><td>{formatMoney(product.netRevenue)}</td><td>{product.shopifyUnits.toLocaleString("en-GB")}</td><td>{product.tiktokUnits.toLocaleString("en-GB")}</td></tr>)}{hasUnassigned && <tr className="kpis-table__unassigned"><td><strong>Unassigned source lines</strong><small>No confirmed physical-product link</small></td><td>{dashboard.unassigned.netUnits.toLocaleString("en-GB")}</td><td>{formatMoney(dashboard.unassigned.netRevenue)}</td><td>—</td><td>—</td></tr>}</tbody></table></div> : <EmptyState text="Mapped product performance appears after a confirmed physical-product link and qualifying sales." />}
-      </section>
-      <section className="kpis-panel" aria-labelledby="channel-performance-title">
-        <header className="kpis-panel__header"><div><h2 id="channel-performance-title">Channel performance</h2><p>Merchandise sales and operational order count.</p></div></header>
-        <div className="kpis-table-scroll"><table className="kpis-table kpis-channel-table"><thead><tr><th>Channel</th><th>Net sales</th><th>Orders</th><th>AOV</th><th>Unit share</th></tr></thead><tbody>{dashboard.channels.map((channel) => <tr key={channel.channel}><td><span className={`kpis-channel kpis-channel--${channel.channel}`}><BarChart3 size={15} aria-hidden="true" />{channel.channel === "shopify" ? "Shopify" : "TikTok Shop"}</span></td><td>{formatMoney(channel.netSales)}</td><td>{channel.orders.toLocaleString("en-GB")}</td><td>{formatMoney(channel.averageOrderValue)}</td><td>{dashboard.metrics.netUnits ? `${(channel.unitShare * 100).toFixed(0)}%` : "—"}<small>{channel.netUnits.toLocaleString("en-GB")} units</small></td></tr>)}<tr className="kpis-table__total"><td>Total</td><td>{formatMoney(dashboard.metrics.netSales)}</td><td>{dashboard.metrics.orders.toLocaleString("en-GB")}</td><td>{formatMoney(dashboard.metrics.averageOrderValue)}</td><td>{dashboard.metrics.netUnits ? "100%" : "—"}<small>{dashboard.metrics.netUnits.toLocaleString("en-GB")} units</small></td></tr></tbody></table></div>
-      </section>
-    </div>
-
-    <div className="kpis-customer-grid">
-      <section className="kpis-panel" aria-labelledby="customer-performance-title">
-        <header className="kpis-panel__header"><div><h2 id="customer-performance-title">Customer performance</h2><p>Active buyers in this period, classified across their recorded qualifying orders.</p></div><UsersRound aria-hidden="true" size={18} strokeWidth={1.55} className="kpis-panel__icon" /></header>
-        {dashboard.customers.summary.total ? <div className="kpis-customer-summary">
-          <div><span>New</span><strong>{dashboard.customers.summary.new.toLocaleString("en-GB")}</strong><small>One recorded order</small></div>
-          <div><span>Repeat</span><strong>{dashboard.customers.summary.repeat.toLocaleString("en-GB")}</strong><small>More than one recorded order</small></div>
-          <div><span>Active buyers</span><strong>{dashboard.customers.summary.total.toLocaleString("en-GB")}</strong><small>Safely identified in this period</small></div>
-        </div> : <EmptyState text="Customer performance appears after safely identified qualifying purchases." />}
-      </section>
-      <section className="kpis-panel" aria-labelledby="top-customers-title">
-        <header className="kpis-panel__header"><div><h2 id="top-customers-title">Top customers</h2><p>Ranked by net merchandise spend in this period.</p></div></header>
-        {dashboard.customers.topCustomers.length ? <div className="kpis-table-scroll"><table className="kpis-table kpis-customer-table"><thead><tr><th>Customer</th><th>Net spend</th><th>Recorded orders</th><th>Latest purchase</th></tr></thead><tbody>{dashboard.customers.topCustomers.map((customer) => <tr key={`${customer.name}:${customer.latestPurchase}`}><td><strong>{customer.name}</strong><small className="kpis-customer-mobile-date">Latest {formatDate(customer.latestPurchase)}</small></td><td>{formatMoney(customer.netSpend)}</td><td>{customer.qualifyingOrders.toLocaleString("en-GB")}</td><td>{formatDate(customer.latestPurchase)}</td></tr>)}</tbody></table></div> : <EmptyState text="No safely identified customers made a qualifying purchase in this period." />}
-      </section>
-    </div>
-
-    <section className="kpis-panel kpis-restock-panel" aria-labelledby="restock-planning-title">
-      <header className="kpis-panel__header"><div><h2 id="restock-planning-title">Restock planning</h2><p>Cross-channel physical-variant demand over the trailing 90 days. Only decisions due in the next 30 days appear.</p></div><ClipboardList aria-hidden="true" size={18} strokeWidth={1.55} className="kpis-panel__icon" /></header>
-      {dashboard.restock.length ? <div className="kpis-table-scroll"><table className="kpis-table kpis-restock-table"><thead><tr><th>Physical product</th><th>Variant</th><th>Counted stock</th><th>Forecast stockout</th><th>Reorder by</th></tr></thead><tbody>{dashboard.restock.map((item) => <tr key={item.variantId}><td><strong>{item.productTitle}</strong></td><td>{item.variantTitle}</td><td>{item.countedStock.toLocaleString("en-GB")}<small>{item.dailyDemand.toLocaleString("en-GB", { maximumFractionDigits: 1 })} units / day</small></td><td>{formatDate(item.forecastStockout)}</td><td><span className={`kpis-restock-status kpis-restock-status--${item.urgency}`}>{item.urgency === "overdue" ? "Overdue" : "Due soon"}</span><small>{formatDate(item.reorderBy)}</small></td></tr>)}</tbody></table></div> : <EmptyState text="No physical variants need a reorder decision in the next 30 days." />}
-    </section>
-  </section>;
+  return <><div className={s.metrics}>
+    <Metric label="Net sales" value={formatMoney(metrics.netSales)} current={metrics.netSales} previous={dashboard.previous?.metrics.netSales} note="Merchandise sales, excluding VAT and delivery" primary />
+    <Metric label="Orders" value={number(metrics.orders)} current={metrics.orders} previous={dashboard.previous?.metrics.orders} note="Paid, non-cancelled orders" />
+    <Metric label="Average order value" value={formatMoney(metrics.averageOrderValue)} current={metrics.averageOrderValue} previous={dashboard.previous?.metrics.averageOrderValue} note="Net sales divided by paid orders" />
+    <Metric label="Net units" value={number(metrics.netUnits)} current={metrics.netUnits} previous={dashboard.previous?.metrics.netUnits} note="Sold units, less refunds in this period" />
+  </div><div className={s.primaryGrid}><SalesChart data={dashboard.trend} range={dashboard.range} interval={dashboard.trendIntervalDays} /><Panel title="Channel mix" subtitle="Share of paid orders"><Donut items={channels} value={number(metrics.orders)} label="total orders" /><div className={s.channelStats}>{dashboard.channels.map(channel => <div key={channel.channel}><span>{channel.channel === "shopify" ? "Shopify" : "TikTok Shop"}</span><strong>{formatMoney(channel.netSales)}</strong><small>{number(channel.orders)} orders · {formatMoney(channel.averageOrderValue)} AOV</small></div>)}</div><TableDetails><table className={s.table}><thead><tr><th>Channel</th><th>Net sales</th><th>Orders</th><th>AOV</th><th>Net units</th><th>Unit share</th></tr></thead><tbody>{dashboard.channels.map(channel => <tr key={channel.channel}><td>{channel.channel === "shopify" ? "Shopify" : "TikTok Shop"}</td><td>{formatMoney(channel.netSales)}</td><td>{number(channel.orders)}</td><td>{formatMoney(channel.averageOrderValue)}</td><td>{number(channel.netUnits)}</td><td>{metrics.netUnits ? `${(channel.unitShare * 100).toFixed(1)}%` : "—"}</td></tr>)}</tbody></table></TableDetails></Panel></div>
+    <div className={s.secondaryGrid}><Panel title="Products moving your business" subtitle="Top physical products by net units sold"><div className={s.rankList}>{products.length ? products.map((product, i) => <div className={s.productRank} key={product.id}><span className={s.rankNumber}>{String(i + 1).padStart(2, "0")}</span><div><div className={s.rankLabel}><strong>{product.title}</strong><span>{number(product.netUnits)} <small>{product.netUnits < 0 ? "net returned units" : "units"}</small></span></div><div className={s.barTrack}><span style={{ width: `${Math.max(0, product.netUnits) / maxUnits * 100}%`, background: i === 0 ? COLORS[0] : "#b888aa" }} /></div><small>{formatMoney(product.netRevenue)} net revenue</small></div></div>) : <Empty>No mapped product sales in this period.</Empty>}</div><TableDetails label="View all product performance"><table className={s.table}><thead><tr><th>Physical product</th><th>Net units</th><th>Net revenue</th><th>Shopify units</th><th>TikTok units</th></tr></thead><tbody>{dashboard.products.map(product => <tr key={product.id}><td>{product.title}</td><td>{number(product.netUnits)}</td><td>{formatMoney(product.netRevenue)}</td><td>{number(product.shopifyUnits)}</td><td>{number(product.tiktokUnits)}</td></tr>)}{hasUnassigned && <tr><td>Unassigned source lines</td><td>{number(dashboard.unassigned.netUnits)}</td><td>{formatMoney(dashboard.unassigned.netRevenue)}</td><td>—</td><td>—</td></tr>}</tbody></table></TableDetails>{hasUnassigned && <p className={s.panelNote}>{number(dashboard.unassigned.netUnits)} units have no confirmed physical-product mapping.</p>}</Panel>
+    <Panel title="Your customers" subtitle="Buying habits across recorded orders"><div className={s.customerTotal}><UsersRound size={21} strokeWidth={1.5} /><strong>{number(customers.summary.total)}</strong><span>active buyers</span></div>{customers.summary.total ? <><div className={s.customerBar} aria-label={`${number(customers.summary.new)} new and ${number(customers.summary.repeat)} repeat customers`}><span style={{ width: `${customers.summary.new / customers.summary.total * 100}%` }} /><span style={{ width: `${customers.summary.repeat / customers.summary.total * 100}%` }} /></div><div className={s.customerSplit}><div><span><i style={{ background: COLORS[0] }} />New customers</span><strong>{number(customers.summary.new)}</strong><small>One recorded order</small></div><div><span><i style={{ background: COLORS[2] }} />Repeat customers</span><strong>{number(customers.summary.repeat)}</strong><small>More than one order</small></div></div><div className={s.customerInsight}><strong>{(customers.summary.repeat / customers.summary.total * 100).toFixed(1)}%</strong><p>of active buyers have purchased more than once across their recorded history.</p></div></> : <Empty>Customer insights appear with identified purchases.</Empty>}</Panel></div>
+    <Panel title="Top customers" subtitle="Ranked by net merchandise spend in the selected period" actions={<span className={s.countTag}>{customers.topCustomers.length} customers</span>}><div className={s.tableScroll}><table className={s.table}><thead><tr><th>Customer</th><th>Net spend</th><th>Recorded orders</th><th>Latest purchase</th></tr></thead><tbody>{customers.topCustomers.map((customer, i) => <tr key={`${customer.name}:${customer.latestPurchase}`}><td><div className={s.identity}><span className={s.avatar}>{customer.name.slice(0, 1).toUpperCase()}</span><strong>{customer.name}</strong><span className={s.subtleRank}>{i + 1}</span></div></td><td className={s.money}>{formatMoney(customer.netSpend)}</td><td>{number(customer.qualifyingOrders)}</td><td>{formatDate(customer.latestPurchase, true)}</td></tr>)}</tbody></table></div>{!customers.topCustomers.length && <Empty>No identified customers in this period.</Empty>}</Panel>
+  </>;
 }
 
-function EmptyState({ text }: { text: string }) {
-  return <div className="kpis-empty"><Package aria-hidden="true" size={19} strokeWidth={1.5} /><p>{text}</p></div>;
+function AffiliateView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) {
+  const [ranking, setRanking] = useState<AffiliateRankingMode>("revenue");
+  const [search, setSearch] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const affiliates = rankTikTokAffiliates(dashboard.affiliates, ranking);
+  const valueOf = (affiliate: typeof affiliates[number]) => ranking === "revenue" ? affiliate.netSales : ranking === "orders" ? affiliate.orders : affiliate.estimatedCommission;
+  const formatValue = (value: number) => ranking === "orders" ? number(value) : formatMoney(value);
+  const maxValue = Math.max(1, ...affiliates.map(affiliate => Math.abs(valueOf(affiliate))));
+  const filtered = affiliates.filter(affiliate => affiliate.creator.toLowerCase().includes(search.toLowerCase()));
+  const rows = showAll ? filtered : filtered.slice(0, 10);
+  const rankedRevenue = rankTikTokAffiliates(dashboard.affiliates, "revenue");
+  const topRevenue = rankedRevenue.slice(0, 5).reduce((sum, affiliate) => sum + Math.max(0, affiliate.netSales), 0);
+  const otherRevenue = rankedRevenue.slice(5).reduce((sum, affiliate) => sum + Math.max(0, affiliate.netSales), 0);
+  const { metrics } = dashboard;
+  return <><div className={s.metrics}><Metric primary label="Affiliate net sales" value={formatMoney(metrics.netSales)} note="Attributed sales from linked TikTok orders" /><Metric label="Estimated commission" value={formatMoney(metrics.estimatedCommission)} note="TikTok-reported estimated creator earnings" /><Metric label="Attributed orders" value={number(metrics.attributedOrders)} note="Qualifying linked affiliate orders" /><Metric label="Active affiliates" value={number(metrics.activeAffiliates)} note="Creators with qualifying attributed sales" /></div>
+    {dashboard.status.kind !== "fresh" && <div className={s.statusNotice} role="status">{dashboard.status.message}</div>}
+    <div className={s.primaryGrid}><SalesChart data={dashboard.trend} range={dashboard.range} interval={dashboard.trendIntervalDays} affiliate /><Panel title="Affiliate activity" subtitle="Content and sales, side by side"><div className={s.activity}><div><Package size={20} strokeWidth={1.5} /><span>Attributed units</span><strong>{number(metrics.units)}</strong><small>After refunds in this period</small></div><div><Video size={20} strokeWidth={1.5} /><span>Published videos</span><strong>{number(metrics.publishedVideos)}</strong><small>Videos published in this period · excludes LIVE</small></div></div><p className={s.activityNote}>Sales metrics use TikTok affiliate attribution. Video activity is reported separately.</p></Panel></div>
+    <div className={s.secondaryGrid}><Panel title="Top affiliates" subtitle={`Your leading creators by ${ranking === "revenue" ? "net sales" : ranking === "orders" ? "attributed orders" : "estimated commission"}`} actions={<div className={s.segmented} role="group" aria-label="Affiliate ranking metric">{(["revenue", "orders", "commission"] as const).map(mode => <button key={mode} aria-pressed={ranking === mode} onClick={() => setRanking(mode)}>{mode === "revenue" ? "Revenue" : mode === "orders" ? "Orders" : "Commission"}</button>)}</div>}><div className={s.rankList}>{affiliates.length ? affiliates.slice(0, 5).map((affiliate, i) => <div className={s.creatorRank} key={affiliate.creator}><span className={s.rankNumber}>{String(i + 1).padStart(2, "0")}</span><span className={s.avatar}>{affiliate.creator.replace(/^@/, "").slice(0, 2).toUpperCase()}</span><div><div className={s.rankLabel}><strong>@{affiliate.creator.replace(/^@/, "")}</strong><span>{formatValue(valueOf(affiliate))}{valueOf(affiliate) < 0 && <small> · negative net result</small>}</span></div><div className={s.barTrack}><span style={{ width: `${Math.max(0, valueOf(affiliate)) / maxValue * 100}%`, background: COLORS[i] }} /></div></div></div>) : <Empty>Creator rankings appear after attributed sales are imported.</Empty>}</div><p className={s.panelNote}>Showing your top {Math.min(5, affiliates.length)} of {affiliates.length} affiliates. Full performance below.</p></Panel>
+    <Panel title="Sales concentration" subtitle="Share of positive creator net sales"><Donut items={[{ name: "Top 5 affiliates", value: topRevenue, color: COLORS[0] }, { name: "Other affiliates", value: otherRevenue, color: COLORS[2] }]} value={topRevenue + otherRevenue ? `${(topRevenue / (topRevenue + otherRevenue) * 100).toFixed(0)}%` : "—"} label="from your top 5" /><p className={s.panelNote}>Negative net sales and sales without an identified creator are excluded from this composition.</p></Panel></div>
+    <Panel className={s.affiliatePanel} title="Affiliate performance" subtitle="Every creator, with the detail behind the ranking" actions={<label className={s.search}><Search size={16} /><input value={search} onChange={event => { setSearch(event.target.value); setShowAll(false); }} placeholder="Find an affiliate" aria-label="Find an affiliate" /></label>}><div className={s.tableScroll}><table className={s.table}><thead><tr><th>Affiliate</th><th>Net sales</th><th>Est. commission</th><th>Orders</th><th>Units</th><th>Videos</th><th>Best-selling product</th><th>Offer signal</th></tr></thead><tbody>{rows.map(affiliate => <tr key={affiliate.creator}><td><div className={s.identity}><span className={s.avatar}>{affiliate.creator.replace(/^@/, "").slice(0, 2).toUpperCase()}</span><strong>@{affiliate.creator.replace(/^@/, "")}</strong></div></td><td className={s.money}>{formatMoney(affiliate.netSales)}</td><td>{formatMoney(affiliate.estimatedCommission)}</td><td>{number(affiliate.orders)}</td><td>{number(affiliate.units)}</td><td>{number(affiliate.publishedVideos)}</td><td>{affiliate.bestSellingProduct ?? "Not supplied"}</td><td><span className={affiliate.offerCandidate === "Review candidate" ? s.positive : s.countTag}>{affiliate.offerCandidate === "Review candidate" ? <Check size={12} /> : null}{affiliate.offerCandidate}</span><small className={s.cellNote}>{affiliate.offerCandidate === "Review candidate" ? "3+ attributed orders" : "Fewer than 3 orders"}</small></td></tr>)}</tbody></table></div><div className={s.mobileAffiliates}>{rows.map(affiliate => <details key={affiliate.creator}><summary><div className={s.identity}><span className={s.avatar}>{affiliate.creator.replace(/^@/, "").slice(0, 2).toUpperCase()}</span><strong>@{affiliate.creator.replace(/^@/, "")}</strong></div><div className={s.mobileAffiliateSummary}><strong>{formatMoney(affiliate.netSales)}</strong><span>{number(affiliate.orders)} orders</span><ChevronDown size={16} /></div></summary><dl><div><dt>Estimated commission</dt><dd>{formatMoney(affiliate.estimatedCommission)}</dd></div><div><dt>Net units</dt><dd>{number(affiliate.units)}</dd></div><div><dt>Published videos</dt><dd>{number(affiliate.publishedVideos)}</dd></div><div><dt>Best-selling product</dt><dd>{affiliate.bestSellingProduct ?? "Not supplied"}</dd></div><div><dt>Offer signal</dt><dd>{affiliate.offerCandidate}<small>{affiliate.orders >= 3 ? "3+ attributed orders" : "Fewer than 3 orders"}</small></dd></div></dl></details>)}</div>{!rows.length && <Empty>{search ? "No affiliate matches your search." : "No attributed creator sales in this period."}</Empty>}<div className={s.tableFooter}><span>{rows.length} of {filtered.length} affiliates · sorted by {ranking}</span>{filtered.length > 10 && <Button variant="ghost" size="compact" onClick={() => setShowAll(!showAll)}>{showAll ? "Show top 10" : "Show all affiliates"}</Button>}</div></Panel>
+    <Panel title="Products sold by affiliates" subtitle="Attributed product performance, net of refunds">{dashboard.products.length ? <div className={s.tableScroll}><table className={s.table}><thead><tr><th>Product</th><th>Net sales</th><th>Units</th><th>Orders</th></tr></thead><tbody>{dashboard.products.map(product => <tr key={product.product}><td><strong>{product.product}</strong></td><td className={s.money}>{formatMoney(product.netSales)}</td><td>{number(product.units)}</td><td>{number(product.orders)}</td></tr>)}</tbody></table></div> : <Empty>Product names have not been supplied for these affiliate records.</Empty>}</Panel>
+    <details className={s.reportingNotes}><summary><CircleHelp size={16} />About this affiliate report<ChevronDown size={15} /></summary><div><p>{dashboard.historyNote}</p><p>Unreconciled affiliate GMV: <strong>{formatMoney(metrics.unreconciledGmv)}</strong>. This amount is excluded from net sales and the business overview.</p><p>Commission is an estimate supplied by TikTok. Affiliate sales are a subset of TikTok Shop sales, not additional business revenue.</p><p>{dashboard.status.message}</p></div></details>
+  </>;
+}
+
+function AdsRefreshButton() {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+  async function refresh() {
+    setPending(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/tiktok-ads/refresh", { method: "POST" });
+      const body = await response.json() as { message?: string };
+      setMessage(body.message ?? (response.ok ? "TikTok Ads report refreshed." : "TikTok Ads report could not be refreshed."));
+      if (response.ok) router.refresh();
+    } catch {
+      setMessage("TikTok Ads report could not be refreshed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  return <div className={s.adsRefresh}><Button size="compact" onClick={refresh} disabled={pending}>{pending ? "Refreshing…" : "Refresh report"}</Button>{message && <span role="status">{message}</span>}</div>;
+}
+
+function adsMoney(value: number | null, currency: string | null, hasRows: boolean) {
+  if (value === null) return hasRows ? "Not supplied" : "—";
+  return currency ? formatMoney(value, currency) : "Mixed currencies";
+}
+
+function AdsTrend({ report }: { report: TikTokAdsReport }) {
+  const [measure, setMeasure] = useState<"spend" | "sales" | "orders">("spend");
+  const [plot, setPlot] = useState<"line" | "bar">("line");
+  const reduced = useReducedMotion();
+  const id = useId().replace(/:/g, "");
+  const valueOf = (point: TikTokAdsReport["trend"][number]) => measure === "spend" ? point.spendMinor : measure === "sales" ? point.attributedRevenueMinor : point.attributedPurchases;
+  const total = report.metrics[measure === "spend" ? "spendMinor" : measure === "sales" ? "attributedRevenueMinor" : "attributedPurchases"];
+  const data = report.trend.map((point) => ({ ...point, value: valueOf(point) }));
+  const hasData = data.some((point) => point.value !== null && (measure !== "spend" || report.currency));
+  const label = measure === "spend" ? "Ad spend" : measure === "sales" ? "Attributed sales" : "Attributed orders";
+  const formattedTotal = measure === "orders" ? (total === null ? "Not supplied" : number(total)) : adsMoney(total, report.currency, report.rowCount > 0);
+  return <Panel title="Daily ad performance" subtitle="Official provider report · Europe/London" actions={<div className={s.segmented} aria-label="Ads trend measure" role="group"><button aria-pressed={measure === "spend"} onClick={() => setMeasure("spend")}>Spend</button><button aria-pressed={measure === "sales"} onClick={() => setMeasure("sales")}>Sales</button><button aria-pressed={measure === "orders"} onClick={() => setMeasure("orders")}>Orders</button></div>}>
+    <div className={s.chartHeadline}><div><strong>{formattedTotal}</strong><span>{label.toLowerCase()} across observed report days</span></div><div className={s.plotToggle} role="group" aria-label="Chart style"><button title="Area chart" aria-label="Area chart" aria-pressed={plot === "line"} onClick={() => setPlot("line")}><LineChart size={17} /></button><button title="Bar chart" aria-label="Bar chart" aria-pressed={plot === "bar"} onClick={() => setPlot("bar")}><BarChart3 size={17} /></button></div></div>
+    {hasData ? <div className={s.chart} aria-label={`${label} by day`}><ResponsiveContainer width="100%" height="100%"><ComposedChart accessibilityLayer data={data} margin={{ top: 14, right: 12, left: 0, bottom: 4 }}><defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS[0]} stopOpacity={0.23} /><stop offset="100%" stopColor={COLORS[0]} stopOpacity={0.015} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#eee5e8" strokeDasharray="3 5" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} tickMargin={14} tick={{ fill: "#756a70", fontSize: 11 }} tickFormatter={value => formatDate(String(value), false)} /><YAxis width={62} tickLine={false} axisLine={false} tick={{ fill: "#756a70", fontSize: 11 }} allowDecimals={measure !== "orders"} tickFormatter={value => measure === "orders" ? number(Number(value)) : report.currency ? new Intl.NumberFormat("en-GB", { style: "currency", currency: report.currency, notation: "compact", maximumFractionDigits: 1 }).format(Number(value) / 100) : "—"} /><ReferenceLine y={0} stroke="#ddcdd3" /><Tooltip cursor={plot === "bar" ? { fill: "#f8f1f5" } : { stroke: "#a87b9e", strokeDasharray: "3 3" }} contentStyle={{ border: "1px solid #e9dfe2", borderRadius: 12, background: "#fffefd", color: "#33212d", fontSize: 12 }} labelFormatter={value => formatDate(String(value), true)} formatter={value => [measure === "orders" ? (value === null ? "Not supplied" : number(Number(value))) : adsMoney(value === null ? null : Number(value), report.currency, report.rowCount > 0), label]} />{plot === "line" ? <Area type="linear" dataKey="value" stroke={COLORS[0]} strokeWidth={2.5} fill={`url(#${id})`} dot={data.length === 1 ? { r: 4 } : false} activeDot={{ r: 5, stroke: "#fffefd", strokeWidth: 3 }} connectNulls={false} isAnimationActive={!reduced} animationDuration={450} /> : <Bar dataKey="value" fill={COLORS[0]} maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={!reduced} animationDuration={450} />}</ComposedChart></ResponsiveContainer></div> : <Empty>{measure === "spend" ? "No ad spend rows were reported in this period." : `TikTok did not supply ${measure === "sales" ? "attributed sales" : "attributed orders"} for these report rows.`}</Empty>}
+    <div className={s.chartFooter}><span><i style={{ background: COLORS[0] }} />{label} from TikTok Marketing API</span><span>{report.effectiveRange ? rangeLabel(report.effectiveRange) : "No retained report rows"}</span></div>
+    <TableDetails label="View daily ad report"><table className={s.table}><thead><tr><th>Date</th><th>Spend</th><th>Attributed sales</th><th>Attributed orders</th><th>Impressions</th><th>Clicks</th></tr></thead><tbody>{report.trend.map(point => <tr key={point.date}><td>{formatDate(point.date, true)}</td><td>{adsMoney(point.spendMinor, report.currency, true)}</td><td>{adsMoney(point.attributedRevenueMinor, report.currency, true)}</td><td>{point.attributedPurchases === null ? "Not supplied" : number(point.attributedPurchases)}</td><td>{point.impressions === null ? "Not supplied" : number(point.impressions)}</td><td>{point.clicks === null ? "Not supplied" : number(point.clicks)}</td></tr>)}</tbody></table></TableDetails>
+  </Panel>;
+}
+
+function AdsView({ connection, state, report }: { connection: TikTokAdsConnectionState; state: TikTokAdsReportState; report: TikTokAdsReport }) {
+  const statusCopy = connection.status === "connected"
+    ? state.status === "first_run"
+      ? { title: "Ads report awaiting first refresh", detail: "The advertiser is connected. Fetch the first provider report to begin storing TikTok-attributed metrics." }
+      : !report.rowCount
+        ? { title: "No retained Ads rows for this period", detail: "TikTok Ads reporting currently retains 90 days of provider evidence. Choose a newer period or refresh the report." }
+      : state.status === "stale"
+        ? { title: "TikTok Ads report is stale", detail: "The last successful provider report is being retained while the next refresh is retried." }
+        : state.status === "partial"
+          ? { title: "TikTok Ads report is partial", detail: "The latest report is available, but TikTok returned rows that could not be stored safely." }
+          : { title: "TikTok Ads report is fresh", detail: "The selected advertiser has a recent read-only Marketing API report." }
+    : connection.status === "reconnect_required"
+      ? { title: "TikTok Ads needs to be reconnected", detail: "The saved authorization is no longer active. Reconnect to resume official ad reporting." }
+      : connection.status === "not_configured"
+        ? { title: "TikTok Ads is not configured", detail: "Add the server-side Ads app credentials and advertiser ID before connecting this tab." }
+        : { title: "Connect TikTok Ads", detail: "Authorize the selected advertiser so this tab can report official TikTok ad performance." };
+  if (connection.status !== "connected" || !report.rowCount) return <div className={s.adsState}>
+    <div className={s.adsStateIcon}><Megaphone size={25} strokeWidth={1.5} /></div>
+    <div className={s.adsStateCopy}><span className={s.eyebrow}>Read-only Marketing API</span><h2>{statusCopy.title}</h2><p>{statusCopy.detail}</p><p className={s.adsTrustNote}>This tab will only use ad-attributed results supplied by TikTok. TikTok Shop sales are not treated as ad-generated without provider attribution evidence.</p>{connection.advertiserId && <p className={s.adsAccount}>Advertiser ID <strong>{connection.advertiserId}</strong></p>}{state.lastSuccessfulAt && <p className={s.adsAccount}>Last successful report <strong>{relativeTime(state.lastSuccessfulAt)}</strong>{state.lastRowsSkipped ? ` · ${number(state.lastRowsSkipped)} rows omitted` : ""}</p>}{connection.status === "connected" && <AdsRefreshButton />}{connection.status !== "not_configured" && <Link className={s.actionLink} href="/api/tiktok-ads/authorize">{connection.status === "connected" ? "Reconnect TikTok Ads" : "Connect TikTok Ads"}</Link>}</div>
+  </div>;
+  return <>
+    {state.status === "stale" && <div className={s.statusNotice} role="status">The last successful Ads report is being retained while refresh is retried. Values below remain provider evidence from {state.lastSuccessfulAt ? relativeTime(state.lastSuccessfulAt) : "the last successful run"}.</div>}
+    {state.status === "partial" && <div className={s.statusNotice} role="status">This report is partial: {number(state.lastRowsSkipped ?? 0)} provider rows were omitted because their evidence was malformed.</div>}
+    <div className={s.metrics}>
+      <Metric primary label="Ad spend" value={adsMoney(report.metrics.spendMinor, report.currency, report.rowCount > 0)} note="Spend reported by TikTok Ads for the selected retained period" />
+      <Metric label="Attributed sales" value={adsMoney(report.metrics.attributedRevenueMinor, report.currency, report.rowCount > 0)} note="Shopping value returned by TikTok as ad-attributed; not total TikTok Shop sales" />
+      <Metric label="Attributed orders" value={report.metrics.attributedPurchases === null ? "Not supplied" : number(report.metrics.attributedPurchases)} note="Orders returned by TikTok's ad attribution metrics" />
+      <Metric label="ROAS" value={report.metrics.roas === null ? "Not supplied" : `${report.metrics.roas.toFixed(2)}×`} note="TikTok-attributed shopping value divided by TikTok-reported spend" />
+    </div>
+    <div className={s.primaryGrid}><AdsTrend report={report} /><Panel title="Attribution evidence" subtitle="What TikTok returned for this advertiser" actions={<div className={s.adsActions}><AdsRefreshButton /><Link className={s.actionLink} href="/api/tiktok-ads/authorize">Reconnect</Link></div>}><div className={s.activity}><div><Megaphone size={20} strokeWidth={1.5} /><span>Impressions</span><strong>{report.metrics.impressions === null ? "Not supplied" : number(report.metrics.impressions)}</strong><small>Provider-reported ad impressions</small></div><div><LineChart size={20} strokeWidth={1.5} /><span>Clicks</span><strong>{report.metrics.clicks === null ? "Not supplied" : number(report.metrics.clicks)}</strong><small>Provider-reported ad clicks</small></div></div><p className={s.activityNote}>Only {number(report.attributionEvidenceRows)} of {number(report.rowCount)} retained report rows include ad-attributed sales or order evidence. Missing provider metrics stay unavailable; ordinary TikTok Shop sales are never added here.</p></Panel></div>
+    {report.requestedRange.allTime && report.effectiveRange && <p className={s.panelNote}>Ads reporting retains the latest 90 days, so “All time” uses the available retained provider window: {rangeLabel(report.effectiveRange)}.</p>}
+  </>;
+}
+
+export function KpisWorkspace({ dashboard, affiliateDashboard, adsConnection, adsReportState, adsReport, initialView = "business" }: Props) {
+  const router = useRouter();
+  const rangeKey = `${dashboard.range.start}:${dashboard.range.end}:${dashboard.range.allTime ? "all" : "range"}`;
+  const [periodControl, setPeriodControl] = useState<PeriodControl>({ rangeKey, preset: presetFor(dashboard.range), start: dashboard.range.start, end: dashboard.range.end });
+  const [view, setView] = useState<View>(initialView);
+  const [isPending, startTransition] = useTransition();
+  const controls = periodControl.rangeKey === rangeKey ? periodControl : { rangeKey, preset: presetFor(dashboard.range), start: dashboard.range.start, end: dashboard.range.end };
+  const invalidRange = !controls.start || !controls.end || controls.start > controls.end;
+  const freshness = view === "business" ? dashboard.freshness : view === "affiliate" ? affiliateDashboard.status.lastSuccessfulAt : adsReportState.lastSuccessfulAt;
+  const freshnessLabel = view === "ads"
+    ? adsConnection.status !== "connected" ? adsConnection.status === "not_configured" ? "Not configured" : "Not connected" : adsReportState.status === "first_run" ? "Awaiting first report" : `${adsReportState.status === "stale" ? "Stale" : "Updated"} ${freshness ? relativeTime(freshness) : ""}`.trim()
+    : freshness ? `Updated ${relativeTime(freshness)}` : "Awaiting first sync";
+  const tabOrder: View[] = ["business", "affiliate", "ads"];
+  function setRange(range: KpiPeriod) { startTransition(() => router.push(range.allTime ? "/kpis?period=all" : `/kpis?start=${range.start}&end=${range.end}`)); }
+  function choosePreset(preset: string) { setPeriodControl({ ...controls, preset }); if (preset === "custom") return; if (preset === "all") setRange({ start: dashboard.range.end, end: dashboard.range.end, allTime: true }); else setRange({ start: shiftDate(dashboard.range.end, -(Number(preset) - 1)), end: dashboard.range.end }); }
+  return <section className={`workspace ${s.workspace}`} aria-busy={isPending || undefined}><header className={s.header}><div><h1>Performance</h1><p>Understand what moves your business.</p></div><div className={s.headerMeta}><span className={s.freshness}><i className={(view === "affiliate" && affiliateDashboard.status.kind !== "fresh") || (view === "ads" && (adsConnection.status !== "connected" || adsReportState.status === "stale" || adsReportState.status === "first_run")) ? s.stale : ""} />{freshnessLabel}</span><span className={s.timezone}>Europe/London reporting</span></div></header>
+    <div className={s.toolbar}><div className={s.tabs} role="tablist" aria-label="KPI workspace view" onKeyDown={event => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const currentIndex = tabOrder.indexOf(view); const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? tabOrder.length - 1 : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabOrder.length) % tabOrder.length; const next = tabOrder[nextIndex]; setView(next); document.getElementById(`kpi-tab-${next}`)?.focus(); } }}><button id="kpi-tab-business" role="tab" aria-selected={view === "business"} aria-controls="kpi-panel" tabIndex={view === "business" ? 0 : -1} onClick={() => setView("business")}><BarChart3 size={17} />Business overview</button><button id="kpi-tab-affiliate" role="tab" aria-selected={view === "affiliate"} aria-controls="kpi-panel" tabIndex={view === "affiliate" ? 0 : -1} onClick={() => setView("affiliate")}><UsersRound size={17} />TikTok Shop affiliates</button><button id="kpi-tab-ads" role="tab" aria-selected={view === "ads"} aria-controls="kpi-panel" tabIndex={view === "ads" ? 0 : -1} onClick={() => setView("ads")}><Megaphone size={17} />TikTok Ads</button></div><div className={s.period}><CalendarDays size={16} /><Select value={controls.preset} onValueChange={choosePreset} disabled={isPending}><SelectTrigger aria-label="Reporting period"><SelectValue /></SelectTrigger><SelectContent align="end"><SelectItem value="7">Last 7 days</SelectItem><SelectItem value="30">Last 30 days</SelectItem><SelectItem value="90">Last 90 days</SelectItem><SelectItem value="all">All time</SelectItem><SelectItem value="custom">Custom range</SelectItem></SelectContent></Select></div></div>
+    {controls.preset === "custom" && <div className={s.customRange}><label>From<input type="date" value={controls.start} max={controls.end} onChange={event => setPeriodControl({ ...controls, start: event.target.value })} /></label><label>To<input type="date" value={controls.end} min={controls.start} onChange={event => setPeriodControl({ ...controls, end: event.target.value })} /></label><Button size="compact" disabled={invalidRange || isPending} onClick={() => setRange({ start: controls.start, end: controls.end })}>Apply range</Button>{invalidRange && <span role="alert">Choose a start date before the end date.</span>}</div>}
+    <div className={s.periodCaption}><span>{dashboard.range.allTime ? "All time" : rangeLabel(dashboard.range)}{dashboard.range.allTime && <span> · retained reporting history</span>}</span><span>{isPending ? "Updating report…" : view === "business" && dashboard.previous ? `Compared with ${rangeLabel(dashboard.previous.range)}` : view === "affiliate" ? "TikTok Shop affiliate attribution" : view === "ads" ? "Read-only TikTok Marketing API" : "Shopify + TikTok Shop"}</span></div>
+    <div id="kpi-panel" role="tabpanel" aria-labelledby={`kpi-tab-${view}`} className={`${s.content} ${isPending ? s.pending : ""}`}>{view === "business" ? <BusinessView dashboard={dashboard} /> : view === "affiliate" ? <AffiliateView dashboard={affiliateDashboard} /> : <AdsView connection={adsConnection} state={adsReportState} report={adsReport} />}</div>
+    <footer className={s.footer}><span>Serenity Hue · Business intelligence</span><span>{view === "ads" ? "Read-only Marketing API · no campaign changes" : `GBP · ${view === "business" ? "Merchandise only · excludes VAT and delivery" : "Estimated commission is not business revenue"}`}</span></footer>
+  </section>;
 }
