@@ -43,3 +43,11 @@ POST https://YOUR_APP_URL/api/jobs/reconcile
 ```
 
 with cron expression `*/5 * * * *`. The route verifies QStash signatures when both signing keys are present. Direct webhooks deliver the live path, and this job closes gaps with a five-minute reconciliation cadence for Shopify, TikTok Shop, and TikTok affiliate reporting.
+
+TikTok Ads reporting has its own read-only cache and refresh lease. Create a second QStash schedule after deployment:
+
+```text
+POST https://YOUR_APP_URL/api/jobs/tiktok-ads
+```
+
+Use cron expression `0 * * * *` for an hourly refresh. The scheduled route re-fetches the latest seven London calendar days after the first 90-day baseline, upserts corrected provider rows, and retains 90 days of normalized report data. A signed authenticated `POST /api/tiktok-ads/refresh` is also available for an on-demand refresh.

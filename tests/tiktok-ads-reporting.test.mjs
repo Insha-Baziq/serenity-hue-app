@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  fetchTikTokAdsReport,
+  normalizeTikTokAdsReportRows,
+  tiktokAdsReportingWindow,
+} from "../lib/tiktok-ads-reporting.ts";
+
+test("TikTok Ads reporting uses a 90-day baseline and rolling seven-day London window", () => {
+  const now = new Date("2026-09-10T00:30:00.000Z");
+  assert.deepEqual(tiktokAdsReportingWindow(now, "baseline"), {
+    kind: "baseline",
+    startDate: "2026-06-13",
+    endDate: "2026-09-10",
+    retainedBeforeDate: "2026-06-13",
+  });
+  assert.deepEqual(tiktokAdsReportingWindow(now, "rolling"), {
+    kind: "rolling",
+    startDate: "2026-09-04",
+    endDate: "2026-09-10",
+    retainedBeforeDate: "2026-06-13",
+  });
+});
+
+test("TikTok Ads normalization preserves provider evidence and converts money to minor units", () => {
+  const result = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [{
+      dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-08" },
+      metrics: {
+        currency: "GBP",
+        spend: "12.34",
+        total_onsite_shopping_value: "99.95",
+        shop_total_purchase_by_order_submission: "3",
+        impressions: "1000",
+        clicks: "25",
+      },
+    }],
+  });
+
+  assert.equal(result.skippedRows, 0);
+  assert.deepEqual(result.records[0], {
+    id: "tiktok-ads:advertiser-1:AUCTION:AUCTION_ADVERTISER:advertiser_id=advertiser-1|stat_time_day=2026-09-08",
+    advertiserId: "advertiser-1",
+    reportDate: "2026-09-08",
+    reportType: "BASIC",
+    serviceType: "AUCTION",
+    dataLevel: "AUCTION_ADVERTISER",
+    dimensionKey: "advertiser_id=advertiser-1|stat_time_day=2026-09-08",
+    providerCurrency: "GBP",
+    spendMinor: 1234,
+    attributedRevenueMinor: 9995,
+    attributedPurchases: 3,
+    impressions: 1000,
+    clicks: 25,
+    sourceDimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-08" },
+    sourceMetrics: {
+      currency: "GBP",
+      spend: "12.34",
+      total_onsite_shopping_value: "99.95",
+      shop_total_purchase_by_order_submission: "3",
+      impressions: "1000",
+      clicks: "25",
+    },
+    attributionWindow: null,
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+  });
+});
+
+test("TikTok Ads normalization distinguishes absent metrics from provider zeroes", () => {
+  const result = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [
+      {
+        dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-08" },
+        metrics: { currency: "GBP", spend: "0", impressions: "0" },
+      },
+      {
+        dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-09" },
+        metrics: { currency: "GBP", spend: "1.00", total_onsite_shopping_value: "0", shop_total_purchase_by_order_submission: "0" },
+      },
+    ],
+  });
+
+  assert.equal(result.records[0].attributedRevenueMinor, null);
+  assert.equal(result.records[0].attributedPurchases, null);
+  assert.equal(result.records[0].spendMinor, 0);
+  assert.equal(result.records[1].attributedRevenueMinor, 0);
+  assert.equal(result.records[1].attributedPurchases, 0);
+});
+
+test("TikTok Ads normalization skips rows that cannot carry trustworthy attribution evidence", () => {
+  const result = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [
+      { dimensions: { advertiser_id: "advertiser-2", stat_time_day: "2026-09-08" }, metrics: { currency: "GBP", spend: "1" } },
+      { dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-8" }, metrics: { currency: "GBP", spend: "1" } },
+      { dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-09" }, metrics: { spend: "1" } },
+      { dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-09-10" }, metrics: { currency: "GBP", spend: "not-a-number" } },
+    ],
+  });
+
+  assert.equal(result.records.length, 0);
+  assert.equal(result.skippedRows, 4);
+});
+
+test("TikTok Ads report fetch uses the official integrated report contract and paginates", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: new URL(String(input)), init });
+    const page = new URL(String(input)).searchParams.get("page");
+    const payload = page === "1"
+      ? { code: 0, message: "OK", data: { page_info: { page: 1, total_page: 2 }, list: [{ dimensions: { stat_time_day: "2026-09-08" }, metrics: { spend: "1" } }] } }
+      : { code: 0, message: "OK", data: { page_info: { page: 2, total_page: 2 }, list: [{ dimensions: { stat_time_day: "2026-09-09" }, metrics: { spend: "2" } }] } };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const rows = await fetchTikTokAdsReport({
+      accessToken: "access-token",
+      advertiserId: "advertiser-1",
+      startDate: "2026-09-08",
+      endDate: "2026-09-09",
+    });
+    assert.equal(rows.length, 2);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url.pathname, "/open_api/v1.3/report/integrated/get/");
+    assert.equal(requests[0].url.searchParams.get("report_type"), "BASIC");
+    assert.equal(requests[0].url.searchParams.get("service_type"), "AUCTION");
+    assert.equal(requests[0].url.searchParams.get("data_level"), "AUCTION_ADVERTISER");
+    assert.deepEqual(JSON.parse(requests[0].url.searchParams.get("dimensions")), ["advertiser_id", "stat_time_day"]);
+    assert.ok(JSON.parse(requests[0].url.searchParams.get("metrics")).includes("total_onsite_shopping_value"));
+    assert.equal(requests[0].url.searchParams.get("start_date"), "2026-09-08");
+    assert.equal(requests[0].url.searchParams.get("end_date"), "2026-09-09");
+    assert.equal(requests[0].init.headers["Access-Token"], "access-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("TikTok Ads report fetch returns a safe error without echoing provider response data", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: 40100, message: "private provider detail" }), { status: 401 });
+  try {
+    await assert.rejects(
+      fetchTikTokAdsReport({ accessToken: "access-token", advertiserId: "advertiser-1", startDate: "2026-09-08", endDate: "2026-09-09" }),
+      (error) => error instanceof Error
+        && error.message === "TikTok Ads reporting request failed (HTTP 401, code 40100)"
+        && !error.message.includes("private provider detail"),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

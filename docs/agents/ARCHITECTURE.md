@@ -53,7 +53,7 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   ```
 - **Hides**: SQL, row hydration, transactions, idempotency, migrations' data-shape assumptions, and audit writes.
 - **Depends on**: `lib/turso.ts`, `lib/types.ts`, integration parsers, auth-derived actor identity.
-- **Tested at**: `tests/schema.test.mjs` only tests the schema's order-search trigger; repository behavior is otherwise untested.
+- **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; repository behavior is otherwise untested.
 - **Depth**: shallow-but-known; `lib/repository.ts` is a large mixed-context module with a broad surface and is the primary deepening candidate.
 
 ### Inventory rules and audit domain

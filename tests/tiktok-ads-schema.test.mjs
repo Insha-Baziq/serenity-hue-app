@@ -25,11 +25,13 @@ test("schema keeps TikTok Ads OAuth and connection state separate from TikTok Sh
 
     const tables = await db.execute(`
       SELECT name FROM sqlite_master
-      WHERE type = 'table' AND name IN ('tiktok_connections', 'tiktok_ads_connections', 'tiktok_oauth_states', 'tiktok_ads_oauth_states')
+      WHERE type = 'table' AND name IN ('tiktok_connections', 'tiktok_ads_connections', 'tiktok_oauth_states', 'tiktok_ads_oauth_states', 'tiktok_ads_report_rows', 'tiktok_ads_sync_status')
       ORDER BY name`);
     assert.deepEqual(tables.rows.map((row) => row.name), [
       "tiktok_ads_connections",
       "tiktok_ads_oauth_states",
+      "tiktok_ads_report_rows",
+      "tiktok_ads_sync_status",
       "tiktok_connections",
       "tiktok_oauth_states",
     ]);
@@ -37,6 +39,29 @@ test("schema keeps TikTok Ads OAuth and connection state separate from TikTok Sh
     const connection = await db.execute("SELECT advertiser_id, authorized_advertiser_ids FROM tiktok_ads_connections");
     assert.deepEqual(state.rows, [{ state_hash: "hash-1" }]);
     assert.deepEqual(connection.rows, [{ advertiser_id: "advertiser-1", authorized_advertiser_ids: '["advertiser-1"]' }]);
+
+    await db.execute({
+      sql: `INSERT INTO tiktok_ads_report_rows
+        (id, advertiser_id, report_date, report_type, service_type, data_level, dimension_key,
+         provider_currency, spend_minor, attributed_revenue_minor, source_dimensions_json,
+         source_metrics_json, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(advertiser_id, report_type, service_type, data_level, dimension_key)
+        DO UPDATE SET spend_minor = excluded.spend_minor, attributed_revenue_minor = excluded.attributed_revenue_minor, updated_at = excluded.updated_at`,
+      args: ["row-1", "advertiser-1", "2026-09-10", "BASIC", "AUCTION", "AUCTION_ADVERTISER", "advertiser_id=advertiser-1|stat_time_day=2026-09-10", "GBP", 100, 200, "{}", "{}", "2026-09-10T12:00:00.000Z"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_ads_report_rows
+        (id, advertiser_id, report_date, report_type, service_type, data_level, dimension_key,
+         provider_currency, spend_minor, attributed_revenue_minor, source_dimensions_json,
+         source_metrics_json, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(advertiser_id, report_type, service_type, data_level, dimension_key)
+        DO UPDATE SET spend_minor = excluded.spend_minor, attributed_revenue_minor = excluded.attributed_revenue_minor, updated_at = excluded.updated_at`,
+      args: ["row-1-corrected", "advertiser-1", "2026-09-10", "BASIC", "AUCTION", "AUCTION_ADVERTISER", "advertiser_id=advertiser-1|stat_time_day=2026-09-10", "GBP", 125, 250, "{}", "{}", "2026-09-10T13:00:00.000Z"],
+    });
+    const report = await db.execute("SELECT id, spend_minor, attributed_revenue_minor FROM tiktok_ads_report_rows");
+    assert.deepEqual(report.rows, [{ id: "row-1", spend_minor: 125, attributed_revenue_minor: 250 }]);
   } finally {
     db.close();
     await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);

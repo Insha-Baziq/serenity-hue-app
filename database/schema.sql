@@ -605,6 +605,50 @@ CREATE TABLE IF NOT EXISTS tiktok_ads_connections (
 
 CREATE INDEX IF NOT EXISTS tiktok_ads_connections_status_idx ON tiktok_ads_connections(status, updated_at DESC);
 
+-- TikTok Ads report rows are normalized provider evidence. They remain separate
+-- from TikTok Shop orders so an ad report can never silently become a Shop sale.
+CREATE TABLE IF NOT EXISTS tiktok_ads_report_rows (
+  id TEXT PRIMARY KEY,
+  advertiser_id TEXT NOT NULL,
+  report_date TEXT NOT NULL,
+  report_type TEXT NOT NULL,
+  service_type TEXT NOT NULL,
+  data_level TEXT NOT NULL,
+  dimension_key TEXT NOT NULL,
+  provider_currency TEXT NOT NULL,
+  spend_minor INTEGER NOT NULL DEFAULT 0,
+  attributed_revenue_minor INTEGER,
+  attributed_purchases INTEGER,
+  impressions INTEGER,
+  clicks INTEGER,
+  source_dimensions_json TEXT NOT NULL DEFAULT '{}',
+  source_metrics_json TEXT NOT NULL DEFAULT '{}',
+  attribution_window TEXT,
+  fetched_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (advertiser_id, report_type, service_type, data_level, dimension_key)
+);
+
+CREATE INDEX IF NOT EXISTS tiktok_ads_report_rows_period_idx
+  ON tiktok_ads_report_rows(advertiser_id, report_date DESC);
+
+CREATE TABLE IF NOT EXISTS tiktok_ads_sync_status (
+  advertiser_id TEXT PRIMARY KEY REFERENCES tiktok_ads_connections(advertiser_id) ON DELETE CASCADE,
+  last_successful_at TEXT,
+  last_attempted_at TEXT,
+  last_error_at TEXT,
+  last_error_message TEXT,
+  last_status TEXT NOT NULL DEFAULT 'first_run' CHECK (last_status IN ('first_run', 'fresh', 'partial', 'failed')),
+  initial_baseline_started_at TEXT,
+  initial_baseline_completed_at TEXT,
+  last_report_start_date TEXT,
+  last_report_end_date TEXT,
+  last_rows_written INTEGER NOT NULL DEFAULT 0,
+  last_rows_skipped INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS tiktok_connections (
   id TEXT PRIMARY KEY,
   shop_id TEXT UNIQUE,
