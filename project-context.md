@@ -1,6 +1,6 @@
 # Serenity Hue Operations — Project Context
 
-Last updated: 23 August 2026
+Last updated: 12 September 2026
 
 This file is the working handoff for the Serenity Hue internal operations app. Read it before making product, data-model, integration, or UI decisions.
 
@@ -89,6 +89,26 @@ Production deployment for this work: `dpl_DqPDiT2ToCkQwKFQKM5Jybj2E4mp`, aliased
 
 Note: a full **signed-in browser click-through was not performed** for Batch B because local/production login credentials were not available in the session; the SQL filter/pagination/export semantics were verified directly against the local database instead. A signed-in production pass of Orders (search, channel tabs, fulfilment filter, date range, 25/40/50 paging, CSV export, order detail sheet) is still recommended.
 
+## Database move and usage reduction — 12 September 2026
+
+The old Turso organisation exhausted its free-tier **write** quota (10M rows/month) and Turso blocked all writes. Reads kept working, so the app failed in a confusing way: every authenticated page 500'd because the Better Auth session check writes, and the login form reported the failure as "These details were not recognised" rather than an outage. **The login form still misreports infrastructure failures as bad credentials — worth fixing.**
+
+Root cause was write amplification, not data volume. On a 21 MB database the scheduled sync was rewriting ~2,590 unchanged rows per run, ~2,350 of them TikTok affiliate videos: the importer pulls a 90-day window every run and re-upserts every video, almost all long settled. At 288 runs/day that is ~22M writes/month.
+
+What changed:
+
+- **New database.** Production now uses the Vercel Marketplace Turso resource `serenity-hue-operations` (`store_THa30fMtd19MgZIc`, `dub1`, Starter/$0) under the `serenity-hue` Vercel team. 41,568 rows across 52 tables were copied and row counts verified identical on both sides. Deployment `dpl_ESJav1KSnPDJ8BW5gvVz1Ere6JL6`.
+- **Migration gotchas, for any future move.** `order_search` is a self-contained FTS5 virtual table; its five `order_search_*` shadow tables must never be created or copied directly — create the virtual table and copy through its own columns, and create the 6 triggers only after the data lands or they double-insert. Turso enforces foreign keys and tables copy in schema order, not dependency order, so the data load must run through libSQL's `migrate()` (foreign keys disabled) rather than `batch()`.
+- **Change-guarded upserts.** `changedColumns()` in `lib/sql-upsert.ts` builds the `DO UPDATE ... WHERE` so provider snapshots only write when a payload column actually differs. Applied to `tiktok_affiliate_videos`, `tiktok_affiliate_orders`, `shipments`, `shipment_events`. Bookkeeping stamps are excluded from the comparison or the guard never fires. **`channel_inventory` is deliberately unguarded**: its staleness sweep deletes rows whose `synced_at` this run did not bump, so suppressing that write would delete every unchanged row.
+- **Sync cadence** reduced from 5 to 30 minutes, which cuts reads and writes together.
+- **`sync_runs` pruned** to 30 days; it grew by two rows per run forever and both readers only take the latest.
+
+### Known remaining usage risk
+
+`importRecentParcel2GoShipments()` reads **every** channel order on each run to match 25 deliveries — 5,339 rows today, growing linearly forever. It cannot simply be bounded to the 45-day booking window, because `findParcel2GoOrderMatch()` resolves an exact Parcel2Go reference *before* applying that window, so an older order must stay visible or reference matching silently stops linking it. The safe fix is two queries — an indexed lookup for reference keys, plus a date-windowed set for the evidence match — passed as one candidate list to the unchanged matcher. Not yet done; it needs tests around both match paths.
+
+Also still deferred: in-app caching (`unstable_cache` + tag invalidation) for read-heavy pages.
+
 ## Agreed product decisions
 
 ### Data sources
@@ -102,11 +122,11 @@ Note: a full **signed-in browser click-through was not performed** for Batch B b
 
 ### Database and deployment
 
-- The app uses a **local libSQL/SQLite database** at `data/serenity-hue.db` during development and a hosted **Turso/libSQL** database in production. The production database is `serenity-hue-operations-uk` in Turso's Ireland (`aws-eu-west-1`) region.
+- The app uses a **local libSQL/SQLite database** at `data/serenity-hue.db` during development and a hosted **Turso/libSQL** database in production. The production database is the Vercel-managed Turso resource `serenity-hue-operations` (`store_THa30fMtd19MgZIc`), region `dub1`. It replaced `serenity-hue-operations-uk` on 12 September 2026; see the migration note below.
 - The repository layer switches to Turso when `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are present; no app code should need a large rewrite for that move.
 - The production app is deployed to Vercel via the CLI at `https://serenity-hue-operations.vercel.app`, with server functions configured for Vercel's Dublin (`dub1`) region.
 - Supabase, Neon, Cloudflare D1, and Cloudflare hosting are not selected.
-- Upstash QStash EU calls the production reconciliation endpoint every five minutes (`*/5 * * * *`). The manual **Sync now** control remains available for an immediate refresh.
+- Upstash QStash EU calls the production reconciliation endpoint every thirty minutes (`*/30 * * * *`). It ran every five minutes until 12 September 2026; the cadence was reduced to keep database usage inside the plan. The manual **Sync now** control remains available for an immediate refresh.
 
 ### Inventory philosophy
 
@@ -280,7 +300,7 @@ TikTok is implemented as a direct server-side integration:
 - `POST /api/sync` runs a manual direct-channel reconciliation and is used by the **Sync now** button.
 - `POST /api/jobs/reconcile` is the scheduled endpoint. It verifies QStash signatures only when both QStash signing keys are configured.
 - Sync leases in the database prevent overlapping reconciliation jobs.
-- QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/5 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
+- QStash schedule `serenity-hue-shopify-sync` should run in the EU region with cron `*/30 * * * *`, targeting `POST /api/jobs/reconcile`. Its signature is verified with the configured QStash signing keys. The schedule is managed outside this repository in QStash; after changing its cadence, verify the schedule record and one successful production invocation.
 
 ## Authentication (Better Auth)
 
@@ -577,7 +597,7 @@ Channel sub-labels are plain ("Physical stock" / "Shopify stock" / "TikTok stock
 
 ### Deployment / access notes for this work
 
-- Production DB is Turso `serenity-hue-operations-uk` (Ireland). The Turso CLI is authenticated inside WSL at `~/.turso/turso` (account `insha-khan`); use `turso db show serenity-hue-operations-uk --url` + `turso db tokens create …` to read/write production directly.
+- Production DB is the Vercel-managed Turso resource `serenity-hue-operations` (`dub1`), owned by the `serenity-hue` Vercel team rather than the old standalone `insha-khan` Turso account. Credentials are integration-managed: `vercel integration resource connect serenity-hue-operations` writes `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` into the project, so they rotate without hand-editing. Always pass the Shabina Khan CLI profile.
 - Deploys via `npx vercel --prod --yes` from the repo (project linked in `.vercel/`). Live at `https://serenity-hue-operations.vercel.app`.
 - Validation gate before every deploy: `npm run typecheck && npm run lint && npm run build` (all must pass).
 

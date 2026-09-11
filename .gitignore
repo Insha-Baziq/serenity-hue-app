@@ -23,3 +23,5 @@ LOCAL-VERIFICATION-CREDENTIALS.md
 
 .vercel
 .env*
+skills-lock.json
+.claude/

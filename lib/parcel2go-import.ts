@@ -28,7 +28,16 @@ function shippingAddress(value: unknown) {
 /** Upserts Parcel2Go's recent delivery feed and links only high-confidence channel matches. */
 export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportResult> {
   const shipments = await getRecentParcel2GoShipments();
+  // The candidate scan below reads every channel order, so it is only worth
+  // paying for when there is something to match against.
+  if (shipments.length === 0) return { shipments: 0, events: 0, autoLinked: 0 };
   const db = await getTursoClient();
+  // NOTE: this deliberately reads all channel orders rather than a date window.
+  // findParcel2GoOrderMatch() resolves an exact Parcel2Go reference before it
+  // applies the 45-day booking window, so an old order must still be visible
+  // here or reference matching would silently stop linking it. The cost grows
+  // with order count; see docs for the indexed-lookup plan that keeps both
+  // match paths intact.
   const ordersResult = await db.execute(`
     SELECT id, source_order_id, order_number, customer_name, customer_email, customer_phone, shipping_address_json, source_created_at
     FROM orders
