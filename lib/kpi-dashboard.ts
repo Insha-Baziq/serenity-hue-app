@@ -110,6 +110,12 @@ export type KpiDashboard = {
   trendGranularity: "day" | "bucket";
   trendIntervalDays: number;
   trend: Array<{ date: string; netSales: number; orders: number }>;
+  /**
+   * The preceding period bucketed on the same interval, so chart point `i`
+   * compares like for like. Empty when the selected range is all time, which
+   * has no preceding period to compare against.
+   */
+  previousTrend: Array<{ date: string; netSales: number; orders: number }>;
   products: KpiProductPerformance[];
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
@@ -130,6 +136,9 @@ type PeriodAccumulator = {
 const REPORTING_TIME_ZONE = "Europe/London";
 const MAX_DAILY_TREND_POINTS = 366;
 const MAX_BUCKETED_TREND_POINTS = 180;
+/** Rows retained for the dedicated Products and Customers reporting tabs. */
+const PRODUCT_LIMIT = 50;
+const TOP_CUSTOMER_LIMIT = 20;
 
 function londonDate(iso: string) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -367,7 +376,7 @@ function buildCustomerPerformance(input: {
       qualifyingOrders: group.orders.length,
       latestPurchase: londonDate(latest.createdAt),
     };
-  }).sort((left, right) => right.netSpend - left.netSpend || right.qualifyingOrders - left.qualifyingOrders || right.latestPurchase.localeCompare(left.latestPurchase) || left.name.localeCompare(right.name)).slice(0, 5);
+  }).sort((left, right) => right.netSpend - left.netSpend || right.qualifyingOrders - left.qualifyingOrders || right.latestPurchase.localeCompare(left.latestPurchase) || left.name.localeCompare(right.name)).slice(0, TOP_CUSTOMER_LIMIT);
 
   const repeat = activeGroups.filter((group) => group.orders.length > 1).length;
   return { summary: { new: activeGroups.length - repeat, repeat, total: activeGroups.length }, topCustomers };
@@ -444,9 +453,27 @@ export function buildKpiDashboard(input: {
     return shiftDate(input.range.start, Math.floor(offset / trendIntervalDays) * trendIntervalDays);
   };
 
+  const previousTrend = new Map<string, { netSales: number; orders: number }>();
+  const previousTrendKey = (date: string) => {
+    if (!previousRange) return null;
+    const offset = Math.floor((Date.parse(`${date}T00:00:00.000Z`) - Date.parse(`${previousRange.start}T00:00:00.000Z`)) / 86_400_000);
+    return shiftDate(previousRange.start, Math.floor(offset / trendIntervalDays) * trendIntervalDays);
+  };
+
   for (let offset = 0; offset < rangeDays; offset += trendIntervalDays) {
     trend.set(shiftDate(input.range.start, offset), { netSales: 0, orders: 0 });
+    if (previousRange) previousTrend.set(shiftDate(previousRange.start, offset), { netSales: 0, orders: 0 });
   }
+
+  const addTrend = (accumulator: PeriodAccumulator, date: string, netSales: number, orders: number) => {
+    const target = accumulator === selected ? trend : previousTrend;
+    const key = accumulator === selected ? trendKey(date) : previousTrendKey(date);
+    if (key === null) return;
+    const values = target.get(key) ?? { netSales: 0, orders: 0 };
+    values.netSales += netSales;
+    values.orders += orders;
+    target.set(key, values);
+  };
 
   for (const sale of input.sales) {
     for (const line of sale.items) lineByKey.set(`${sale.id}:${line.id}`, { sale, line });
@@ -456,20 +483,10 @@ export function buildKpiDashboard(input: {
     if (!accumulator) continue;
     accumulator.orders += 1;
     accumulator.channels.get(sale.channel)!.orders += 1;
-    if (accumulator === selected) {
-      const key = trendKey(date);
-      const values = trend.get(key) ?? { netSales: 0, orders: 0 };
-      values.orders += 1;
-      trend.set(key, values);
-    }
+    addTrend(accumulator, date, 0, 1);
     for (const line of sale.items) {
       updateLine(accumulator, line, sale.channel, line.quantity);
-      if (accumulator === selected) {
-        const key = trendKey(date);
-        const values = trend.get(key) ?? { netSales: 0, orders: 0 };
-        values.netSales += line.quantity * line.unitPrice;
-        trend.set(key, values);
-      }
+      addTrend(accumulator, date, line.quantity * line.unitPrice, 0);
     }
   }
 
@@ -486,12 +503,7 @@ export function buildKpiDashboard(input: {
     const accumulator = contains(input.range, date) ? selected : previousRange && contains(previousRange, date) ? previous : null;
     if (!accumulator) continue;
     updateLine(accumulator, source.line, source.sale.channel, -units);
-    if (accumulator === selected) {
-      const key = trendKey(date);
-      const values = trend.get(key) ?? { netSales: 0, orders: 0 };
-      values.netSales -= units * source.line.unitPrice;
-      trend.set(key, values);
-    }
+    addTrend(accumulator, date, -units * source.line.unitPrice, 0);
   }
 
   const channels: KpiChannelPerformance[] = (["shopify", "tiktok"] as const).map((channel) => {
@@ -513,10 +525,11 @@ export function buildKpiDashboard(input: {
     trendGranularity,
     trendIntervalDays,
     trend: [...trend.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, values]) => ({ date, ...values })),
+    previousTrend: [...previousTrend.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, values]) => ({ date, ...values })),
     products: [...selected.products.values()]
       .filter((product) => product.netUnits !== 0 || product.netRevenue !== 0)
       .sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title))
-      .slice(0, 10),
+      .slice(0, PRODUCT_LIMIT),
     unassigned: selected.unassigned,
     channels,
     customers: buildCustomerPerformance({ range: input.range, sales: input.sales, refunds: input.refunds, customerOrders: input.customerOrders ?? [] }),

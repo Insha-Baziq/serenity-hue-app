@@ -1,4 +1,4 @@
-import { KpisWorkspace } from "@/components/kpis-workspace";
+import { KpisWorkspace, type KpiView } from "@/components/kpis-workspace";
 import { requirePageSession } from "@/lib/auth-guard";
 import { getKpiDashboard, getTikTokAdsConnectionState, getTikTokAffiliateDashboard } from "@/lib/repository";
 import { getTikTokAdsReport, getTikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
@@ -7,6 +7,9 @@ import type { KpiPeriod } from "@/lib/kpi-dashboard";
 export const dynamic = "force-dynamic";
 
 const REPORTING_TIME_ZONE = "Europe/London";
+
+/** Reporting tabs that may be linked to directly with `?view=`. */
+const KPI_VIEWS: KpiView[] = ["overview", "products", "channels", "customers", "affiliates", "ads", "restock"];
 
 function londonToday() {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: REPORTING_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -41,7 +44,7 @@ export default async function KpisPage({ searchParams }: { searchParams: Promise
   await requirePageSession();
   const params = await searchParams;
   const range = selectedRange(params);
-  const initialView = params.view === "ads" ? "ads" : undefined;
+  const initialView = KPI_VIEWS.find((view) => view === params.view);
   const [dashboard, affiliateDashboard, adsConnection, adsReportState, adsReport] = await Promise.all([
     getKpiDashboard(range),
     getTikTokAffiliateDashboard(range),

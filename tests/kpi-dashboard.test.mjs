@@ -63,6 +63,15 @@ test("KPI dashboard puts a partial refund on its issued London business day", ()
     ["2026-08-02", 2500, 1],
     ["2026-08-03", -1000, 0],
   ]);
+  // The prior series carries the same number of buckets on the same interval, so
+  // the comparison line on the sales chart lines up point for point, and it
+  // applies the prior period's refund on its own issued day.
+  assert.deepEqual(dashboard.previousTrend.map((day) => [day.date, day.netSales, day.orders]), [
+    ["2026-07-29", 500, 1],
+    ["2026-07-30", -500, 0],
+    ["2026-07-31", 0, 0],
+  ]);
+  assert.equal(dashboard.previousTrend.length, dashboard.trend.length);
   assert.deepEqual(dashboard.products, [
     { id: "physical-2", title: "Amber Diffuser", netUnits: 1, netRevenue: 2500, shopifyUnits: 0, tiktokUnits: 1 },
     { id: "physical-1", title: "Rose Candle", netUnits: 1, netRevenue: 1000, shopifyUnits: 1, tiktokUnits: 0 },
@@ -110,6 +119,7 @@ test("KPI dashboard does not invent a prior-period comparison for all recorded a
 
   assert.equal(dashboard.range.allTime, true);
   assert.equal(dashboard.previous, null);
+  assert.deepEqual(dashboard.previousTrend, []);
   assert.deepEqual(dashboard.metrics, { netSales: 2400, orders: 1, averageOrderValue: 2400, netUnits: 2 });
 });
 
