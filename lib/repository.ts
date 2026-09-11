@@ -12,9 +12,15 @@ import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
 import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
 import { buildTikTokAffiliateDashboard, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
+import { changedColumns } from "@/lib/sql-upsert";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
+
+const changed = changedColumns;
+
+/** How much scheduled-sync bookkeeping to keep. Nothing reads beyond this. */
+const SYNC_RUN_RETENTION_DAYS = 30;
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
@@ -1246,7 +1252,12 @@ export async function saveTikTokAffiliateOrders(records: TikTokAffiliateOrderRec
         creator_open_id=excluded.creator_open_id, creator_username=excluded.creator_username, quantity=excluded.quantity,
         gross_amount_minor=excluded.gross_amount_minor, estimated_commission_minor=excluded.estimated_commission_minor,
         currency=excluded.currency, status=excluded.status, source_created_at=excluded.source_created_at,
-        source_updated_at=excluded.source_updated_at, imported_at=excluded.imported_at, updated_at=excluded.updated_at`,
+        source_updated_at=excluded.source_updated_at, imported_at=excluded.imported_at, updated_at=excluded.updated_at
+      WHERE ${changed("tiktok_affiliate_orders", [
+        "source_product_id", "source_sku_id", "product_title", "creator_open_id", "creator_username",
+        "quantity", "gross_amount_minor", "estimated_commission_minor", "currency", "status",
+        "source_created_at", "source_updated_at",
+      ])}`,
     args: [
       record.id, record.connectionId, record.shopId, record.sourceOrderId, record.sourceLineItemId,
       record.sourceProductId ?? null, record.sourceSkuId ?? null, record.productTitle ?? null,
@@ -1288,7 +1299,11 @@ export async function saveTikTokAffiliateVideos(records: TikTokAffiliateVideoRec
         creator_username=excluded.creator_username, video_title=excluded.video_title, published_at=excluded.published_at,
         gross_amount_minor=excluded.gross_amount_minor, attributed_order_count=excluded.attributed_order_count,
         currency=excluded.currency, source_updated_at=excluded.source_updated_at, imported_at=excluded.imported_at,
-        updated_at=excluded.updated_at`,
+        updated_at=excluded.updated_at
+      WHERE ${changed("tiktok_affiliate_videos", [
+        "source_product_id", "creator_open_id", "creator_username", "video_title", "published_at",
+        "gross_amount_minor", "attributed_order_count", "currency", "source_updated_at",
+      ])}`,
     args: [
       record.id, record.connectionId, record.shopId, record.sourceVideoId, record.sourceProductId ?? null,
       record.creatorOpenId ?? null, record.creatorUsername ?? null, record.videoTitle ?? null, record.publishedAt ?? null,
@@ -3004,7 +3019,16 @@ export async function recordSyncRun(input: {
             records_seen = excluded.records_seen, records_changed = excluded.records_changed, message = excluded.message`,
     args: [input.id, input.trigger, input.provider ?? "direct", input.status, now, input.finished ? now : null, input.recordsSeen ?? 0, input.recordsChanged ?? 0, input.message] as SqlValue[],
   });
-  if (input.finished) revalidatePath("/kpis");
+  if (input.finished) {
+    // Bookkeeping, not history: the table grows by two rows on every scheduled
+    // run and nothing reads beyond the recent window. Pruning on completion
+    // keeps it bounded without a separate job.
+    await db.execute({
+      sql: `DELETE FROM sync_runs WHERE started_at < ?`,
+      args: [new Date(Date.now() - SYNC_RUN_RETENTION_DAYS * 86_400_000).toISOString()],
+    });
+    revalidatePath("/kpis");
+  }
 }
 
 export async function takeSyncLease(ownerId: string, durationSeconds = 240) {

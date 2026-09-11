@@ -3,6 +3,7 @@ import "server-only";
 import { findParcel2GoOrderMatch, type Parcel2GoOrderMatchCandidate } from "@/lib/parcel2go-matching";
 import { getRecentParcel2GoShipments } from "@/lib/parcel2go";
 import { getTursoClient } from "@/lib/turso";
+import { changedColumns } from "@/lib/sql-upsert";
 
 export type Parcel2GoImportResult = {
   shipments: number;
@@ -67,7 +68,11 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
               estimated_delivery_at = excluded.estimated_delivery_at,
               tracking_url = excluded.tracking_url,
               last_synced_at = excluded.last_synced_at,
-              updated_at = excluded.updated_at`,
+              updated_at = excluded.updated_at
+            WHERE ${changedColumns("shipments", [
+              "transaction_id", "courier", "service", "source", "status", "source_references_json",
+              "paid_at", "collection_date", "estimated_delivery_at", "tracking_url",
+            ])}`,
       args: [
         shipmentId,
         shipment.orderLineId,
@@ -105,7 +110,8 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
               ON CONFLICT(shipment_id, event_key) DO UPDATE SET
                 label = excluded.label,
                 occurred_at = excluded.occurred_at,
-                updated_at = excluded.updated_at`,
+                updated_at = excluded.updated_at
+              WHERE ${changedColumns("shipment_events", ["label", "occurred_at"])}`,
         args: [`${shipmentId}:${event.key}`, shipmentId, event.key, event.label, event.occurredAt, now, now],
       });
     }

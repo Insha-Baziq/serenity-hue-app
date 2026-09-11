@@ -336,6 +336,9 @@ export async function storeTikTokInventory(): Promise<{
       : [{ warehouseId: "default", quantity: sku.totalQuantity }];
     for (const [warehouseIndex, warehouse] of warehouses.entries()) {
       const warehouseId = warehouse.warehouseId || `warehouse-${warehouseIndex + 1}`;
+      // Deliberately NOT change-guarded, unlike the other provider snapshots.
+      // The staleness sweep below deletes rows whose synced_at this run did not
+      // bump, so suppressing the write for an unchanged row would delete it.
       inventoryStatements.push({
       sql: `INSERT INTO channel_inventory (id, variant_id, channel, shop_id, external_product_id, external_sku_id, warehouse_id, available_quantity, synced_at)
             VALUES (?, NULL, 'tiktok', ?, ?, ?, ?, ?, ?)
