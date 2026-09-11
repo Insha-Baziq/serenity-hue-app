@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { ArrowRight, Boxes, CheckCircle2, ClipboardList, Package, ShoppingBag, Store } from "lucide-react";
+import { ArrowRight, Boxes, CircleAlert, ClipboardList, Package, ShoppingBag, Store } from "lucide-react";
 import type { ReactNode } from "react";
 import { SyncButton } from "@/components/sync-button";
-import { PaymentPill } from "@/components/status-pill";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
+import { deliveryProgressCopy, deliveryProgressState } from "@/lib/delivery-progress";
 import type { Order, PackagingMaterial, PhysicalInventoryItem, SyncSnapshot } from "@/lib/types";
 
 type OverviewWorkspaceProps = {
@@ -13,86 +13,106 @@ type OverviewWorkspaceProps = {
   sync: SyncSnapshot;
 };
 
+type AttentionItem = {
+  title: string;
+  action: string;
+  href: string;
+  icon: ReactNode;
+  tone: "plum" | "orange" | "red";
+};
+
+/*
+THESIS: Overview is a daily operations brief, not a second KPI dashboard or a mosaic of summary cards.
+OWN-WORLD: Warm paper, plum structure, soft 16px surfaces, open rules, serif masthead, and sans-serif operational data.
+STORY: Staff see what requires action, inspect work in motion, then move directly into the correct workspace.
+FIRST VIEWPORT: A restrained masthead leads into an asymmetric attention queue and recent-order ledger; the operations pulse anchors the page below.
+FORM: Daily brief, sixth of seven grounded structures, seed 9ea530d1.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+*/
 export function OverviewWorkspace({ orders, items, packaging, sync }: OverviewWorkspaceProps) {
   const shopifyOrders = orders.filter((order) => order.channel === "shopify");
   const tiktokOrders = orders.filter((order) => order.channel === "tiktok");
   const variants = items.flatMap((item) => item.variants);
   const unitsOnHand = variants.reduce((total, variant) => total + variant.quantity, 0);
-  const liveVariants = variants.length;
-  const lowStockVariants = variants.filter((variant) => variant.quantityKnown && variant.quantity < 10).length;
+  const lowStockVariants = variants.filter((variant) => variant.quantityKnown && variant.quantity > 0 && variant.quantity < 10).length;
   const outOfStockVariants = variants.filter((variant) => variant.quantityKnown && variant.quantity === 0).length;
-  const packagingTypes = packaging.length;
-  const recentOrders = orders.slice(0, 5);
+  const uncountedVariants = variants.filter((variant) => !variant.quantityKnown).length;
+  const packagingBelowReorder = packaging.filter((material) => material.quantity <= material.reorderPoint).length;
+  const recentOrders = orders.slice(0, 4);
   const shopifyConnected = sync.liveChannels > 0;
   const tiktokConnected = sync.liveChannels > 1;
-  const syncCaption = sync.lastSyncedAt
-    ? `Last synced ${relativeTime(sync.lastSyncedAt)}`
-    : "Awaiting first sync";
+  const syncCaption = sync.lastSyncedAt ? `Synced ${relativeTime(sync.lastSyncedAt)}` : "Awaiting first sync";
+
+  const attentionItems: AttentionItem[] = [
+    ...(outOfStockVariants ? [{ title: `${outOfStockVariants.toLocaleString("en-GB")} physical ${pluralize(outOfStockVariants, "variant")} out of stock`, action: "Review stock", href: "/inventory/products", icon: <CircleAlert size={20} strokeWidth={1.8} />, tone: "red" as const }] : []),
+    ...(packagingBelowReorder ? [{ title: `${packagingBelowReorder.toLocaleString("en-GB")} packaging ${pluralize(packagingBelowReorder, "item")} below reorder point`, action: "Open packaging", href: "/inventory/packaging", icon: <Boxes size={20} strokeWidth={1.8} />, tone: "orange" as const }] : []),
+    ...(lowStockVariants ? [{ title: `${lowStockVariants.toLocaleString("en-GB")} physical ${pluralize(lowStockVariants, "variant")} low on stock`, action: "Review stock", href: "/inventory/products", icon: <Package size={20} strokeWidth={1.8} />, tone: "orange" as const }] : []),
+    ...(uncountedVariants ? [{ title: `${uncountedVariants.toLocaleString("en-GB")} physical ${pluralize(uncountedVariants, "variant")} need a stock count`, action: "Count stock", href: "/inventory/products", icon: <Package size={20} strokeWidth={1.8} />, tone: "plum" as const }] : []),
+  ].slice(0, 4);
 
   return (
-    <section className="workspace workspace--overview">
-      <header className="workspace-header overview-header">
+    <section className="workspace workspace--overview overview-brief">
+      <header className="overview-brief__masthead">
         <div>
-          <p className="workspace-kicker">Serenity Hue operations</p>
           <h1>Overview</h1>
-          <p className="overview-intro">A clear view of orders, channels, and the stock picture behind today&apos;s work.</p>
-          <div className="overview-meta">
-            <span className={`live-dot live-dot--${sync.status}`} aria-hidden="true" />
-            <span>{syncCaption}</span>
-            <span aria-hidden="true">·</span>
-            <span>{sync.status === "healthy" ? "All connected sources are current" : sync.message}</span>
-          </div>
         </div>
-        <SyncButton variant="primary" />
+        <div className="overview-brief__sync">
+          <div className="overview-brief__sync-copy">
+            <span>{syncCaption}</span>
+            {sync.status !== "healthy" && <strong>{sync.message}</strong>}
+          </div>
+          <SyncButton variant="primary" />
+        </div>
       </header>
 
-      <div className="overview-grid overview-grid--primary">
-        <section className="overview-panel overview-panel--recent" aria-labelledby="recent-orders-title">
-          <header className="overview-panel__header">
-            <div><p className="workspace-kicker">Latest activity</p><h2 id="recent-orders-title">Recent orders</h2></div>
+      <div className={`overview-brief__primary${attentionItems.length ? "" : " overview-brief__primary--solo"}`}>
+        {attentionItems.length > 0 && <section className="overview-brief__surface overview-attention" aria-labelledby="overview-attention-title">
+          <header className="overview-brief__surface-header">
+            <h2 id="overview-attention-title">Needs attention</h2>
+          </header>
+          <div className="overview-attention__list">{attentionItems.map((item) => <AttentionRow item={item} key={`${item.href}-${item.title}`} />)}</div>
+        </section>}
+
+        <section className="overview-brief__surface overview-motion" aria-labelledby="overview-motion-title">
+          <header className="overview-brief__surface-header">
+            <h2 id="overview-motion-title">Work in motion</h2>
             <Link href="/orders" className="overview-text-link">View all orders <ArrowRight size={15} strokeWidth={1.8} /></Link>
           </header>
-          {recentOrders.length === 0 ? <EmptyRecentOrders /> : <div className="overview-orders"><table><thead><tr><th>Order</th><th>Date</th><th>Channel</th><th>Customer</th><th>Status</th><th>Total</th><th><span className="sr-only">Open order</span></th></tr></thead><tbody>{recentOrders.map((order) => <tr key={order.id}><td><Link href="/orders" className="overview-order-link">{order.number}</Link></td><td>{compactTime(order.createdAt)}</td><td><span className={`overview-channel overview-channel--${order.channel}`}>{order.channel === "shopify" ? "Shopify" : "TikTok Shop"}</span></td><td>{order.customer}</td><td><PaymentPill status={order.payment} /></td><td>{formatMoney(order.total)}</td><td className="overview-row-action"><ArrowRight size={15} strokeWidth={1.8} /></td></tr>)}</tbody></table></div>}
-        </section>
-
-        <section className="overview-panel overview-panel--channels" aria-labelledby="channel-summary-title">
-          <header className="overview-panel__header">
-            <div><p className="workspace-kicker">Connected sources</p><h2 id="channel-summary-title">Channel status</h2></div>
-            <Link href="/orders" className="overview-text-link">View orders <ArrowRight size={15} strokeWidth={1.8} /></Link>
-          </header>
-          <div className="channel-summary">
-            <ChannelSummary icon={<Store size={19} strokeWidth={1.8} />} name="Shopify" detail={`${shopifyOrders.length} imported ${pluralize(shopifyOrders.length, "order")}`} status={shopifyConnected ? "Connected" : "Awaiting setup"} pending={!shopifyConnected} />
-            <ChannelSummary icon={<ShoppingBag size={19} strokeWidth={1.8} />} name="TikTok Shop" detail={tiktokOrders.length ? `${tiktokOrders.length} imported ${pluralize(tiktokOrders.length, "order")}` : "Orders appear after seller authorization"} status={tiktokConnected ? "Connected" : "Awaiting authorization"} pending={!tiktokConnected} />
-          </div>
+          {recentOrders.length ? <RecentOrders orders={recentOrders} /> : <EmptyRecentOrders />}
         </section>
       </div>
 
-      <section className="overview-panel overview-panel--snapshot" aria-labelledby="stock-snapshot-title">
-        <header className="overview-panel__header">
-          <div><p className="workspace-kicker">Inventory at a glance</p><h2 id="stock-snapshot-title">Stock snapshot</h2></div>
-          <Link href="/inventory/products" className="overview-text-link">Open inventory <ArrowRight size={15} strokeWidth={1.8} /></Link>
-        </header>
-        <div className="stock-summary">
-          <SnapshotCell icon={<Package size={18} strokeWidth={1.8} />} label="Live variants" value={liveVariants.toLocaleString("en-GB")} detail={`${unitsOnHand.toLocaleString("en-GB")} units on hand`} />
-          <SnapshotCell icon={<Boxes size={18} strokeWidth={1.8} />} label="Low stock" value={lowStockVariants.toLocaleString("en-GB")} detail={lowStockVariants ? "Review in Products" : "No low-stock variants"} tone={lowStockVariants ? "attention" : "healthy"} />
-          <SnapshotCell icon={<CheckCircle2 size={18} strokeWidth={1.8} />} label="Out of stock" value={outOfStockVariants.toLocaleString("en-GB")} detail={outOfStockVariants ? "Needs attention" : "All variants available"} tone={outOfStockVariants ? "attention" : "healthy"} />
-          <SnapshotCell icon={<Boxes size={18} strokeWidth={1.8} />} label="Packaging items" value={packagingTypes.toLocaleString("en-GB")} detail={packagingTypes === 1 ? "Tracked material" : "Tracked materials"} />
+      <section className="overview-brief__surface overview-pulse" aria-labelledby="overview-pulse-title">
+        <header className="overview-brief__surface-header"><h2 id="overview-pulse-title">Operations pulse</h2></header>
+        <div className="overview-pulse__grid">
+          <PulseCell icon={<Package size={20} strokeWidth={1.8} />} label="Physical inventory" value={variants.length.toLocaleString("en-GB")} detail={`${unitsOnHand.toLocaleString("en-GB")} units on hand`} href="/inventory/products" action="Open inventory" />
+          <PulseCell icon={<Boxes size={20} strokeWidth={1.8} />} label="Packaging" value={packaging.length.toLocaleString("en-GB")} detail={packagingBelowReorder ? `${packagingBelowReorder.toLocaleString("en-GB")} below reorder point` : undefined} href="/inventory/packaging" action="Open packaging" />
+          <PulseCell icon={<Store size={20} strokeWidth={1.8} />} label="Shopify orders" value={shopifyOrders.length.toLocaleString("en-GB")} detail={shopifyConnected ? "Connected" : "Awaiting setup"} href="/orders" action="View orders" status={!shopifyConnected ? "attention" : "connected"} />
+          <PulseCell icon={<ShoppingBag size={20} strokeWidth={1.8} />} label="TikTok Shop orders" value={tiktokOrders.length.toLocaleString("en-GB")} detail={tiktokConnected ? "Connected" : "Awaiting authorization"} href="/orders" action="View orders" status={!tiktokConnected ? "attention" : "connected"} />
         </div>
       </section>
     </section>
   );
 }
 
-function ChannelSummary({ icon, name, detail, status, pending = false }: { icon: ReactNode; name: string; detail: string; status: string; pending?: boolean }) {
-  return <div className="channel-summary__item"><span className="channel-summary__icon" aria-hidden="true">{icon}</span><div><strong>{name}</strong><p>{detail}</p></div><span className={pending ? "channel-summary__status is-pending" : "channel-summary__status"}>{status}</span></div>;
+function AttentionRow({ item }: { item: AttentionItem }) {
+  return <Link className="overview-attention__row" href={item.href}><span className={`overview-attention__icon overview-attention__icon--${item.tone}`} aria-hidden="true">{item.icon}</span><strong>{item.title}</strong><span className="overview-attention__action">{item.action}<ArrowRight size={15} strokeWidth={1.8} /></span></Link>;
 }
 
-function SnapshotCell({ icon, label, value, detail, tone = "neutral" }: { icon: ReactNode; label: string; value: string; detail: string; tone?: "neutral" | "attention" | "healthy" }) {
-  return <div className={`overview-snapshot-cell overview-snapshot-cell--${tone}`}><span className="overview-snapshot-cell__icon" aria-hidden="true">{icon}</span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></div>;
+function RecentOrders({ orders }: { orders: Order[] }) {
+  return <div className="overview-motion__orders">{orders.map((order) => {
+    const progress = deliveryProgressState(order);
+    const progressCopy = deliveryProgressCopy(progress);
+    return <Link href="/orders" className="overview-motion__order" key={order.id}><span className="overview-motion__identity"><strong>{order.number}</strong><small>{compactTime(order.createdAt)}</small></span><span className="overview-motion__customer">{order.customer}</span><span className={`overview-channel overview-channel--${order.channel}`}>{order.channel === "shopify" ? "Shopify" : "TikTok Shop"}</span><strong className="overview-motion__total">{formatMoney(order.total)}</strong><span className={`overview-motion__progress overview-motion__progress--${progress}`}>{progressCopy.label}</span><ArrowRight className="overview-motion__arrow" size={15} strokeWidth={1.8} aria-hidden="true" /></Link>;
+  })}</div>;
+}
+
+function PulseCell({ icon, label, value, detail, href, action, status }: { icon: ReactNode; label: string; value: string; detail?: string; href: string; action: string; status?: "connected" | "attention" }) {
+  return <article className="overview-pulse__cell"><span className="overview-pulse__icon" aria-hidden="true">{icon}</span><div className="overview-pulse__body"><span>{label}</span><strong>{value}</strong>{detail && <small className={status ? `is-${status}` : undefined}>{detail}</small>}<Link href={href}>{action}<ArrowRight size={14} strokeWidth={1.8} /></Link></div></article>;
 }
 
 function EmptyRecentOrders() {
-  return <div className="overview-empty"><span><ClipboardList size={20} strokeWidth={1.7} /></span><div><strong>No orders have been imported yet</strong><p>Use Sync now after Shopify is connected to populate the operations workspace.</p></div></div>;
+  return <div className="overview-brief__empty overview-brief__empty--orders"><span aria-hidden="true"><ClipboardList size={21} strokeWidth={1.7} /></span><strong>No imported orders</strong></div>;
 }
 
 function pluralize(count: number, singular: string) {

@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { CheckCircle2, Mail, Plus, Search, X } from "lucide-react";
+import { Mail, Plus, Search, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useMemo, useState } from "react";
 import { TableColumnPicker, type TableColumn } from "@/components/table-column-picker";
@@ -90,9 +90,7 @@ export function EmployeesWorkspace({ initialEmployees }: { initialEmployees: Emp
     <section className="workspace workspace--employees">
       <header className="workspace-header employees-header">
         <div>
-          <p className="workspace-kicker">Workspace access</p>
           <h1>Employees</h1>
-          <p className="workspace-description">Keep track of the people who can sign in and work inside Serenity Hue Operations.</p>
         </div>
         <div className="header-actions employees-header__actions">
           <Dialog.Root open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (open) setDialogError(""); }}>
@@ -100,7 +98,7 @@ export function EmployeesWorkspace({ initialEmployees }: { initialEmployees: Emp
             <Dialog.Portal>
               <Dialog.Overlay className="employee-dialog-overlay" />
               <Dialog.Content className="employee-dialog" aria-describedby="add-employee-description">
-                <div className="employee-dialog__header"><div><p className="workspace-kicker">Workspace access</p><Dialog.Title className="employee-dialog__title">Add employee</Dialog.Title><Dialog.Description id="add-employee-description" className="employee-dialog__description">Create a secure sign-in for a new member of the operations team.</Dialog.Description></div><Dialog.Close className="employee-dialog__close" aria-label="Close add employee dialog"><X size={17} strokeWidth={1.8} /></Dialog.Close></div>
+                <div className="employee-dialog__header"><div><Dialog.Title className="employee-dialog__title">Add employee</Dialog.Title><Dialog.Description id="add-employee-description" className="employee-dialog__description">Enter the employee details and a temporary password.</Dialog.Description></div><Dialog.Close className="employee-dialog__close" aria-label="Close add employee dialog"><X size={17} strokeWidth={1.8} /></Dialog.Close></div>
                 <form className="employee-dialog__form" onSubmit={addEmployee}>
                   <label className="employee-dialog__field"><span>Full name</span><Input autoComplete="name" value={newEmployeeName} onChange={(event) => setNewEmployeeName(event.target.value)} placeholder="Employee name" required minLength={2} /></label>
                   <label className="employee-dialog__field"><span>Email address</span><Input autoComplete="email" type="email" value={newEmployeeEmail} onChange={(event) => setNewEmployeeEmail(event.target.value)} placeholder="employee@serenityhue.com" required /></label>
@@ -148,11 +146,11 @@ export function EmployeesWorkspace({ initialEmployees }: { initialEmployees: Emp
 }
 
 function EmployeeRow({ employee, visibleColumns, onSelect }: { employee: Employee; visibleColumns: EmployeeColumnId[]; onSelect: () => void }) {
-  return <tr tabIndex={0} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} aria-label={`View ${employee.name}`}><td><span className="employee-person"><span className="employee-avatar">{getInitials(employee.name)}</span><span><strong>{employee.name}</strong><small>Workspace member</small></span></span></td>{visibleColumns.includes("email") && <td><span className="employee-email"><Mail size={14} strokeWidth={1.7} /><span>{employee.email}</span></span></td>}{visibleColumns.includes("status") && <td><EmployeeStatus status={employee.status} /></td>}{visibleColumns.includes("joined") && <td>{formatDate(employee.createdAt)}</td>}{visibleColumns.includes("lastSeen") && <td>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</td>}</tr>;
+  return <tr tabIndex={0} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} aria-label={`View ${employee.name}`}><td><span className="employee-person"><span className="employee-avatar">{getInitials(employee.name)}</span><span><strong>{employee.name}</strong></span></span></td>{visibleColumns.includes("email") && <td><span className="employee-email"><Mail size={14} strokeWidth={1.7} /><span>{employee.email}</span></span></td>}{visibleColumns.includes("status") && <td><EmployeeStatus status={employee.status} /></td>}{visibleColumns.includes("joined") && <td>{formatDate(employee.createdAt)}</td>}{visibleColumns.includes("lastSeen") && <td>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</td>}</tr>;
 }
 
 function EmployeeDetails({ employee }: { employee: Employee }) {
-  return <div className="employee-details"><div className="employee-detail-header"><span className="employee-avatar employee-avatar--large">{getInitials(employee.name)}</span><div><p className="workspace-kicker">Workspace member</p><SheetTitle asChild><h2>{employee.name}</h2></SheetTitle><p>{employee.email}</p></div></div><SheetDescription id="employee-sheet-description" className="sr-only">Access details for {employee.name}.</SheetDescription><div className="employee-detail-status"><EmployeeStatus status={employee.status} /><span>{employee.status === "active" ? "Online now" : "Offline"}</span></div><section className="employee-detail-section"><h3>Account details</h3><div className="employee-detail-list"><span><small>Joined workspace</small><strong>{formatDate(employee.createdAt)}</strong></span><span><small>Last active</small><strong>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</strong></span><span><small>Access</small><strong>Workspace member</strong></span></div></section><div className="employee-detail-note"><CheckCircle2 size={17} strokeWidth={1.8} /><p>Account access is securely managed for this workspace.</p></div></div>;
+  return <div className="employee-details"><div className="employee-detail-header"><span className="employee-avatar employee-avatar--large">{getInitials(employee.name)}</span><div><SheetTitle asChild><h2>{employee.name}</h2></SheetTitle><p>{employee.email}</p></div></div><SheetDescription id="employee-sheet-description" className="sr-only">Access details for {employee.name}.</SheetDescription><div className="employee-detail-status"><EmployeeStatus status={employee.status} /></div><section className="employee-detail-section"><h3>Account details</h3><div className="employee-detail-list"><span><small>Joined</small><strong>{formatDate(employee.createdAt)}</strong></span><span><small>Last active</small><strong>{employee.lastSeenAt ? relativeTime(employee.lastSeenAt) : "No activity yet"}</strong></span></div></section></div>;
 }
 
 function EmployeeStatus({ status }: { status: Employee["status"] }) {

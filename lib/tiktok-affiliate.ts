@@ -30,7 +30,13 @@ function number(value: unknown) {
 }
 
 function amountMinor(value: unknown) {
-  return Math.round(number(value) * 100);
+  const money = value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : undefined;
+  return Math.round(number(money?.amount ?? value) * 100);
+}
+
+function moneyCurrency(value: unknown) {
+  const money = value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : undefined;
+  return text(money?.currency);
 }
 
 function timestamp(value: unknown) {
@@ -46,7 +52,9 @@ export function normalizeTikTokAffiliateOrder(value: UnknownRecord, context: { c
   const sourceLineItemId = text(value.order_line_id ?? value.order_item_id ?? value.line_item_id ?? value.sku_id ?? value.product_id);
   if (!sourceOrderId || !sourceLineItemId) return undefined;
   const quantity = Math.max(0, Math.round(number(value.quantity ?? value.sku_quantity ?? value.item_quantity)));
-  const unitAmount = amountMinor(value.sale_price ?? value.price ?? value.order_amount ?? value.gmv);
+  const price = value.sale_price ?? value.price ?? value.order_amount ?? value.gmv;
+  const commission = value.estimated_paid_commission ?? value.estimated_commission ?? value.commission ?? value.estimated_commission_amount;
+  const unitAmount = amountMinor(price);
   const product = value.product && typeof value.product === "object" ? value.product as UnknownRecord : undefined;
   const creator = value.creator && typeof value.creator === "object" ? value.creator as UnknownRecord : undefined;
   return {
@@ -62,9 +70,9 @@ export function normalizeTikTokAffiliateOrder(value: UnknownRecord, context: { c
     creatorUsername: text(value.creator_username ?? value.affiliate_username ?? creator?.username) || undefined,
     quantity,
     grossAmountMinor: Math.max(0, unitAmount * quantity),
-    estimatedCommissionMinor: Math.max(0, amountMinor(value.estimated_commission ?? value.commission ?? value.estimated_commission_amount)),
-    currency: text(value.currency ?? value.currency_code).toUpperCase() || "GBP",
-    status: text(value.order_status ?? value.status) || undefined,
+    estimatedCommissionMinor: Math.max(0, amountMinor(commission)),
+    currency: text(value.currency ?? value.currency_code ?? moneyCurrency(price) ?? moneyCurrency(commission)).toUpperCase() || "GBP",
+    status: text(value.order_status ?? value.status ?? value.settlement_status) || undefined,
     sourceCreatedAt: timestamp(value.create_time ?? value.created_at),
     sourceUpdatedAt: timestamp(value.update_time ?? value.updated_at),
   };

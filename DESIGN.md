@@ -24,19 +24,19 @@ colors:
   rose: "#d88a9e"
 typography:
   display:
-    fontFamily: "Iowan Old Style, Baskerville, Times New Roman, serif"
+    fontFamily: "Source Serif 4, Georgia, Times New Roman, serif"
     fontSize: "clamp(2.5rem, 4.8vw, 4rem)"
     fontWeight: 400
     lineHeight: 0.96
-    letterSpacing: "-0.065em"
+    letterSpacing: "-0.045em"
   body:
-    fontFamily: "Avenir Next, Segoe UI Variable, Segoe UI, sans-serif"
+    fontFamily: "DM Sans, Segoe UI, Arial, sans-serif"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.5
     letterSpacing: "-0.01em"
   label:
-    fontFamily: "Avenir Next, Segoe UI Variable, Segoe UI, sans-serif"
+    fontFamily: "DM Sans, Segoe UI, Arial, sans-serif"
     fontSize: "11px"
     fontWeight: 700
     lineHeight: 1.2
@@ -92,7 +92,7 @@ components:
 
 The incumbent system treats operations as a calm, precise workspace rather than a loud analytics product. Warm paper surfaces and soft plum structure give the app a recognizable Serenity Hue presence, while compact tables, clear status treatments, and restrained elevation keep the interface useful during repetitive operational work.
 
-The visual language is editorial at the edges and utilitarian at the center: Iowan Old Style gives major titles a human, considered voice; Avenir Next keeps labels, numbers, filters, and tables quick to scan. Motion is brief and tactile, used to confirm interaction or reveal state rather than decorate the page.
+The visual language is editorial at the edges and utilitarian at the center: Source Serif 4 gives major titles a human, considered voice; DM Sans keeps labels, numbers, filters, and tables quick to scan. Motion is brief and tactile, used to confirm interaction or reveal state rather than decorate the page.
 
 **Key Characteristics:**
 
@@ -137,9 +137,9 @@ The palette is warm, muted, and brand-specific: plum carries structure, magenta 
 
 ## Typography
 
-**Display Font:** Iowan Old Style, Baskerville, Times New Roman, serif
+**Display Font:** Source Serif 4, Georgia, Times New Roman, serif
 
-**Body Font:** Avenir Next, Segoe UI Variable, Segoe UI, sans-serif
+**Body Font:** DM Sans, Segoe UI, Arial, sans-serif
 
 **Character:** The pairing balances Serenity Hue's editorial identity with the speed and clarity expected from an operations tool. Display type is used selectively; table content, controls, and numbers stay in the practical sans-serif voice.
 
@@ -151,13 +151,13 @@ The palette is warm, muted, and brand-specific: plum carries structure, magenta 
 - **Body** (400, `14px`, `1.5–1.6`): Descriptions and operational guidance.
 - **Label** (650–800, `10–12px`, slight tracking): Table headers, filters, chips, and status labels.
 
-**The Two-Voice Type Rule.** Use serif for considered identity and clear page-level hierarchy; use Avenir Next for every action, value, label, and decision.
+**The Two-Voice Type Rule.** Use Source Serif 4 for considered identity and clear page-level hierarchy; use DM Sans for every action, value, label, and decision.
 
 ## Layout
 
 Desktop uses a persistent application shell with a sidebar and a flexible main workspace. The expanded sidebar is approximately `234px`; the collapsed rail is approximately `72px`. The main content is constrained by generous horizontal padding and uses dense, full-width operational tables rather than dashboard-card mosaics.
 
-Page headers are left-aligned with a small kicker, a clear title, and a short description. Toolbars keep search and filters grouped near the data they control. Details open in sheets or dedicated detail pages so tables stay scannable.
+Page headers are left-aligned and led by a clear title. Add a short description only when it prevents a real domain mistake; do not use decorative kickers or narrate what the page title and controls already communicate. Toolbars keep search and filters grouped near the data they control. Details open in sheets or dedicated detail pages so tables stay scannable.
 
 At smaller widths, the shell becomes a compact top navigation or bottom-navigation experience. Tables are replaced by touch-friendly summaries where horizontal scrolling would harm the task. Controls remain available, but column customization belongs to larger screens.
 
@@ -175,7 +175,7 @@ Depth is quiet and structural. Borders and tonal paper changes do most of the gr
 
 ## Shapes
 
-The form language uses restrained rounded rectangles: approximately `5px` for compact chips, `8px` for table controls and status treatments, `11px` for buttons and fields, and `15px` for large table frames or primary panels. Pills are reserved for statuses and compact state indicators, not general-purpose containers.
+The form language uses restrained rounded rectangles: approximately `5px` for compact chips, `8px` for table controls and status treatments, `11px` for buttons and fields, and `16px` for large table frames or primary panels. Pills are reserved for statuses and compact state indicators, not general-purpose containers.
 
 Borders are soft and low-contrast. Active controls may use a thin magenta or plum edge, but the system avoids thick outlines and excessive nested containers.
 
@@ -196,7 +196,7 @@ Borders are soft and low-contrast. Active controls may use a thin magenta or plu
 
 ### Cards / Containers
 
-- **Corner style:** `12–15px` for primary panels; `5–9px` for dense sub-containers.
+- **Corner style:** `14–16px` for primary panels; `5–9px` for dense sub-containers.
 - **Background:** Paper over warm canvas.
 - **Shadow strategy:** Flat by default; tinted shadow only for elevation or floating context.
 - **Border:** One soft divider; avoid stacked cards inside cards.
@@ -216,7 +216,7 @@ Borders are soft and low-contrast. Active controls may use a thin magenta or plu
 
 ### Tables
 
-Tables are the primary operational surface. The Products table is the visual source of truth: use its muted blush header (`#f8f1f4`), plum header text, `46px` header rhythm, compact rows, restrained pink hover, and clear dividers everywhere. Use the shared pagination helper so page numbers are always ascending with the current page visible; never create a route-specific pagination sequence. Keep visible status labels, configurable columns where useful, search/filter controls, and a clear empty state. On mobile, replace wide tables with task-focused summary cards when possible.
+Tables are the primary operational surface. The Products table is the visual source of truth: use its quiet blush header (`#fcf7f9`), plum header text, `46px` header rhythm, compact rows, restrained pink hover, `16px` outer corners, and clear dividers everywhere. Use the shared pagination helper so page numbers are always ascending with the current page visible; never create a route-specific pagination sequence. Keep status labels only when they communicate actionable operational state, plus configurable columns where useful, search/filter controls, and a clear empty state. On mobile, replace wide tables with task-focused summary cards when possible.
 
 ### Labs
 
@@ -226,11 +226,12 @@ Labs is a focused production workflow, not an analytics dashboard. Its home uses
 
 ### Do:
 
-- **Do** preserve the Avenir Next and Iowan Old Style pairing.
+- **Do** preserve the Source Serif 4 and DM Sans pairing.
 - **Do** use physical, Shopify, and TikTok labels exactly where quantities could otherwise be confused.
 - **Do** label Labs quantities in grams and show `Not counted` rather than an invented zero.
 - **Do** use real data, reviewed mappings, and explicit Not counted / Needs review states.
 - **Do** keep tables dense but breathable, with clear row hover/focus feedback.
+- **Do** reserve supporting copy for risk, recovery, ambiguity, or a consequential action.
 - **Do** include loading, empty, error, success, and reduced-motion-safe states.
 - **Do** use the official Serenity Hue logo assets without modification.
 
@@ -242,4 +243,26 @@ Labs is a focused production workflow, not an analytics dashboard. Its home uses
 - **Don't** force Shopify and TikTok quantities to match; their display strategies are intentionally independent.
 - **Don't** mix ingredient inventory with product or packaging inventory, or auto-deduct an ingredient whose supplied formula ratio is only `q.s.`.
 - **Don't** use continuous decorative animation or hide important state behind hover alone.
+- **Don't** add reassuring labels such as “healthy,” “live,” or “secure,” repeat a visible role/type under every row, or explain relationships already made obvious by navigation and column labels.
 - **Don't** crop, letterbox, or blend product imagery against the confirmed detail-page behavior.
+
+### KPI Performance surface (2026-09-06)
+
+The `/kpis` workspace is a chart-led **Operate** surface within the Quiet Control Room. This scoped composition records the requested KPI overhaul; it supersedes the earlier KPI brief's tables-only/no-pie direction without changing the global brand or other operational surfaces. The implementation reference is `components/kpis-workspace.tsx` and its CSS module; the full surface brief is `.impeccable/surfaces/docs-design-2026-08-30-kpis-v1-md.md`.
+
+- **Hierarchy:** An editorial serif “Performance” header pairs with compact freshness metadata. Business overview and TikTok Shop affiliates share one reporting-period selector (7, 30, 90 days, All time, or custom dates). Four restrained metrics precede the main trend and supporting composition/activity panel, then rankings and detailed records.
+- **Material and type:** Preserve warm paper, plum structure, rose support, and practical sans-serif values with tabular numerals. Paper panels use soft borders and approximately 13–14px corners; the leading metric has a light plum wash. Charts use restrained plum fills and lines, readable labels, and subtle horizontal guides. Data-series colors have explicit legends and do not imply operational status.
+- **Chart grammar:** Sales trends switch between net sales and orders, with area/bar presentation and an exact-value table in a native disclosure. Channel mix uses paid-order counts so refunded net revenue cannot create negative donut fractions. Product ranks show net units and net revenue; new/repeat customer composition is accompanied by counts and recorded-history definitions.
+- **Affiliate grammar:** Revenue, Orders, and Commission switch the creator ranking and detailed-record order. Sales concentration compares the top five with other creators using positive identified-creator net sales only; the exclusion of negative sales and unidentified creators stays visible. Negative ranking results remain explicit values rather than positive-looking bars. Estimated commission stays distinct from business revenue.
+- **Responsive behavior:** The desktop report uses four metrics and unequal two-column chart rows. At 950px and below, metrics become two columns and chart rows stack. At 600px and below, the date control follows the tabs, panel spacing tightens, and the wide affiliate table becomes native expandable creator summaries with net sales and orders visible before expansion. Search and show-all controls apply to both presentations.
+- **Trust and access:** Preserve visible focus, keyboard tab navigation, labelled measure/style controls, native detail disclosures, honest empty and stale states, and reduced-motion chart behavior. Compact reporting notes carry history and reconciliation caveats. Exact chart, channel, and product values remain available beyond the visual summaries; no chart or comparison may fabricate data.
+
+### Overview daily brief (2026-09-06)
+
+The `/overview` workspace is the operational home screen, not a duplicate reporting dashboard. Its first viewport answers three questions in order: what requires action, what work is currently moving, and which workspace should staff open next. KPI trends and business analysis remain in `/kpis`. The implementation reference is `components/overview-workspace.tsx`; the full surface brief is `.impeccable/surfaces/components-overview-workspace-tsx.md`.
+
+- **Hierarchy:** Use a restrained editorial masthead with sync freshness and one sync action, followed by an asymmetric needs-attention queue and recent-order ledger. A four-part operations pulse for physical inventory, packaging, Shopify orders, and TikTok Shop orders anchors the page below.
+- **Content:** Attention rows must come from real operational conditions and link directly to the relevant workspace. Do not turn raw provider fulfilment metadata into a task count; use delivery-aware progress in the recent-order ledger and reserve the queue for proven inventory or packaging actions until an explicit internal fulfilment state exists. Connection status is meaningful; reassuring health badges, section numbers, decorative kickers, and explanatory filler are not.
+- **Material:** Primary sections are flat warm-paper surfaces with one soft border, `16px` corners, open row dividers, small tinted icon tiles, serif section titles, and sans-serif operational values. Avoid nested cards and persistent ornamental shadows.
+- **Responsive behavior:** Stack the attention queue above the order ledger on smaller screens. Render orders as readable multi-line rows rather than a horizontally scrolling table. The operations pulse becomes a two-column grid while preserving labels, values, state, and destination links.
+- **Motion and access:** Use only a brief reduced-motion-safe entrance and subtle row hover. Links and the sync control retain visible focus states, and no important state depends on color or hover alone.

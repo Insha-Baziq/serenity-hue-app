@@ -17,6 +17,7 @@ import {
 import {
   fetchTikTokAdsReport,
   normalizeTikTokAdsReportRows,
+  tiktokAdsHistoryStartDate,
   tiktokAdsReportingWindow,
   type TikTokAdsDataLevel,
 } from "@/lib/tiktok-ads-reporting";
@@ -40,6 +41,10 @@ export type TikTokAdsRefreshResult = {
 };
 
 const SAFE_FAILURE_MESSAGE = "TikTok Ads reporting refresh failed; the last successful report was retained.";
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : "Unknown TikTok Ads refresh failure";
+}
 
 function expiresSoon(value: string | undefined) {
   const expiry = value ? Date.parse(value) : NaN;
@@ -65,7 +70,11 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
     if (!connection) return skipped("TikTok Ads is not connected to the configured advertiser.");
 
     const previous = await getTikTokAdsSyncStatus(advertiserId);
-    const initialBaseline = !previous?.lastSuccessfulAt;
+    const historyStartDate = tiktokAdsHistoryStartDate();
+    const initialBaseline = !previous?.lastSuccessfulAt
+      || !previous.lastReportStartDate
+      || previous.lastReportStartDate > historyStartDate
+      || (previous.lastStatus === "partial" && previous.lastRowsWritten === 0 && previous.lastReportStartDate === historyStartDate);
     const window = tiktokAdsReportingWindow(new Date(), initialBaseline ? "baseline" : "rolling");
     await recordTikTokAdsSyncAttempt({ advertiserId, initialBaseline, startDate: window.startDate, endDate: window.endDate });
 
@@ -102,8 +111,13 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
         rowsFetched += providerRows.length;
         rowsSkipped += normalized.skippedRows;
         rowsWritten += await saveTikTokAdsReportRows(normalized.records);
-      } catch {
-        if (dataLevel === "AUCTION_ADVERTISER") throw new Error("TikTok Ads advertiser report failed");
+      } catch (error) {
+        console.warn("[tiktok-ads-breakdown-failed]", {
+          advertiserId,
+          dataLevel,
+          message: errorMessage(error),
+        });
+        if (dataLevel === "AUCTION_ADVERTISER") throw new Error(`TikTok Ads advertiser report failed: ${errorMessage(error)}`);
         failedBreakdownReports += 1;
       }
     }
@@ -132,7 +146,11 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
         ? "TikTok Ads report refreshed with some provider rows or breakdowns unavailable."
         : "TikTok Ads report refreshed.",
     };
-  } catch {
+  } catch (error) {
+    console.error("[tiktok-ads-refresh-failed]", {
+      advertiserId,
+      message: errorMessage(error),
+    });
     try {
       await recordTikTokAdsSyncFailure({ advertiserId, message: SAFE_FAILURE_MESSAGE });
     } catch {

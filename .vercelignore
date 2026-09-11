@@ -1,0 +1,4 @@
+# Local-only credentials and verification files.
+.env*
+project.env
+LOCAL-VERIFICATION-CREDENTIALS.md

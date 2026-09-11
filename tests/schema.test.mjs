@@ -76,3 +76,49 @@ test("schema keeps TikTok affiliate attribution and sync freshness separate from
     await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
   }
 });
+
+test("TikTok affiliate product IDs resolve to cached channel listing titles", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "serenity-hue-affiliate-product-title-"));
+  const databasePath = join(directory, "schema-test.db");
+  const db = createClient({ url: pathToFileURL(databasePath).href });
+  try {
+    await db.executeMultiple(await readFile(new URL("../database/schema.sql", import.meta.url), "utf8"));
+    await db.execute({
+      sql: `INSERT INTO physical_channel_listings
+        (id, channel, external_product_id, title, listing_kind, active, created_at, updated_at)
+        VALUES (?, 'tiktok', ?, ?, 'individual', 1, ?, ?)`,
+      args: ["listing-1", "product-1", "SnowLift Eye Serum", "2026-09-05T00:00:00.000Z", "2026-09-05T00:00:00.000Z"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_connections (id, access_token, refresh_token) VALUES (?, ?, ?)`,
+      args: ["connection-1", "encrypted-token", "encrypted-refresh"],
+    });
+    await db.execute({
+      sql: `INSERT INTO tiktok_affiliate_orders
+        (id, connection_id, shop_id, source_order_id, source_line_item_id, source_product_id, quantity, gross_amount_minor, estimated_commission_minor, currency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: ["affiliate-1", "connection-1", "shop-1", "order-1", "line-1", "product-1", 1, 1995, 250, "GBP"],
+    });
+    const resolved = await db.execute(`
+      SELECT COALESCE(
+        NULLIF(TRIM(affiliate.product_title), ''),
+        (
+          SELECT listing.title
+          FROM physical_channel_listings listing
+          WHERE listing.channel = 'tiktok'
+            AND listing.external_product_id = affiliate.source_product_id
+            AND listing.title IS NOT NULL
+            AND TRIM(listing.title) <> ''
+          ORDER BY listing.active DESC, listing.updated_at DESC, listing.id ASC
+          LIMIT 1
+        ),
+        CASE WHEN affiliate.source_product_id IS NOT NULL AND TRIM(affiliate.source_product_id) <> ''
+          THEN 'TikTok product ' || affiliate.source_product_id ELSE NULL END
+      ) AS product_title
+      FROM tiktok_affiliate_orders affiliate`);
+    assert.deepEqual(resolved.rows, [{ product_title: "SnowLift Eye Serum" }]);
+  } finally {
+    db.close();
+    await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
+  }
+});

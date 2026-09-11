@@ -105,7 +105,6 @@ export function LoginForm() {
         <ArrowRight size={18} strokeWidth={1.8} aria-hidden="true" />
       </button>
 
-      <p className="login-form__privacy animate-element animate-delay-700">Your data is private and secure. We never share your information with third parties.</p>
     </form>
   );
 }

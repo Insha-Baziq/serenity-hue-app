@@ -8,7 +8,7 @@ Accepted
 
 TikTok Ads reporting uses its own normalized report-row cache, sync-status record, and database lease. The Ads refresh path does not reuse TikTok Shop orders, affiliate records, or the direct-channel sync lease.
 
-The first successful refresh requests a 90-day London-calendar baseline. Later scheduled or authenticated manual refreshes re-request the latest seven calendar days, upsert corrections by provider dimensions, and delete rows older than 90 days. A failed refresh records a safe failure state while retaining the last successful rows.
+The first successful refresh requests the configured provider-history baseline from `TIKTOK_ADS_HISTORY_START_DATE` (currently `2026-04-01`). Later scheduled or authenticated manual refreshes re-request the latest seven calendar days, upsert corrections by provider dimensions, and delete only rows older than that configured history start. A successful history-baseline refresh is also triggered when an existing sync marker predates the configured start, so an account previously initialized with the old 90-day cache is backfilled. A failed refresh records a safe failure state while retaining the last successful rows.
 
 Only metrics returned by TikTok's Marketing API are stored as ad evidence. In particular, Shop revenue and purchases remain nullable when TikTok does not return those attributed metrics; ordinary TikTok Shop sales are never joined into the Ads cache.
 

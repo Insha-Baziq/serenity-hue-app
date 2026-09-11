@@ -16,6 +16,7 @@ import {
 import { hasTikTokApiCredentials, refreshTikTokAccessToken, tiktokApiRequest } from "@/lib/tiktok";
 import { TikTokNotConnectedError } from "@/lib/tiktok-import";
 import { normalizeTikTokAffiliateOrder } from "@/lib/tiktok-affiliate";
+import { tiktokAffiliateAnalyticsWindow } from "@/lib/tiktok-analytics-window";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -65,6 +66,17 @@ function extractOrderPage(value: unknown) {
     orders: records(data?.orders ?? data?.order_list ?? data?.affiliate_orders),
     nextPageToken: text(data?.next_page_token ?? data?.page_token) || undefined,
   };
+}
+
+function affiliateOrderLines(order: UnknownRecord) {
+  return records(order.skus).map((sku) => ({
+    ...order,
+    ...sku,
+    order_id: text(order.id ?? order.order_id),
+    order_status: text(order.status ?? order.order_status),
+    create_time: order.create_time ?? order.created_at,
+    update_time: order.update_time ?? order.delivery_time ?? order.updated_at,
+  }));
 }
 
 function extractShops(value: unknown) {
@@ -128,7 +140,7 @@ function normalizeAffiliateVideo(value: UnknownRecord, context: { connectionId: 
     creatorOpenId: text(value.creator_open_id ?? value.open_id ?? creator?.open_id) || undefined,
     creatorUsername: text(value.creator_username ?? value.user_name ?? creator?.user_name ?? creator?.username) || undefined,
     videoTitle: text(value.video_title ?? value.title) || undefined,
-    publishedAt: timestamp(value.publish_time ?? value.published_at ?? value.create_time),
+    publishedAt: timestamp(value.video_post_time ?? value.publish_time ?? value.published_at ?? value.create_time),
     grossAmountMinor: unitGmv,
     attributedOrderCount: Math.max(0, Math.round(number(value.order_count ?? value.orders))),
     currency: text(value.currency ?? value.currency_code).toUpperCase() || "GBP",
@@ -139,13 +151,24 @@ function normalizeAffiliateVideo(value: UnknownRecord, context: { connectionId: 
 async function searchAffiliateVideos(input: { accessToken: string; shopCipher: string }) {
   const found: UnknownRecord[] = [];
   const seenTokens = new Set<string>();
+  const reportingWindow = tiktokAffiliateAnalyticsWindow();
   let pageToken: string | undefined;
   for (let page = 0; page < 100; page += 1) {
     const response = await tiktokApiRequest<unknown>({
       path: "/analytics/202605/shop_videos/performance",
       method: "GET",
       accessToken: input.accessToken,
-      query: { shop_cipher: input.shopCipher, account_type: "AFFILIATE_ACCOUNTS", page_size: 50, page_token: pageToken },
+      query: {
+        shop_cipher: input.shopCipher,
+        account_type: "AFFILIATE_ACCOUNTS",
+        start_date_ge: reportingWindow.startDateGe,
+        end_date_lt: reportingWindow.endDateLt,
+        page_size: 50,
+        sort_field: "gmv",
+        sort_order: "DESC",
+        currency: "LOCAL",
+        page_token: pageToken,
+      },
     });
     const data = record(response);
     const videos = records(data?.videos ?? data?.video_list ?? data?.items);
@@ -183,10 +206,10 @@ export async function importTikTokAffiliateReporting(): Promise<TikTokAffiliateI
           const cursor = await getTikTokAffiliateSyncCursor({ connectionId: connection.id, shopId: shop.id });
           const initialBaseline = !cursor;
           const sourceOrders = await searchAffiliateOrders({ accessToken, shopCipher: shop.cipher, updatedAfter: cursor });
-          const normalized = sourceOrders.flatMap((order) => {
-            const value = normalizeTikTokAffiliateOrder(order, { connectionId: connection.id, shopId: shop.id });
+          const normalized = sourceOrders.flatMap((order) => affiliateOrderLines(order).flatMap((line) => {
+            const value = normalizeTikTokAffiliateOrder(line, { connectionId: connection.id, shopId: shop.id });
             return value ? [value] : [];
-          });
+          }));
           await saveTikTokAffiliateOrders(normalized as TikTokAffiliateOrderRecord[]);
           const sourceVideos = await searchAffiliateVideos({ accessToken, shopCipher: shop.cipher });
           const normalizedVideos = sourceVideos.flatMap((video) => {

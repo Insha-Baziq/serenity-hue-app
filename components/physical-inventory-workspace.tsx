@@ -3,13 +3,13 @@
 import Link from "next/link";
 import Image from "next/image";
 import { ChevronDownIcon } from "@radix-ui/react-icons";
-import { Check, Package, Search } from "lucide-react";
+import { Package, Search } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { ChannelMark, PhysicalChannelListings } from "@/components/physical-channel-listings";
 import { PhysicalInventoryAdjustSheet } from "@/components/physical-inventory-adjust-sheet";
 import { ProductArt } from "@/components/product-art";
 import { TableColumnPicker, type TableColumn } from "@/components/table-column-picker";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { PhysicalChannel, PhysicalChannelListing, PhysicalInventoryItem, PhysicalInventoryRunways } from "@/lib/types";
@@ -80,9 +80,8 @@ export function PhysicalInventoryWorkspace({ initial, initialShopifyListings, in
     <section className="workspace workspace--inventory ci-workspace physical-inventory-workspace">
       <header className="workspace-header">
         <div>
-          <p className="workspace-kicker ci-kicker">Inventory</p>
           <h1>{activeChannel === "master" ? "Master inventory" : `${activeChannel === "shopify" ? "Shopify" : "TikTok"} inventory`}</h1>
-          <p className="workspace-description">{activeChannel === "master" ? "Your master stock list. Individual products only — channel listings and bundles map here separately." : "Channel listings are mapped to the individual physical items they consume when sold."}</p>
+          {activeChannel !== "master" && <p className="workspace-description">Listings and their master inventory mappings.</p>}
         </div>
       </header>
 
@@ -96,14 +95,14 @@ export function PhysicalInventoryWorkspace({ initial, initialShopifyListings, in
         <CardHeader className="physical-products-card__header">
           <div>
             <CardTitle>Product catalogue</CardTitle>
-            <CardDescription>{items.length} master stock items · open an item to view and count its variants.</CardDescription>
+            <CardDescription>{items.length} products</CardDescription>
           </div>
           <TableColumnPicker columns={columns} visibleColumns={visibleColumns} onToggle={toggle} onReset={() => setVisibleColumns(defaultColumns)} />
         </CardHeader>
         <CardContent className="physical-products-card__content">
           <div className="physical-products-toolbar">
             <label className="search-field search-field--inventory"><Search size={18} strokeWidth={1.8} aria-hidden="true" /><span className="sr-only">Search master inventory</span><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search master inventory" /></label>
-            <div className="physical-products-toolbar__actions"><span className="ci-count">{selectedItems.length ? `${selectedItems.length} selected` : `${visible.length} shown`}</span>{selectedItems.length > 0 && <PhysicalInventoryAdjustSheet items={selectedItems} triggerLabel={`Update ${selectedItems.length} product${selectedItems.length === 1 ? "" : "s"}`} onSaved={applyChanges} />}</div>
+            <div className="physical-products-toolbar__actions">{(selectedItems.length > 0 || query.trim()) && <span className="ci-count">{selectedItems.length ? `${selectedItems.length} selected` : `${visible.length} shown`}</span>}{selectedItems.length > 0 && <PhysicalInventoryAdjustSheet items={selectedItems} triggerLabel={`Update ${selectedItems.length} product${selectedItems.length === 1 ? "" : "s"}`} onSaved={applyChanges} />}</div>
           </div>
           <Table className="physical-products-table">
             <TableHeader><TableRow>
@@ -118,7 +117,7 @@ export function PhysicalInventoryWorkspace({ initial, initialShopifyListings, in
               {visible.map((item) => <Fragment key={item.id}>
                 <TableRow className={`physical-products-row${expandedIds.includes(item.id) ? " is-expanded" : ""}`}>
                   <TableCell className="physical-products-select"><input type="checkbox" aria-label={`Select ${item.title}`} checked={selectedIds.includes(item.id)} onChange={() => toggleItem(item.id)} /></TableCell>
-                  {has("product") && <TableCell><Link className="physical-product-link" href={`/inventory/products/${item.id}`}><ProductThumbnail item={item} /><span><strong>{item.title}</strong><small>Canonical physical item</small></span></Link></TableCell>}
+                  {has("product") && <TableCell><Link className="physical-product-link" href={`/inventory/products/${item.id}`}><ProductThumbnail item={item} /><span><strong>{item.title}</strong></span></Link></TableCell>}
                   {has("variants") && <TableCell className="ci-muted">{item.variantCount > 1 ? `${item.variantCount} variants` : item.variantLabel || "—"}</TableCell>}
                   {has("stock") && <TableCell>{item.quantityKnown ? <strong>{item.quantity}</strong> : <span className="physical-count-unknown">Not counted</span>}</TableCell>}
                   {has("averageEstimatedCover") && <TableCell><AverageEstimatedCover item={item} runways={initialRunways} /></TableCell>}
@@ -128,9 +127,27 @@ export function PhysicalInventoryWorkspace({ initial, initialShopifyListings, in
               </Fragment>)}
             </TableBody>
           </Table>
+          <div className="mobile-record-list physical-products-mobile-list" aria-label="Master inventory products">
+            {visible.map((item) => (
+              <article className="mobile-record mobile-physical-product-card" key={item.id}>
+                <header className="mobile-physical-product-card__header">
+                  <input type="checkbox" aria-label={`Select ${item.title}`} checked={selectedIds.includes(item.id)} onChange={() => toggleItem(item.id)} />
+                  <Link className="mobile-product-title" href={`/inventory/products/${item.id}`}>
+                    <ProductThumbnail item={item} />
+                    <span><strong>{item.title}</strong><small>{item.variantCount > 1 ? `${item.variantCount} variants` : item.variantLabel || "—"}</small></span>
+                  </Link>
+                </header>
+                <div className="mobile-inventory-card__metrics">
+                  <span><small>Stock</small><strong className="quantity-cell">{item.quantityKnown ? item.quantity : "—"}</strong></span>
+                  <span><small>Variants</small><strong>{item.variantCount}</strong></span>
+                  <span><small>Cover</small><AverageEstimatedCover item={item} runways={initialRunways} /></span>
+                </div>
+                <Link className="mobile-physical-product-card__open" href={`/inventory/products/${item.id}`}>View product</Link>
+              </article>
+            ))}
+          </div>
           {visible.length === 0 && <div className="table-empty">No master inventory products match that search.</div>}
         </CardContent>
-        <CardFooter className="physical-inventory-footer"><Check size={15} aria-hidden="true" />Master quantities are independent from Shopify and TikTok.</CardFooter>
       </Card> : <PhysicalChannelListings channel={activeChannel} listings={channelListings[activeChannel]} items={items} onSaved={(listings) => applyMapping(activeChannel, listings)} />}
     </section>
   );

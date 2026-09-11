@@ -42,6 +42,28 @@ test("affiliate all time means retained data and has no prior comparison", () =>
   assert.match(dashboard.historyNote, /retained by Serenity Hue/i);
 });
 
+test("affiliate all-time trends are bounded into calendar buckets without changing totals", () => {
+  const dashboard = buildTikTokAffiliateDashboard({
+    range: { start: "2025-01-01", end: "2026-01-02", allTime: true },
+    orders: [
+      { id: "first", orderId: "first-order", lineItemId: "first-line", createdAt: "2025-01-15T10:00:00.000Z", quantity: 1, grossAmount: 1200, estimatedCommission: 120, creator: "Rose", linked: { financialStatus: "paid", cancelledAt: null } },
+      { id: "last", orderId: "last-order", lineItemId: "last-line", createdAt: "2026-01-02T10:00:00.000Z", quantity: 2, grossAmount: 1800, estimatedCommission: 180, creator: "Ada", linked: { financialStatus: "paid", cancelledAt: null } },
+    ],
+    refunds: [{ orderId: "first-order", lineItemId: "first-line", quantity: 1, processedAt: "2025-01-20T10:00:00.000Z" }],
+    videos: [], freshness: null,
+  });
+
+  assert.equal(dashboard.trendGranularity, "bucket");
+  assert.equal(dashboard.trendIntervalDays, 3);
+  assert.equal(dashboard.trend.length, 123);
+  assert.deepEqual(dashboard.trend.filter((point) => point.netSales || point.orders), [
+    { date: "2025-01-13", netSales: 1200, orders: 1 },
+    { date: "2025-01-19", netSales: -1200, orders: 0 },
+    { date: "2026-01-02", netSales: 1800, orders: 1 },
+  ]);
+  assert.equal(dashboard.metrics.netSales, 1800);
+});
+
 test("affiliate KPI dashboard applies London reporting dates at the daylight-saving boundary", () => {
   const dashboard = buildTikTokAffiliateDashboard({
     range: { start: "2026-09-01", end: "2026-09-01" },

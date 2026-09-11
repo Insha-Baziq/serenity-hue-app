@@ -60,6 +60,23 @@ channels, customers, and a narrowly eligible restock plan from operational data.
   operational Overview
 - **Lives in**: the KPIs workspace and repository-level aggregate/forecast reads
 
+### TikTok Shop affiliate KPI reporting
+The KPI workspace view of TikTok Shop affiliate-attributed performance over the shared
+reporting period. It distinguishes affiliate-attributed sales from estimated affiliate
+commission, and reports affiliate orders, units, videos, product performance, and
+ranked affiliate performance using TikTok Shop's affiliate and analytics records.
+- **Is not**: inferred attribution from ordinary TikTok Shop orders, TikTok Ads
+  reporting, or an affiliate-offer management workflow
+- **Lives in**: the KPIs workspace and TikTok Shop affiliate/analytics reporting reads
+
+### TikTok Ads connection
+The read-only TikTok Marketing API authorization for the configured advertiser account.
+Its access and refresh tokens, OAuth state, and authorized advertiser IDs are separate
+from TikTok Shop credentials and order/affiliate data.
+- **Is not**: a campaign-management integration, TikTok Shop attribution, or evidence
+  that every TikTok Shop order came from an ad
+- **Lives in**: `tiktok_ads_oauth_states`, `tiktok_ads_connections`, and the KPIs Ads tab
+
 ### Inventory ledger
 An append-only audit record of a quantity change, actor, reason/type, and reference.
 - **Is not**: a current quantity snapshot

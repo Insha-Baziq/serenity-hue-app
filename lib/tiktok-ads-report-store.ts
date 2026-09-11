@@ -123,7 +123,7 @@ function effectiveTikTokAdsReportPeriod(period: TikTokAdsReportPeriod): TikTokAd
   const retained = tiktokAdsReportingWindow(new Date(), "baseline");
   const start = period.allTime || period.start < retained.startDate ? retained.startDate : period.start;
   const end = period.end > retained.endDate ? retained.endDate : period.end;
-  return start <= end ? { start, end } : null;
+  return start <= end ? { start, end, allTime: period.allTime } : null;
 }
 
 export async function getTikTokAdsReport(period: TikTokAdsReportPeriod): Promise<TikTokAdsReport> {
@@ -176,7 +176,7 @@ export async function getTikTokAdsReport(period: TikTokAdsReportPeriod): Promise
 }
 
 export type TikTokAdsReportState = {
-  status: "not_configured" | "not_connected" | "reconnect_required" | "first_run" | "fresh" | "partial" | "stale";
+  status: "not_configured" | "not_connected" | "reconnect_required" | "first_run" | "failed" | "fresh" | "partial" | "stale";
   advertiserId?: string;
   lastSuccessfulAt?: string;
   lastAttemptedAt?: string;
@@ -195,7 +195,7 @@ export async function getTikTokAdsReportState(): Promise<TikTokAdsReportState> {
   const advertiserId = connection.advertiserId ?? process.env.TIKTOK_ADS_ADVERTISER_ID?.trim() ?? "";
   const sync = await getTikTokAdsSyncStatus(advertiserId);
   if (!sync?.lastSuccessfulAt) {
-    return { status: "first_run", advertiserId, lastAttemptedAt: sync?.lastAttemptedAt, lastErrorMessage: sync?.lastErrorMessage };
+    return { status: sync?.lastStatus === "failed" ? "failed" : "first_run", advertiserId, lastAttemptedAt: sync?.lastAttemptedAt, lastErrorMessage: sync?.lastErrorMessage };
   }
   const lastSuccess = Date.parse(sync.lastSuccessfulAt);
   const lastError = sync.lastErrorAt ? Date.parse(sync.lastErrorAt) : NaN;

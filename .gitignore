@@ -2,6 +2,7 @@ node_modules/
 .next/
 .env*
 !.env.example
+project.env
 data/
 *.db
 *.db-shm
@@ -16,5 +17,9 @@ tmp/
 *.tsbuildinfo
 
 .next-dev*.log
+LOCAL-VERIFICATION-CREDENTIALS.md
 
 .vercel
+
+.vercel
+.env*

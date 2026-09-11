@@ -90,14 +90,12 @@ export function CustomersWorkspace({ initialCustomers, initialSync }: { initialC
     <section className="workspace workspace--customers">
       <header className="workspace-header">
         <div>
-          <p className="workspace-kicker">Customer operations</p>
           <h1>Customers</h1>
           <div className="live-caption">
             <span>Shopify + TikTok Shop</span>
             <span aria-hidden="true">·</span>
             <span>{syncCaption}</span>
-            <span className={`live-dot live-dot--${initialSync.status}`} aria-hidden="true" />
-            <span>{initialSync.status === "healthy" ? "Order history live" : "Sync needs attention"}</span>
+            {initialSync.status !== "healthy" && <><span className={`live-dot live-dot--${initialSync.status}`} aria-hidden="true" /><span>Sync needs attention</span></>}
           </div>
         </div>
         <div className="header-actions">
@@ -120,9 +118,9 @@ export function CustomersWorkspace({ initialCustomers, initialSync }: { initialC
         <CardHeader className="customers-table-header">
           <Tabs value={filter} onValueChange={(value) => { setFilter(value as CustomerFilter); resetPage(); }}>
             <TabsList aria-label="Customer type filter" className="customers-tabs-list">
-              <TabsTrigger value="all">All customers</TabsTrigger>
-              <TabsTrigger value="repeat">Repeat customers</TabsTrigger>
-              <TabsTrigger value="one-time">One-time customers</TabsTrigger>
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="repeat">Repeat</TabsTrigger>
+              <TabsTrigger value="one-time">One-time</TabsTrigger>
             </TabsList>
           </Tabs>
           <TableColumnPicker columns={columns} visibleColumns={visibleColumns} onToggle={toggleColumn} onReset={() => setVisibleColumns(defaultVisibleColumns)} />

@@ -163,9 +163,7 @@ export function PackagingWorkspace({ items }: { items: PackagingMaterial[] }) {
     <section className="workspace workspace--packaging">
       <header className="workspace-header">
         <div>
-          <p className="workspace-kicker">Inventory</p>
           <h1>Packaging</h1>
-          <p className="workspace-description">Pouches used to prepare and fulfil Serenity Hue orders.</p>
         </div>
         <div className="header-actions">
           <Button variant="outline" onClick={exportPackaging}><Download size={17} />Export packaging</Button>

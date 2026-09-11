@@ -1,6 +1,8 @@
 import type { KpiPeriod } from "./kpi-dashboard.ts";
 
 const REPORTING_TIME_ZONE = "Europe/London";
+const MAX_DAILY_TREND_POINTS = 366;
+const MAX_BUCKETED_TREND_POINTS = 180;
 
 export type AffiliateOrder = {
   id: string;
@@ -41,6 +43,8 @@ export type TikTokAffiliateDashboard = {
     publishedVideos: number;
     unreconciledGmv: number;
   };
+  trendGranularity: "day" | "bucket";
+  trendIntervalDays: number;
   trend: Array<{ date: string; netSales: number; orders: number }>;
   affiliates: AffiliatePerformance[];
   products: Array<{ product: string; netSales: number; units: number; orders: number }>;
@@ -82,8 +86,15 @@ export function buildTikTokAffiliateDashboard(input: {
   videos: AffiliateVideo[];
   freshness: { lastSuccessfulAt: string | null; lastErrorAt: string | null } | null;
 }): TikTokAffiliateDashboard {
+  const rangeDays = Math.floor((Date.parse(`${input.range.end}T00:00:00.000Z`) - Date.parse(`${input.range.start}T00:00:00.000Z`)) / 86_400_000) + 1;
+  const trendIntervalDays = rangeDays <= MAX_DAILY_TREND_POINTS ? 1 : Math.ceil(rangeDays / MAX_BUCKETED_TREND_POINTS);
+  const trendGranularity = trendIntervalDays === 1 ? "day" : "bucket";
+  const trendKey = (date: string) => {
+    const offset = Math.floor((Date.parse(`${date}T00:00:00.000Z`) - Date.parse(`${input.range.start}T00:00:00.000Z`)) / 86_400_000);
+    return shiftDate(input.range.start, Math.floor(offset / trendIntervalDays) * trendIntervalDays);
+  };
   const trend = new Map<string, { netSales: number; orders: number }>();
-  for (let date = input.range.start; date <= input.range.end; date = shiftDate(date, 1)) trend.set(date, { netSales: 0, orders: 0 });
+  for (let offset = 0; offset < rangeDays; offset += trendIntervalDays) trend.set(shiftDate(input.range.start, offset), { netSales: 0, orders: 0 });
   const sourceByKey = new Map(input.orders.map((order) => [`${order.orderId}:${order.lineItemId}`, order]));
   const refundedByKey = new Map<string, number>();
   const affiliateLines = new Map<string, { creator: string; product: string | null; netSales: number; estimatedCommission: number; quantity: number; orderId: string }>();
@@ -102,7 +113,7 @@ export function buildTikTokAffiliateDashboard(input: {
     totals.units += order.quantity;
     totals.attributedOrders.add(order.orderId);
     if (order.creator) totals.activeAffiliates.add(order.creator);
-    const point = trend.get(date)!;
+    const point = trend.get(trendKey(date))!;
     point.netSales += order.grossAmount;
     point.orders += 1;
     if (order.creator) affiliateLines.set(order.id, { creator: order.creator, product: order.product ?? null, netSales: order.grossAmount, estimatedCommission: order.estimatedCommission, quantity: order.quantity, orderId: order.orderId });
@@ -124,7 +135,7 @@ export function buildTikTokAffiliateDashboard(input: {
       affiliateLine.netSales -= amount;
       affiliateLine.quantity -= quantity;
     }
-    const point = trend.get(londonDate(refund.processedAt))!;
+    const point = trend.get(trendKey(londonDate(refund.processedAt)))!;
     point.netSales -= amount;
   }
 
@@ -183,6 +194,8 @@ export function buildTikTokAffiliateDashboard(input: {
       publishedVideos: totals.publishedVideos,
       unreconciledGmv: totals.unreconciledGmv,
     },
+    trendGranularity,
+    trendIntervalDays,
     trend: [...trend.entries()].map(([date, values]) => ({ date, ...values })),
     affiliates: rankTikTokAffiliates(affiliates, "revenue"),
     products: [...products.entries()]

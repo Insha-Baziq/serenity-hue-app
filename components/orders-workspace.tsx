@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, Search } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, Search, X } from "lucide-react";
 import { useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { ORDERS_PAGE_SIZES, ordersQueryToParams, type OrdersQuery } from "@/lib/orders-query";
@@ -13,6 +13,7 @@ import { ChannelPill, FulfillmentPill, PaymentPill } from "@/components/status-p
 import { ProductArt } from "@/components/product-art";
 import { SyncButton } from "@/components/sync-button";
 import { compactTime, formatMoney, relativeTime } from "@/lib/format";
+import { deliveryProgressCopy, deliveryProgressState } from "@/lib/delivery-progress";
 import { getPageItems } from "@/lib/pagination";
 import type { Channel, Order, Parcel2GoMatchMethod, Parcel2GoShipmentOption, SyncSnapshot } from "@/lib/types";
 
@@ -40,7 +41,7 @@ const columns: { id: ColumnId; label: string }[] = [
   { id: "channel", label: "Channel" },
   { id: "total", label: "Total" },
   { id: "payment", label: "Payment status" },
-  { id: "fulfillment", label: "Fulfilment status" },
+  { id: "fulfillment", label: "Delivery progress" },
   { id: "items", label: "Items" },
 ];
 
@@ -114,14 +115,12 @@ export function OrdersWorkspace({ initialOrders, initialSync, query, total, page
     <section className="workspace workspace--orders">
       <header className="workspace-header">
         <div>
-          <p className="workspace-kicker">Operations ledger</p>
           <h1>Orders</h1>
           <div className="live-caption">
             <span>{channelCaption}</span>
             <span aria-hidden="true">·</span>
             <span>{syncCaption}</span>
-            <span className={`live-dot live-dot--${initialSync.status}`} aria-hidden="true" />
-            <span>{initialSync.status === "healthy" ? "All channels live" : "Sync needs attention"}</span>
+            {initialSync.status !== "healthy" && <><span className={`live-dot live-dot--${initialSync.status}`} aria-hidden="true" /><span>Sync needs attention</span></>}
           </div>
         </div>
         <div className="header-actions">
@@ -199,7 +198,7 @@ export function OrdersWorkspace({ initialOrders, initialSync, query, total, page
                     {visibleColumns.includes("channel") && <th>Channel</th>}
                     {visibleColumns.includes("total") && <th>Total</th>}
                     {visibleColumns.includes("payment") && <th>Payment status</th>}
-                    {visibleColumns.includes("fulfillment") && <th>Fulfilment status</th>}
+                    {visibleColumns.includes("fulfillment") && <th>Delivery progress</th>}
                     {visibleColumns.includes("items") && <th>Items</th>}
                     <th><span className="sr-only">View order</span></th>
                   </tr>
@@ -224,7 +223,7 @@ export function OrdersWorkspace({ initialOrders, initialSync, query, total, page
                       {visibleColumns.includes("channel") && <td><ChannelPill channel={order.channel} /></td>}
                       {visibleColumns.includes("total") && <td className="total-cell">{formatMoney(order.total)}</td>}
                       {visibleColumns.includes("payment") && <td><PaymentPill status={order.payment} cancelled={Boolean(order.cancelledAt)} /></td>}
-                      {visibleColumns.includes("fulfillment") && <td><FulfillmentPill status={order.fulfillment} /></td>}
+                      {visibleColumns.includes("fulfillment") && <td><DeliveryProgress order={order} /></td>}
                       {visibleColumns.includes("items") && <td>{order.items.reduce((total, item) => total + item.quantity, 0)} {order.items.reduce((total, item) => total + item.quantity, 0) === 1 ? "item" : "items"}</td>}
                       <td className="row-action"><ChevronRight size={18} aria-hidden="true" /></td>
                     </tr>
@@ -279,6 +278,29 @@ export function OrdersWorkspace({ initialOrders, initialSync, query, total, page
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function DeliveryProgress({ order }: { order: Order }) {
+  const state = deliveryProgressState(order);
+  const { label, detail } = deliveryProgressCopy(state);
+  const completedStages = state === "placed" ? 1 : state === "fulfilled" || state === "booked" || state === "in-transit" ? 2 : state === "delivered" ? 3 : 0;
+
+  return (
+    <div className={`delivery-progress delivery-progress--${state}`} aria-label={`${label}: ${detail}`} title={`${label}: ${detail}`}>
+      <span className="delivery-progress__copy"><strong>{label}</strong><span>{detail}</span></span>
+      <span className="delivery-progress__rail" aria-hidden="true">
+        {[0, 1, 2].map((stage) => (
+          <span className="delivery-progress__stage" key={stage}>
+            {stage > 0 && <span className={stage < completedStages ? "delivery-progress__line is-complete" : "delivery-progress__line"} />}
+            <span className={stage < completedStages ? "delivery-progress__dot is-complete" : "delivery-progress__dot"}>
+              {state === "delivered" && stage === 2 && <Check size={9} strokeWidth={3} />}
+              {state === "cancelled" && stage === 1 && <X size={9} strokeWidth={3} />}
+            </span>
+          </span>
+        ))}
+      </span>
+    </div>
   );
 }
 

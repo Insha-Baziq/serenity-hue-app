@@ -2,6 +2,7 @@ import { createClient } from "@libsql/client";
 import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { betterAuth } from "better-auth";
 import { hashPassword } from "better-auth/crypto";
+import { dash } from "@better-auth/infra";
 import { createHash, randomUUID } from "node:crypto";
 import { assertTursoConfiguration, getTursoClient, hasTursoConfiguration } from "@/lib/turso";
 
@@ -54,6 +55,10 @@ const trustedOrigins = [...new Set([
     .map((origin) => normalizeOrigin(origin.trim()))
     .filter((origin): origin is string => Boolean(origin)),
 ])].filter((origin): origin is string => Boolean(origin));
+
+const authPlugins = process.env.BETTER_AUTH_API_KEY
+  ? [dash({ apiKey: process.env.BETTER_AUTH_API_KEY })]
+  : [];
 
 let authDatabaseReady: Promise<void> | undefined;
 
@@ -158,6 +163,7 @@ export const auth = betterAuth({
     enabled: true,
     disableSignUp: process.env.AUTH_ALLOW_SIGN_UP !== "true",
   },
+  plugins: authPlugins,
   advanced: {
     cookiePrefix: "serenity-hue",
   },

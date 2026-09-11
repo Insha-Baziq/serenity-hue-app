@@ -93,6 +93,48 @@ test("KPI dashboard keeps safely unmapped sales visible without inventing a prod
   assert.deepEqual(dashboard.unassigned, { netUnits: 2, netRevenue: 2400 });
 });
 
+test("KPI dashboard does not invent a prior-period comparison for all recorded activity", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-01-01", end: "2026-01-02", allTime: true },
+    sales: [{
+      id: "all-time-order",
+      createdAt: "2026-01-01T10:00:00.000Z",
+      channel: "shopify",
+      financialStatus: "paid",
+      cancelledAt: null,
+      items: [{ id: "all-time-line", quantity: 2, unitPrice: 1200, product: null }],
+    }],
+    refunds: [],
+    freshness: null,
+  });
+
+  assert.equal(dashboard.range.allTime, true);
+  assert.equal(dashboard.previous, null);
+  assert.deepEqual(dashboard.metrics, { netSales: 2400, orders: 1, averageOrderValue: 2400, netUnits: 2 });
+});
+
+test("KPI dashboard bounds long-range chart data to evenly spaced calendar buckets without changing KPI totals", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2025-01-01", end: "2026-01-02" },
+    sales: [
+      { id: "jan-2025", createdAt: "2025-01-15T10:00:00.000Z", channel: "shopify", financialStatus: "paid", cancelledAt: null, items: [{ id: "jan-2025-line", quantity: 1, unitPrice: 1200, product: null }] },
+      { id: "jan-2026", createdAt: "2026-01-02T10:00:00.000Z", channel: "tiktok", financialStatus: "paid", cancelledAt: null, items: [{ id: "jan-2026-line", quantity: 2, unitPrice: 900, product: null }] },
+    ],
+    refunds: [{ orderId: "jan-2025", lineItemId: "jan-2025-line", quantity: 1, processedAt: "2025-01-20T10:00:00.000Z" }],
+    freshness: null,
+  });
+
+  assert.equal(dashboard.trendGranularity, "bucket");
+  assert.equal(dashboard.trendIntervalDays, 3);
+  assert.equal(dashboard.trend.length, 123);
+  assert.deepEqual(dashboard.trend.filter((point) => point.netSales || point.orders), [
+    { date: "2025-01-13", netSales: 1200, orders: 1 },
+    { date: "2025-01-19", netSales: -1200, orders: 0 },
+    { date: "2026-01-02", netSales: 1800, orders: 1 },
+  ]);
+  assert.deepEqual(dashboard.metrics, { netSales: 1800, orders: 2, averageOrderValue: 900, netUnits: 2 });
+});
+
 test("KPI dashboard is zero-safe and recomputes the visible product row from refreshed source data", () => {
   const base = {
     range: { start: "2026-08-01", end: "2026-08-01" },
@@ -159,6 +201,25 @@ test("KPI dashboard classifies only safely identified active customers and ranks
     ["Iris Rose", 1000, 2],
     ["Ada Lovelace", 1000, 2],
   ]);
+});
+
+test("KPI dashboard retains an email customer's phone evidence for a conservative no-email match", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales: [
+      { id: "email-order", createdAt: "2026-08-01T10:00:00.000Z", channel: "shopify", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada Lovelace", email: "ada@example.com", phone: "+44 20 7000 0000" }, items: [{ id: "email-line", quantity: 1, unitPrice: 1000, product: null }] },
+      { id: "phone-order", createdAt: "2026-08-02T10:00:00.000Z", channel: "tiktok", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada M. Lovelace", email: null, phone: "442070000000" }, items: [{ id: "phone-line", quantity: 1, unitPrice: 2000, product: null }] },
+    ],
+    customerOrders: [
+      { id: "email-order", createdAt: "2026-08-01T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada Lovelace", email: "ada@example.com", phone: "+44 20 7000 0000" } },
+      { id: "phone-order", createdAt: "2026-08-02T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, customer: { name: "Ada M. Lovelace", email: null, phone: "442070000000" } },
+    ],
+    refunds: [],
+    freshness: null,
+  });
+
+  assert.deepEqual(dashboard.customers.summary, { new: 0, repeat: 1, total: 1 });
+  assert.deepEqual(dashboard.customers.topCustomers.map((customer) => [customer.netSpend, customer.qualifyingOrders]), [[3000, 2]]);
 });
 
 test("KPI dashboard forecasts only complete, urgent physical-variant restock decisions", () => {

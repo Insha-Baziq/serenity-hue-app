@@ -26,3 +26,71 @@ states, and explicit visual guardrails.
 - If a requested UI pattern is not covered, first follow the closest existing
   pattern; document any durable, system-wide visual decision in `DESIGN.md` as
   part of the implementation.
+
+## Agentic engineering
+
+This repository follows the durable-context workflow in `docs/agents/WORKFLOW.md`.
+Read `CONTEXT.md` before naming domain concepts, `docs/agents/ARCHITECTURE.md` before
+changing interfaces, and `docs/agents/FEEDBACK-LOOPS.md` before claiming work is ready.
+
+### Stack and feedback loops
+
+- Runtime: Node.js with Next.js 16 App Router, React 19, and strict TypeScript.
+- Persistence: SQLite/libSQL through Turso and the repository layer.
+- Package manager: npm.
+- Typecheck: `npm run typecheck`
+- Tests: `npm test`
+- Lint: `npm run lint`
+- Build: `npm run build`
+- Format: absent; do not claim formatting is enforced.
+
+### Where things live
+
+```text
+app/              App Router pages and HTTP route adapters
+components/       client-facing operations workspaces and shared UI
+lib/              repository, domain rules, auth, integrations, and contracts
+database/         schema, migration manifest, and seed data
+tests/            Node test-runner tests
+docs/agents/      workflow, architecture, feedback loops, conventions, handoffs
+docs/adr/         append-only architecture decisions
+issues/           local vertical-slice backlog
+prompts/          unattended implementation/review prompts
+```
+
+### Non-negotiables
+
+1. Do not issue SQL from pages or route adapters; use the repository/domain layer.
+2. Keep physical inventory, channel listings, packaging, and Labs ingredients distinct.
+3. Guard authenticated page/API mutations and preserve audit/history semantics.
+4. Tests target public module interfaces; critical-path changes use red-green-refactor.
+5. One issue per session; update `docs/agents/ARCHITECTURE.md` with interface changes.
+6. Do not commit credentials, `.env.local`, production data, or unreviewed migrations.
+
+### Local browser verification
+
+For the local staff account used only to verify authenticated browser flows, consult
+`LOCAL-VERIFICATION-CREDENTIALS.md`. This file is deliberately git-ignored: never
+copy its contents into source, documentation, commits, logs, or external services.
+
+### Vercel deployment
+
+This project is deployed directly to the Shabina Khan Vercel account. Do not use
+GitHub deployment flows or the default Vercel profile. From the repository root,
+always deploy with the dedicated profile:
+
+```powershell
+npx vercel --prod --yes --global-config "C:\Users\baziq\AppData\Local\vercel-profile-shabina-khan"
+```
+
+The Vercel project is linked locally and the deployment command runs the configured
+database migration before the production build. Run the validation gate
+(`npm run typecheck`, `npm run lint`, and `npm run build`) before deploying, and
+verify the resulting production URL after the command completes.
+
+For TikTok Ads reporting, use advertiser ID `7171533602079997953` (`Serenity Hue1129`).
+The Promote-linked advertiser `7284999249782358018` is not the Ads Manager account used
+for this project.
+Keep `TIKTOK_ADS_HISTORY_START_DATE=2026-04-01` in local and production environments so
+the KPI **All time** view retains the client's full available Ads history rather than
+silently falling back to a 90-day cache.

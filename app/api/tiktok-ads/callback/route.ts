@@ -1,8 +1,10 @@
 import { consumeTikTokAdsOAuthState, saveTikTokAdsConnection } from "@/lib/repository";
+import { refreshTikTokAdsReporting } from "@/lib/tiktok-ads-import";
 import { exchangeTikTokAdsAuthorizationCode, hashTikTokAdsOAuthState, tiktokAdsAdvertiserId, tiktokAdsRedirectUri } from "@/lib/tiktok-ads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 function cookieValue(cookieHeader: string | null, name: string) {
   const prefix = `${name}=`;
@@ -50,6 +52,10 @@ export async function GET(request: Request) {
     const advertiserId = tiktokAdsAdvertiserId();
     if (!tokens.advertiserIds.includes(advertiserId)) return redirectToKpis("error", origin);
     await saveTikTokAdsConnection({ ...tokens, advertiserId });
+    // Complete the connection flow with the initial 90-day provider refresh so
+    // the Ads tab is useful immediately after authorization. A failed refresh
+    // is recorded separately and does not invalidate a successful OAuth flow.
+    await refreshTikTokAdsReporting("manual");
     return redirectToKpis("connected", origin);
   } catch {
     return redirectToKpis("error", origin);

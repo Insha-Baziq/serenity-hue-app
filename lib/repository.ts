@@ -335,10 +335,16 @@ export async function getCustomers(): Promise<Customer[]> {
 }
 
 function isKpiPeriod(value: KpiPeriod) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.start) || !/^\d{4}-\d{2}-\d{2}$/.test(value.end)) return false;
+  if (!isKpiCalendarDate(value.start) || !isKpiCalendarDate(value.end)) return false;
   const start = Date.parse(`${value.start}T00:00:00.000Z`);
   const end = Date.parse(`${value.end}T00:00:00.000Z`);
-  return Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start < 365 * 86_400_000;
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start;
+}
+
+function isKpiCalendarDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function shiftKpiDate(date: string, days: number) {
@@ -415,30 +421,45 @@ function groupKpiRestockVariants(rows: QueryRows): KpiRestockVariant[] {
   })).filter((variant) => variant.id);
 }
 
-function londonKpiToday() {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+function londonKpiDate(date: Date | string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(date));
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
+function londonKpiToday() {
+  return londonKpiDate(new Date());
+}
+
 /**
- * Bounded KPI reporting read. It returns source-backed merchandise figures only:
- * no tax, delivery, client tracking, or separate analytics store is involved.
+ * KPI reporting read scoped to the requested inclusive interval. The explicit all-time
+ * mode resolves to the complete recorded order history; no tax, delivery, client
+ * tracking, or separate analytics store is involved.
  */
 export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
-  if (!isKpiPeriod(range)) throw new Error("Choose an inclusive reporting period of up to 365 days.");
-  const days = Math.floor((Date.parse(`${range.end}T00:00:00.000Z`) - Date.parse(`${range.start}T00:00:00.000Z`)) / 86_400_000) + 1;
-  const previousStart = shiftKpiDate(range.start, -days);
+  if (!isKpiPeriod(range)) throw new Error("Choose a valid inclusive reporting period.");
+  const db = await getTursoClient();
+  let reportingRange = range;
+  if (range.allTime) {
+    const earliestOrderResult = await db.execute("SELECT MIN(source_created_at) AS first_order_at FROM orders");
+    const earliestOrderAt = optionalString(earliestOrderResult.rows[0]?.first_order_at);
+    reportingRange = {
+      start: earliestOrderAt ? londonKpiDate(earliestOrderAt) : range.end,
+      end: range.end,
+      allTime: true,
+    };
+  }
+  const days = Math.floor((Date.parse(`${reportingRange.end}T00:00:00.000Z`) - Date.parse(`${reportingRange.start}T00:00:00.000Z`)) / 86_400_000) + 1;
+  const previousStart = reportingRange.allTime ? reportingRange.start : shiftKpiDate(reportingRange.start, -days);
   // Widening each SQL edge by one day safely includes London-midnight records;
   // the calculation core applies the exact Europe/London period boundaries.
   const queryStart = shiftKpiDate(previousStart, -1);
-  const queryEndExclusive = shiftKpiDate(range.end, 2);
+  const queryEndExclusive = shiftKpiDate(reportingRange.end, 2);
   const restockToday = londonKpiToday();
   const restockQueryStart = shiftKpiDate(restockToday, -90);
   const restockQueryEndExclusive = shiftKpiDate(restockToday, 2);
   const refundQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
   const refundQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
-  const db = await getTursoClient();
   const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, freshnessResult] = await Promise.all([
     db.execute({
       sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
@@ -544,7 +565,7 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
   ]);
 
   return buildKpiDashboard({
-    range,
+    range: reportingRange,
     sales: groupKpiSales(salesResult.rows),
     customerOrders: groupKpiCustomerOrders(customerOrdersResult.rows),
     refunds: [
@@ -581,7 +602,25 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
     db.execute({
       sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
                     affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
-                    affiliate.creator_open_id, affiliate.creator_username, affiliate.product_title,
+                    affiliate.creator_open_id, affiliate.creator_username,
+                    COALESCE(
+                      NULLIF(TRIM(affiliate.product_title), ''),
+                      (
+                        SELECT listing.title
+                        FROM physical_channel_listings listing
+                        WHERE listing.channel = 'tiktok'
+                          AND listing.external_product_id = affiliate.source_product_id
+                          AND listing.title IS NOT NULL
+                          AND TRIM(listing.title) <> ''
+                        ORDER BY listing.active DESC, listing.updated_at DESC, listing.id ASC
+                        LIMIT 1
+                      ),
+                      CASE
+                        WHEN affiliate.source_product_id IS NOT NULL AND TRIM(affiliate.source_product_id) <> ''
+                        THEN 'TikTok product ' || affiliate.source_product_id
+                        ELSE NULL
+                      END
+                    ) AS product_title,
                     ordinary.financial_status, ordinary.cancelled_at
              FROM tiktok_affiliate_orders affiliate
              LEFT JOIN orders ordinary ON ordinary.source = 'tiktok' AND ordinary.source_order_id = affiliate.source_order_id

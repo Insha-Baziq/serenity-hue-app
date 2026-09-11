@@ -7,19 +7,19 @@ import {
   tiktokAdsReportingWindow,
 } from "../lib/tiktok-ads-reporting.ts";
 
-test("TikTok Ads reporting uses a 90-day baseline and rolling seven-day London window", () => {
+test("TikTok Ads reporting uses the configured history baseline and rolling seven-day London window", () => {
   const now = new Date("2026-09-10T00:30:00.000Z");
   assert.deepEqual(tiktokAdsReportingWindow(now, "baseline"), {
     kind: "baseline",
-    startDate: "2026-06-13",
+    startDate: "2026-04-01",
     endDate: "2026-09-10",
-    retainedBeforeDate: "2026-06-13",
+    retainedBeforeDate: "2026-04-01",
   });
   assert.deepEqual(tiktokAdsReportingWindow(now, "rolling"), {
     kind: "rolling",
     startDate: "2026-09-04",
     endDate: "2026-09-10",
-    retainedBeforeDate: "2026-06-13",
+    retainedBeforeDate: "2026-04-01",
   });
 });
 
@@ -67,6 +67,21 @@ test("TikTok Ads normalization preserves provider evidence and converts money to
     attributionWindow: null,
     fetchedAt: "2026-09-10T08:00:00.000Z",
   });
+});
+
+test("TikTok Ads normalization canonicalizes provider daily timestamps", () => {
+  const result = normalizeTikTokAdsReportRows({
+    advertiserId: "advertiser-1",
+    fetchedAt: "2026-09-10T08:00:00.000Z",
+    rows: [{
+      dimensions: { advertiser_id: "advertiser-1", stat_time_day: "2026-04-26 00:00:00" },
+      metrics: { currency: "GBP", spend: "14.65", total_onsite_shopping_value: "93.00", shop_total_purchase_by_order_submission: "1", impressions: "504", clicks: "15" },
+    }],
+  });
+
+  assert.equal(result.skippedRows, 0);
+  assert.equal(result.records[0].reportDate, "2026-04-26");
+  assert.equal(result.records[0].sourceDimensions.stat_time_day, "2026-04-26");
 });
 
 test("TikTok Ads normalization distinguishes absent metrics from provider zeroes", () => {
@@ -273,6 +288,25 @@ test("TikTok Ads breakdown fetch requests the matching provider data level and i
     assert.equal(request.searchParams.get("data_level"), "AUCTION_AD");
     assert.deepEqual(JSON.parse(request.searchParams.get("dimensions")), ["ad_id", "stat_time_day"]);
     assert.ok(JSON.parse(request.searchParams.get("metrics")).includes("ad_name"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("TikTok Ads report fetch chunks daily ranges into provider-supported windows", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input) => {
+    requests.push(new URL(String(input)));
+    return new Response(JSON.stringify({ code: 0, data: { page_info: { page: 1, total_page: 1 }, list: [] } }), { status: 200 });
+  };
+  try {
+    await fetchTikTokAdsReport({ accessToken: "access-token", advertiserId: "advertiser-1", startDate: "2026-06-14", endDate: "2026-09-11" });
+    assert.deepEqual(requests.map(request => [request.searchParams.get("start_date"), request.searchParams.get("end_date")]), [
+      ["2026-06-14", "2026-07-13"],
+      ["2026-07-14", "2026-08-12"],
+      ["2026-08-13", "2026-09-11"],
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

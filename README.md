@@ -50,4 +50,6 @@ TikTok Ads reporting has its own read-only cache and refresh lease. Create a sec
 POST https://YOUR_APP_URL/api/jobs/tiktok-ads
 ```
 
-Use cron expression `0 * * * *` for an hourly refresh. The scheduled route re-fetches the latest seven London calendar days after the first 90-day baseline, upserts corrected provider rows, and retains 90 days of normalized report data. A signed authenticated `POST /api/tiktok-ads/refresh` is also available for an on-demand refresh.
+Use cron expression `0 * * * *` for an hourly refresh. The scheduled route fetches the configured provider-history baseline (`TIKTOK_ADS_HISTORY_START_DATE`, currently `2026-04-01`), then re-fetches the latest seven London calendar days, upserts corrected provider rows, and retains that full history for the KPI **All time** view. A signed authenticated `POST /api/tiktok-ads/refresh` is also available for an on-demand refresh.
+
+For Serenity Hue production, `TIKTOK_ADS_ADVERTISER_ID` must point to advertiser `7171533602079997953` (`Serenity Hue1129`). The Promote-linked advertiser `7284999249782358018` is not the account used for Ads Manager reporting.

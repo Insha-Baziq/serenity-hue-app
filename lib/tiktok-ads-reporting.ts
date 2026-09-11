@@ -3,6 +3,7 @@ const TIKTOK_ADS_REPORT_PATH = "/open_api/v1.3/report/integrated/get/";
 const REPORT_TYPE = "BASIC";
 const SERVICE_TYPE = "AUCTION";
 const DEFAULT_DATA_LEVEL = "AUCTION_ADVERTISER";
+const DEFAULT_HISTORY_START_DATE = "2026-04-01";
 
 export type TikTokAdsDataLevel =
   | "AUCTION_ADVERTISER"
@@ -67,6 +68,7 @@ export type TikTokAdsProviderReportRow = {
 
 type TikTokAdsReportResponse = {
   code?: unknown;
+  message?: unknown;
   data?: {
     list?: unknown;
     page_info?: {
@@ -199,12 +201,20 @@ function shiftDate(date: string, days: number) {
   return shifted.toISOString().slice(0, 10);
 }
 
+export function tiktokAdsHistoryStartDate() {
+  const configured = process.env.TIKTOK_ADS_HISTORY_START_DATE?.trim() ?? "";
+  return isSafeDate(configured) ? configured : DEFAULT_HISTORY_START_DATE;
+}
+
 export function tiktokAdsReportingWindow(now = new Date(), kind: "baseline" | "rolling" = "rolling"): TikTokAdsReportingWindow {
   const endDate = londonDate(now);
-  const retainedBeforeDate = shiftDate(endDate, -89);
+  const historyStartDate = tiktokAdsHistoryStartDate();
+  const retainedBeforeDate = historyStartDate;
   return {
     kind,
-    startDate: shiftDate(endDate, kind === "baseline" ? -89 : -6),
+    startDate: kind === "baseline"
+      ? historyStartDate
+      : shiftDate(endDate, -6) < historyStartDate ? historyStartDate : shiftDate(endDate, -6),
     endDate,
     retainedBeforeDate,
   };
@@ -222,7 +232,32 @@ function isSafeDate(value: string) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-function primitiveRecord(value: unknown) {
+function reportCalendarDate(value: unknown) {
+  const text = textValue(value);
+  const date = text.slice(0, 10);
+  return isSafeDate(date) && (text.length === 10 || /^[ T]\d{2}:\d{2}:\d{2}/.test(text.slice(10))) ? date : "";
+}
+
+function shiftReportingDate(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function reportDateRanges(startDate: string, endDate: string) {
+  const ranges: Array<{ startDate: string; endDate: string }> = [];
+  let start = startDate;
+  // TikTok's synchronous daily reports reject broad date ranges. Keep each
+  // request to at most 30 inclusive calendar days, then combine the rows.
+  while (start <= endDate) {
+    const end = shiftReportingDate(start, 29) < endDate ? shiftReportingDate(start, 29) : endDate;
+    ranges.push({ startDate: start, endDate: end });
+    start = shiftReportingDate(end, 1);
+  }
+  return ranges;
+}
+
+function primitiveRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, string> = {};
   for (const [key, item] of Object.entries(value)) {
@@ -287,7 +322,7 @@ export function normalizeTikTokAdsReportRows(input: {
     const dimensions = primitiveRecord(row.dimensions);
     const metrics = primitiveRecord(row.metrics);
     const rowAdvertiserId = dimensions.advertiser_id ?? "";
-    const reportDate = dimensions.stat_time_day ?? "";
+    const reportDate = reportCalendarDate(dimensions.stat_time_day);
     const providerId = dimensions[config.idKey] ?? metrics[config.idKey] ?? "";
     const currency = (metrics.currency ?? dimensions.currency ?? "").trim().toUpperCase();
     const spendMinor = minorUnits(metrics.spend);
@@ -313,7 +348,7 @@ export function normalizeTikTokAdsReportRows(input: {
       continue;
     }
 
-    const normalizedDimensions = { ...dimensions };
+    const normalizedDimensions: Record<string, string> = { ...dimensions, stat_time_day: reportDate };
     if (level !== "AUCTION_ADVERTISER" && !normalizedDimensions[config.idKey]) normalizedDimensions[config.idKey] = providerId;
     const dimensionKey = Object.keys(normalizedDimensions).sort().map((key) => `${key}=${normalizedDimensions[key]}`).join("|");
     records.push({
@@ -516,47 +551,54 @@ export async function fetchTikTokAdsReport(input: {
   }
 
   const rows: TikTokAdsProviderReportRow[] = [];
-  let page = 1;
-  let totalPage = 1;
   const maxPages = 100;
-  while (page <= totalPage && page <= maxPages) {
-    const url = new URL(TIKTOK_ADS_REPORT_PATH, TIKTOK_ADS_API_BASE_URL);
-    url.searchParams.set("report_type", REPORT_TYPE);
-    url.searchParams.set("advertiser_id", advertiserId);
-    url.searchParams.set("service_type", SERVICE_TYPE);
-    url.searchParams.set("data_level", level);
-    url.searchParams.set("dimensions", JSON.stringify(config.dimensions));
-    url.searchParams.set("metrics", JSON.stringify([...REPORT_METRICS, ...config.attributes]));
-    url.searchParams.set("start_date", input.startDate);
-    url.searchParams.set("end_date", input.endDate);
-    url.searchParams.set("page", String(page));
-    url.searchParams.set("page_size", "1000");
+  for (const range of reportDateRanges(input.startDate, input.endDate)) {
+    let page = 1;
+    let totalPage = 1;
+    while (page <= totalPage && page <= maxPages) {
+      const url = new URL(TIKTOK_ADS_REPORT_PATH, TIKTOK_ADS_API_BASE_URL);
+      url.searchParams.set("report_type", REPORT_TYPE);
+      url.searchParams.set("advertiser_id", advertiserId);
+      url.searchParams.set("service_type", SERVICE_TYPE);
+      url.searchParams.set("data_level", level);
+      url.searchParams.set("dimensions", JSON.stringify(config.dimensions));
+      url.searchParams.set("metrics", JSON.stringify([...REPORT_METRICS, ...config.attributes]));
+      url.searchParams.set("start_date", range.startDate);
+      url.searchParams.set("end_date", range.endDate);
+      url.searchParams.set("page", String(page));
+      url.searchParams.set("page_size", "1000");
 
-    const response = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      headers: { "Access-Token": accessToken, accept: "application/json" },
-    });
-    let payload: TikTokAdsReportResponse = {};
-    try {
-      payload = await response.json() as TikTokAdsReportResponse;
-    } catch {
-      // The normalized error below intentionally does not echo provider response data.
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Access-Token": accessToken, accept: "application/json" },
+      });
+      let payload: TikTokAdsReportResponse = {};
+      try {
+        payload = await response.json() as TikTokAdsReportResponse;
+      } catch {
+        // The normalized error below intentionally does not echo provider response data.
+      }
+      const code = responseCode(payload.code);
+      if (response.status < 200 || response.status >= 300 || code !== 0) {
+        console.warn("[tiktok-ads-api-error]", {
+          httpStatus: response.status,
+          code: code ?? "unknown",
+          message: typeof payload.message === "string" ? payload.message.slice(0, 300) : undefined,
+        });
+        throw new Error(`TikTok Ads reporting request failed (HTTP ${response.status}, code ${code ?? "unknown"})`);
+      }
+      const pageRows = payload.data?.list;
+      if (!Array.isArray(pageRows)) throw new Error("TikTok Ads reporting response was malformed");
+      rows.push(...pageRows.filter((row): row is TikTokAdsProviderReportRow => Boolean(row && typeof row === "object" && !Array.isArray(row))));
+      const pageInfo = payload.data?.page_info;
+      totalPage = pageNumber(pageInfo?.total_page, 1);
+      const returnedPage = pageNumber(pageInfo?.page, page);
+      if (returnedPage !== page && totalPage > 1) throw new Error("TikTok Ads reporting pagination was malformed");
+      page += 1;
     }
-    const code = responseCode(payload.code);
-    if (response.status < 200 || response.status >= 300 || code !== 0) {
-      throw new Error(`TikTok Ads reporting request failed (HTTP ${response.status}, code ${code ?? "unknown"})`);
-    }
-    const pageRows = payload.data?.list;
-    if (!Array.isArray(pageRows)) throw new Error("TikTok Ads reporting response was malformed");
-    rows.push(...pageRows.filter((row): row is TikTokAdsProviderReportRow => Boolean(row && typeof row === "object" && !Array.isArray(row))));
-    const pageInfo = payload.data?.page_info;
-    totalPage = pageNumber(pageInfo?.total_page, 1);
-    const returnedPage = pageNumber(pageInfo?.page, page);
-    if (returnedPage !== page && totalPage > 1) throw new Error("TikTok Ads reporting pagination was malformed");
-    page += 1;
+    if (page > maxPages && page <= totalPage) throw new Error("TikTok Ads reporting pagination exceeded the safe limit");
   }
-  if (page > maxPages && page <= totalPage) throw new Error("TikTok Ads reporting pagination exceeded the safe limit");
   return rows;
 }
 
