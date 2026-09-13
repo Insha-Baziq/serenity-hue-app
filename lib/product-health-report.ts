@@ -21,6 +21,8 @@ export type ProductReportRow = {
   channelQuantities: { shopify: number | null; tiktok: number | null };
   daysOfCover: number | null;
   coverageNote: string;
+  unitsPerDay: number;
+  revenueShare: number;
   variants: ProductReportVariant[];
 };
 
@@ -37,12 +39,32 @@ export type ProductHealthReport = {
   trendIntervalDays: number;
   trend: Array<{ date: string; netRevenue: number; netUnits: number }>;
   products: ProductReportRow[];
+  portfolio: {
+    reportingDays: number;
+    sellingProducts: number;
+    totalProducts: number;
+    mappedNetUnits: number;
+    mappedNetRevenue: number;
+    topProduct: { id: string; title: string; netRevenue: number; revenueShare: number } | null;
+    channelUnits: { shopify: number; tiktok: number };
+  };
   bundleListings: Array<{ id: string; channel: "shopify" | "tiktok"; title: string; channelQuantity: number | null; components: PhysicalChannelListing["components"] }>;
   unmappedSales: { netUnits: number; netRevenue: number };
   observations: string[];
   dataNotes: { uncertainListings: number; unmappedListings: number; uncountedProducts: number };
   dataQuality: { refundEvents: number; refundedUnits: number; cancelledOrders: number };
 };
+
+const DAY_MS = 86_400_000;
+
+function round(value: number, places = 2) {
+  const factor = 10 ** places;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+function reportingDays(range: KpiPeriod) {
+  return Math.max(1, Math.floor((Date.parse(`${range.end}T00:00:00.000Z`) - Date.parse(`${range.start}T00:00:00.000Z`)) / DAY_MS) + 1);
+}
 
 function percentObservation(label: string, current: number, previous: number) {
   if (previous === 0) return `${label} was ${current.toLocaleString("en-GB")} in this period; the preceding period recorded zero.`;
@@ -77,11 +99,12 @@ export function buildProductHealthReport(input: {
   selectedProductId?: string;
   generatedAt?: string;
 }): ProductHealthReport {
+  const days = reportingDays(input.dashboard.range);
   const currentById = new Map((input.dashboard.allProducts ?? input.dashboard.products).map((product) => [product.id, product]));
   const previousById = new Map((input.dashboard.previousProducts ?? []).map((product) => [product.id, product]));
   const selectedInventory = input.selectedProductId ? input.inventory.filter((item) => item.id === input.selectedProductId) : input.inventory;
   const zero: KpiProductPerformance = { id: "", title: "", netUnits: 0, netRevenue: 0, shopifyUnits: 0, tiktokUnits: 0 };
-  const products = selectedInventory.map((item): ProductReportRow => {
+  const draftProducts = selectedInventory.map((item) => {
     const current = currentById.get(item.id) ?? zero;
     const previous = previousById.get(item.id);
     const listings = relatedListings(item, input.listings);
@@ -98,6 +121,7 @@ export function buildProductHealthReport(input: {
       channelQuantities: { shopify: shownQuantity(listings, "shopify"), tiktok: shownQuantity(listings, "tiktok") },
       daysOfCover: coverage.days,
       coverageNote: coverage.note,
+      unitsPerDay: round(Math.max(0, current.netUnits) / days),
       variants: item.variants.map((variant) => ({
         id: variant.id,
         title: variant.title,
@@ -106,7 +130,13 @@ export function buildProductHealthReport(input: {
         listings: listings.flatMap((listing) => listing.components.filter((component) => component.physicalVariantId === variant.id).map((component) => ({ id: listing.id, channel: listing.channel, title: listing.title, kind: listing.kind, quantityPerSale: component.quantityPerSale }))),
       })),
     };
-  }).sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title));
+  });
+  const mappedNetRevenue = draftProducts.reduce((total, product) => total + product.netRevenue, 0);
+  const products: ProductReportRow[] = draftProducts.map((product) => ({
+    ...product,
+    revenueShare: mappedNetRevenue > 0 ? round((Math.max(0, product.netRevenue) / mappedNetRevenue) * 100) : 0,
+  })).sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title));
+  const topProductRow = [...products].sort((left, right) => right.netRevenue - left.netRevenue || right.netUnits - left.netUnits)[0];
   const selectedIds = new Set(selectedInventory.map((item) => item.id));
   const bundleListings = input.listings.filter((listing) => listing.kind === "bundle" && listing.components.some((component) => selectedIds.has(component.itemId))).map((listing) => ({ id: listing.id, channel: listing.channel, title: listing.title, channelQuantity: listing.channelQuantity, components: listing.components }));
   const selectedCurrent = input.selectedProductId ? currentById.get(input.selectedProductId) ?? zero : null;
@@ -141,6 +171,20 @@ export function buildProductHealthReport(input: {
           return { date, netRevenue: total.netRevenue + (point?.netRevenue ?? 0), netUnits: total.netUnits + (point?.netUnits ?? 0) };
         }, { date, netRevenue: 0, netUnits: 0 })),
     products,
+    portfolio: {
+      reportingDays: days,
+      sellingProducts: products.filter((product) => product.netUnits > 0).length,
+      totalProducts: products.length,
+      mappedNetUnits: products.reduce((total, product) => total + product.netUnits, 0),
+      mappedNetRevenue,
+      topProduct: topProductRow && topProductRow.netRevenue > 0
+        ? { id: topProductRow.id, title: topProductRow.title, netRevenue: topProductRow.netRevenue, revenueShare: topProductRow.revenueShare }
+        : null,
+      channelUnits: {
+        shopify: products.reduce((total, product) => total + product.shopifyUnits, 0),
+        tiktok: products.reduce((total, product) => total + product.tiktokUnits, 0),
+      },
+    },
     bundleListings,
     unmappedSales: input.dashboard.unassigned,
     observations,

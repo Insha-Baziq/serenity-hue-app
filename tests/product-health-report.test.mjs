@@ -57,8 +57,19 @@ test("product health report composes performance, separate stock, comparisons, b
   assert.equal(report.products[0].physicalStock, 10);
   assert.deepEqual(report.products[0].channelQuantities, { shopify: 7, tiktok: 5 });
   assert.equal(report.products[0].daysOfCover, 20);
+  assert.equal(report.products[0].unitsPerDay, 0.27);
+  assert.equal(report.products[0].revenueShare, 70.37);
   assert.equal(report.products[1].physicalStock, null);
   assert.equal(report.products[1].daysOfCover, null);
+  assert.deepEqual(report.portfolio, {
+    reportingDays: 30,
+    sellingProducts: 2,
+    totalProducts: 2,
+    mappedNetUnits: 12,
+    mappedNetRevenue: 27000,
+    topProduct: { id: "brow", title: "Brow Pomade", netRevenue: 19000, revenueShare: 70.37 },
+    channelUnits: { shopify: 9, tiktok: 3 },
+  });
   assert.equal(report.bundleListings[0].components.length, 2);
   assert.equal(report.dataNotes.uncertainListings, 1);
   assert.deepEqual(report.unmappedSales, { netUnits: 2, netRevenue: 3000 });
@@ -75,5 +86,8 @@ test("single-product mode adapts the report without hiding its related bundle co
   assert.deepEqual(report.bundleListings.map((listing) => listing.id), ["tik-bundle"]);
   assert.equal(report.products[0].variants[0].quantity, null);
   assert.deepEqual(report.metrics, { netSales: 8000, netUnits: 4, orders: null, averageOrderValue: null });
+  assert.equal(report.products[0].unitsPerDay, 0.13);
+  assert.equal(report.products[0].revenueShare, 100);
+  assert.equal(report.portfolio.topProduct?.title, "Lash Serum");
   assert.deepEqual(report.trend, [{ date: "2026-09-13", netRevenue: 8000, netUnits: 4 }]);
 });
