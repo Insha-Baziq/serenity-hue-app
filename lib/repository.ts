@@ -11,6 +11,7 @@ import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, 
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
 import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
+import { buildProductHealthReport, type ProductHealthReport } from "@/lib/product-health-report";
 import { buildTikTokAffiliateDashboard, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import { changedColumns } from "@/lib/sql-upsert";
 
@@ -589,6 +590,18 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
     },
     freshness: optionalString(freshnessResult.rows[0]?.finished_at) ?? null,
   });
+}
+
+/** Deterministic, read-only Product Health Report composed from existing reporting and inventory contracts. */
+export async function getProductHealthReport(range: KpiPeriod, selectedProductId?: string): Promise<ProductHealthReport> {
+  const [dashboard, inventory, shopifyListings, tiktokListings, runways] = await Promise.all([
+    getKpiDashboard(range),
+    getPhysicalInventory(),
+    getPhysicalChannelListings("shopify"),
+    getPhysicalChannelListings("tiktok"),
+    getPhysicalInventoryRunways(),
+  ]);
+  return buildProductHealthReport({ dashboard, inventory, listings: [...shopifyListings, ...tiktokListings], runways, selectedProductId });
 }
 
 /** Server-shaped affiliate reporting read. TikTok affiliate records remain distinct from ordinary orders until a stable ID join succeeds. */

@@ -44,6 +44,26 @@ button:disabled { cursor: not-allowed; }
 a { color: inherit; text-decoration: none; }
 h1, h2, h3, p { margin: 0; }
 
+/* Analytics hub: two clear destinations before entering a reporting surface. */
+.analytics-hub { max-width: 1260px; }
+.analytics-hub__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.analytics-hub__grid--reports { grid-template-columns: minmax(0, 620px); }
+.analytics-destination { display: block; border-radius: 15px; }
+.analytics-destination .shadcn-card { min-height: 270px; border-color: var(--line-strong); transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease; }
+.analytics-destination:hover .shadcn-card { transform: translateY(-3px); border-color: #d7b8c6; box-shadow: var(--shadow-soft); }
+.analytics-destination:focus-visible { outline: 3px solid rgba(193, 58, 155, .25); outline-offset: 4px; }
+.analytics-destination .shadcn-card__header { display: grid; gap: 13px; padding: 28px 28px 14px; }
+.analytics-destination .shadcn-card__title { color: var(--ink); font-family: var(--type-display); font-size: 32px; font-weight: 500; letter-spacing: -.035em; }
+.analytics-destination .shadcn-card__description { max-width: 470px; color: var(--ink-soft); font-size: 13px; line-height: 1.6; }
+.analytics-destination__icon { display: grid; width: 42px; height: 42px; border: 1px solid #ead5df; border-radius: 11px; background: var(--magenta-soft); color: var(--plum); place-items: center; }
+.analytics-destination__icon svg { width: 20px; }
+.analytics-destination .shadcn-card__content { padding: 26px 28px; }
+.analytics-destination .shadcn-card__content > span, .analytics-back { display: inline-flex; align-items: center; gap: 7px; color: var(--plum); font-size: 11px; font-weight: 800; }
+.analytics-destination .shadcn-card__content svg, .analytics-back svg { width: 14px; }
+.analytics-back { margin-bottom: 24px; }
+@media (max-width: 700px) { .analytics-hub__grid { grid-template-columns: 1fr; }.analytics-destination .shadcn-card { min-height: 220px; } }
+@media print { .sidebar, .mobile-topbar { display: none !important; }.operations-shell { display: block; }.operations-main { width: 100%; } body { background: #fff; } }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
 .operations-shell { min-height: 100svh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
 .operations-main { min-width: 0; }

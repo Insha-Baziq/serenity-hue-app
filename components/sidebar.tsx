@@ -26,7 +26,7 @@ type NavigationItem = { href: string; label: string; icon: ElementType };
 
 const primaryItems: NavigationItem[] = [
   { href: "/overview", label: "Overview", icon: DashboardIcon },
-  { href: "/kpis", label: "KPIs", icon: BarChart3 },
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/orders", label: "Orders", icon: ArchiveIcon },
   { href: "/customers", label: "Customers", icon: AvatarIcon },
   { href: "/employees", label: "Employees", icon: PersonIcon },
@@ -35,7 +35,7 @@ const primaryItems: NavigationItem[] = [
 
 const mobileMenuItems: NavigationItem[] = [
   { href: "/overview", label: "Overview", icon: DashboardIcon },
-  { href: "/kpis", label: "KPIs", icon: BarChart3 },
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/orders", label: "Orders", icon: ArchiveIcon },
   { href: "/customers", label: "Customers", icon: AvatarIcon },
   { href: "/employees", label: "Employees", icon: PersonIcon },
@@ -69,7 +69,7 @@ export function Sidebar() {
           <nav aria-label="Main navigation">
             <SidebarMenu>
               {primaryItems.map(({ href, label, icon: Icon }) => {
-                const active = href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
+                const active = href === "/analytics" ? pathname.startsWith("/analytics") || pathname === "/kpis" : href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
                 return <SidebarMenuItem key={href}>
                   <Link className="sh-sidebar__menu-link" data-active={active || undefined} href={href} aria-current={active ? "page" : undefined}>
                     <Icon aria-hidden="true" />
@@ -109,7 +109,7 @@ export function Sidebar() {
           <div className="mobile-menu-dialog__header"><DialogTitle>Workspace</DialogTitle><DialogDescription id="mobile-menu-description">Choose where you want to work.</DialogDescription></div>
           <nav id="mobile-workspace-navigation" className="mobile-menu-dialog__links" aria-label="Workspace navigation">
             {mobileMenuItems.map(({ href, label, icon: Icon }) => {
-              const active = href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
+              const active = href === "/analytics" ? pathname.startsWith("/analytics") || pathname === "/kpis" : href === "/labs" ? pathname.startsWith("/labs") : pathname === href;
               return <Link href={href} key={href} data-active={active || undefined} aria-current={active ? "page" : undefined} onClick={() => setMobileMenuOpen(false)}><Icon aria-hidden="true" /><span>{label}</span></Link>;
             })}
           </nav>

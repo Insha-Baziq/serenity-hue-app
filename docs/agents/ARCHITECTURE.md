@@ -27,8 +27,8 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 ### Operations workspaces and shared UI
 
-- **Owns**: client interaction for overview, orders, customers, employees, inventory, packaging, channel listings, and Labs.
-- **Public interface**: exported `*Workspace(props)` components and shared UI primitives under `components/ui/`.
+- **Owns**: client interaction for overview, analytics, KPI reporting, generated product reports, orders, customers, employees, inventory, packaging, channel listings, and Labs.
+- **Public interface**: exported `*Workspace(props)` components (including `ProductHealthReportWorkspace`) and shared UI primitives under `components/ui/`.
 - **Hides**: browser state, optimistic drafts, sheets/dialogs, table presentation, and responsive presentation.
 - **Depends on**: `lib/types.ts`, authenticated API routes, `app/globals.css`, shared primitives.
 - **Tested at**: manual Playwright/browser review; `tests/labs-formula-layout.test.mjs` checks one CSS contract but is not in `npm test`.
@@ -42,7 +42,11 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   getOrders / getOrdersPage / getOrdersForExport
   getKpiDashboard(period) -> server-shaped dashboard with sales/product/channel metrics,
     conservative customer performance, fixed-window physical-variant restock decisions,
-    and an explicit all-time period resolved from the earliest recorded order
+    complete current/previous product rows, product demand trends, refund/cancellation
+    evidence, and an explicit all-time period resolved from the earliest recorded order
+  getProductHealthReport(period, physicalProductId?) -> deterministic all-products or
+    single-physical-product report model composed from KPI, physical stock, channel
+    listing/component mapping, and mapped-sales coverage reads
   getTikTokAffiliateDashboard(period) -> affiliate-attributed KPI snapshot with
     linked-order reconciliation, explicit unreconciled GMV, sync freshness, and
     bounded calendar-bucket trends for long reporting periods
@@ -64,6 +68,15 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - **Depends on**: `lib/turso.ts`, `lib/types.ts`, integration parsers, auth-derived actor identity.
 - **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; repository behavior is otherwise untested.
 - **Depth**: shallow-but-known; `lib/repository.ts` is a large mixed-context module with a broad surface and is the primary deepening candidate.
+
+### Analytics reporting domain
+
+- **Owns**: shared Europe/London query-period normalization and deterministic Product Health Report composition for all-products and single-physical-product modes.
+- **Public interface**: `resolveReportingPeriod(params, now?)` and `buildProductHealthReport(input) -> ProductHealthReport`.
+- **Hides**: prior-period boundaries, neutral comparison wording, product/listing joins, separate physical/channel quantity presentation, bundle-component inclusion, and coverage availability states.
+- **Depends on**: the KPI dashboard contract plus physical inventory, channel listing, component mapping, and runway view models. It does not issue SQL or persist report runs.
+- **Tested at**: `tests/reporting-period.test.mjs` and `tests/product-health-report.test.mjs`; authenticated route composition and print/PDF presentation are covered by build and browser review.
+- **Depth**: deep enough for this slice; aggregation is pure while persistence remains at the repository boundary.
 
 ### Inventory rules and audit domain
 

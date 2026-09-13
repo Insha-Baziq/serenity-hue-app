@@ -117,6 +117,13 @@ export type KpiDashboard = {
    */
   previousTrend: Array<{ date: string; netSales: number; orders: number }>;
   products: KpiProductPerformance[];
+  /** Complete product result set for document-style reports; the KPI ranking remains capped. */
+  allProducts?: KpiProductPerformance[];
+  /** Complete preceding-period product rows for report comparisons. */
+  previousProducts?: KpiProductPerformance[];
+  /** Refund-aware mapped physical-product demand on the report's display buckets. */
+  productTrends?: Record<string, Array<{ date: string; netRevenue: number; netUnits: number }>>;
+  dataQuality?: { refundEvents: number; refundedUnits: number; cancelledOrders: number };
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
   customers: KpiCustomerPerformance;
@@ -454,6 +461,7 @@ export function buildKpiDashboard(input: {
   };
 
   const previousTrend = new Map<string, { netSales: number; orders: number }>();
+  const productTrends = new Map<string, Map<string, { netRevenue: number; netUnits: number }>>();
   const previousTrendKey = (date: string) => {
     if (!previousRange) return null;
     const offset = Math.floor((Date.parse(`${date}T00:00:00.000Z`) - Date.parse(`${previousRange.start}T00:00:00.000Z`)) / 86_400_000);
@@ -475,6 +483,17 @@ export function buildKpiDashboard(input: {
     target.set(key, values);
   };
 
+  const addProductTrend = (accumulator: PeriodAccumulator, date: string, line: KpiSaleLine, units: number) => {
+    if (accumulator !== selected || !line.product) return;
+    const key = trendKey(date);
+    const points = productTrends.get(line.product.id) ?? new Map<string, { netRevenue: number; netUnits: number }>();
+    const point = points.get(key) ?? { netRevenue: 0, netUnits: 0 };
+    point.netRevenue += units * line.unitPrice;
+    point.netUnits += units;
+    points.set(key, point);
+    productTrends.set(line.product.id, points);
+  };
+
   for (const sale of input.sales) {
     for (const line of sale.items) lineByKey.set(`${sale.id}:${line.id}`, { sale, line });
     if (!eligibleSale(sale)) continue;
@@ -487,10 +506,13 @@ export function buildKpiDashboard(input: {
     for (const line of sale.items) {
       updateLine(accumulator, line, sale.channel, line.quantity);
       addTrend(accumulator, date, line.quantity * line.unitPrice, 0);
+      addProductTrend(accumulator, date, line, line.quantity);
     }
   }
 
   const refundedByLine = new Map<string, number>();
+  let selectedRefundEvents = 0;
+  let selectedRefundedUnits = 0;
   const refunds = [...input.refunds].sort((left, right) => left.processedAt.localeCompare(right.processedAt));
   for (const refund of refunds) {
     const source = lineByKey.get(`${refund.orderId}:${refund.lineItemId}`);
@@ -502,8 +524,13 @@ export function buildKpiDashboard(input: {
     const date = londonDate(refund.processedAt);
     const accumulator = contains(input.range, date) ? selected : previousRange && contains(previousRange, date) ? previous : null;
     if (!accumulator) continue;
+    if (accumulator === selected) {
+      selectedRefundEvents += 1;
+      selectedRefundedUnits += units;
+    }
     updateLine(accumulator, source.line, source.sale.channel, -units);
     addTrend(accumulator, date, -units * source.line.unitPrice, 0);
+    addProductTrend(accumulator, date, source.line, -units);
   }
 
   const channels: KpiChannelPerformance[] = (["shopify", "tiktok"] as const).map((channel) => {
@@ -530,6 +557,20 @@ export function buildKpiDashboard(input: {
       .filter((product) => product.netUnits !== 0 || product.netRevenue !== 0)
       .sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title))
       .slice(0, PRODUCT_LIMIT),
+    allProducts: [...selected.products.values()]
+      .filter((product) => product.netUnits !== 0 || product.netRevenue !== 0)
+      .sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title)),
+    previousProducts: [...previous.products.values()]
+      .filter((product) => product.netUnits !== 0 || product.netRevenue !== 0)
+      .sort((left, right) => right.netUnits - left.netUnits || right.netRevenue - left.netRevenue || left.title.localeCompare(right.title)),
+    productTrends: Object.fromEntries([...productTrends.entries()].map(([productId, points]) => [productId,
+      [...trend.keys()].map((date) => ({ date, ...(points.get(date) ?? { netRevenue: 0, netUnits: 0 }) })),
+    ])),
+    dataQuality: {
+      refundEvents: selectedRefundEvents,
+      refundedUnits: selectedRefundedUnits,
+      cancelledOrders: input.sales.filter((sale) => sale.cancelledAt && contains(input.range, londonDate(sale.createdAt))).length,
+    },
     unassigned: selected.unassigned,
     channels,
     customers: buildCustomerPerformance({ range: input.range, sales: input.sales, refunds: input.refunds, customerOrders: input.customerOrders ?? [] }),

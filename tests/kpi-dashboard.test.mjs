@@ -80,6 +80,11 @@ test("KPI dashboard puts a partial refund on its issued London business day", ()
     { channel: "shopify", netSales: 1000, orders: 1, averageOrderValue: 1000, netUnits: 1, unitShare: 0.5 },
     { channel: "tiktok", netSales: 2500, orders: 1, averageOrderValue: 2500, netUnits: 1, unitShare: 0.5 },
   ]);
+  assert.deepEqual(dashboard.dataQuality, { refundEvents: 1, refundedUnits: 1, cancelledOrders: 1 });
+  assert.deepEqual(dashboard.productTrends["physical-1"].filter((point) => point.netRevenue || point.netUnits), [
+    { date: "2026-08-01", netRevenue: 2000, netUnits: 2 },
+    { date: "2026-08-03", netRevenue: -1000, netUnits: -1 },
+  ]);
 });
 
 test("KPI dashboard keeps safely unmapped sales visible without inventing a product", () => {

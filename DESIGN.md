@@ -257,6 +257,14 @@ The `/kpis` workspace is a chart-led **Operate** surface within the Quiet Contro
 - **Responsive behavior:** The desktop report uses four metrics and unequal two-column chart rows. At 950px and below, metrics become two columns and chart rows stack. At 600px and below, the date control follows the tabs, panel spacing tightens, and the wide affiliate table becomes native expandable creator summaries with net sales and orders visible before expansion. Search and show-all controls apply to both presentations.
 - **Trust and access:** Preserve visible focus, keyboard tab navigation, labelled measure/style controls, native detail disclosures, honest empty and stale states, and reduced-motion chart behavior. Compact reporting notes carry history and reconciliation caveats. Exact chart, channel, and product values remain available beyond the visual summaries; no chart or comparison may fabricate data.
 
+### Product Health Report surface (2026-09-13)
+
+The `/analytics/reports/products` workspace is a document-style **Review** surface, distinct from the live KPI workspace. It uses one report composition for all active physical products and a selected physical product, with the selected mode changing scope rather than introducing a second visual language.
+
+- **Hierarchy:** The official Serenity Hue logo anchors the top-left of a paper report header. Period, comparison, generated time, and freshness evidence sit above a restrained summary strip, factual observations, product ranking/comparison, mapped demand trend, physical variant and bundle-component detail, and integrity notes.
+- **Integrity:** Physical stock, Shopify-shown quantity, and TikTok-shown quantity remain separate. Uncounted, unfetched, unmapped, and uncertain states are explicit. Narrative is neutral and factual; the report has no recommendations, priorities, purchase advice, or action queue.
+- **Responsive and export behavior:** Desktop tables become native disclosure summaries on phones. Visual summaries always have exact-value tables. Print styles remove application controls and navigation, retain the logo and report hierarchy, and produce a clean browser PDF document rather than a screenshot.
+
 ### Overview daily brief (2026-09-06)
 
 The `/overview` workspace is the operational home screen, not a duplicate reporting dashboard. Its first viewport answers three questions in order: what requires action, what work is currently moving, and which workspace should staff open next. KPI trends and business analysis remain in `/kpis`. The implementation reference is `components/overview-workspace.tsx`; the full surface brief is `.impeccable/surfaces/components-overview-workspace-tsx.md`.
