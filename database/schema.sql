@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS order_items_order_source_variant_idx ON order_items(order_id, source_variant_id);
+CREATE INDEX IF NOT EXISTS order_items_source_variant_idx ON order_items(source_variant_id, order_id);
+CREATE INDEX IF NOT EXISTS order_items_source_product_variant_idx ON order_items(source_product_id, source_variant_id, order_id);
 
 -- Full-text order search replaces unindexed case-folded substring scans over
 -- orders and a correlated line-item subquery.
@@ -194,6 +196,8 @@ CREATE TABLE IF NOT EXISTS tiktok_after_sales_line_items (
 
 CREATE INDEX IF NOT EXISTS tiktok_after_sales_order_idx
   ON tiktok_after_sales_line_items(order_id, event_type, status, source_updated_at DESC);
+CREATE INDEX IF NOT EXISTS tiktok_after_sales_updated_order_idx
+  ON tiktok_after_sales_line_items(source_updated_at, order_id);
 
 CREATE TABLE IF NOT EXISTS shipments (
   id TEXT PRIMARY KEY,
@@ -333,6 +337,52 @@ CREATE TABLE IF NOT EXISTS lab_batches (
 );
 CREATE INDEX IF NOT EXISTS lab_batches_formula_created_idx ON lab_batches(formula_id, created_at DESC);
 
+-- A formula output is the exact physical variant produced by the formula. The
+-- fill amount is deliberately separate from ingredient calculations because a
+-- formula is currently calculated by weight while finished stock may be filled
+-- by volume.
+CREATE TABLE IF NOT EXISTS lab_formula_outputs (
+  id TEXT PRIMARY KEY,
+  formula_id TEXT NOT NULL UNIQUE REFERENCES lab_formulas(id) ON DELETE CASCADE,
+  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
+  fill_quantity REAL NOT NULL CHECK (fill_quantity > 0),
+  fill_unit TEXT NOT NULL CHECK (fill_unit IN ('g', 'ml')),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS lab_formula_outputs_variant_idx ON lab_formula_outputs(physical_variant_id);
+
+-- Allocation is the production state of a batch. It is kept separate from the
+-- ingredient snapshots so bulk formulation and finished-unit packaging remain
+-- distinct inventory concepts.
+CREATE TABLE IF NOT EXISTS lab_batch_allocations (
+  batch_id TEXT PRIMARY KEY REFERENCES lab_batches(id) ON DELETE CASCADE,
+  total_quantity REAL NOT NULL CHECK (total_quantity > 0),
+  quantity_unit TEXT NOT NULL CHECK (quantity_unit IN ('g', 'ml')),
+  packaged_quantity REAL NOT NULL DEFAULT 0 CHECK (packaged_quantity >= 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (packaged_quantity <= total_quantity)
+);
+
+-- This is the audit trail for packaging events. Physical inventory also gets
+-- its normal stock update, while this row keeps the production allocation
+-- explainable without overloading ingredient inventory history.
+CREATE TABLE IF NOT EXISTS lab_batch_packaging_ledger (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES lab_batches(id) ON DELETE RESTRICT,
+  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
+  actor TEXT NOT NULL,
+  packaged_before REAL NOT NULL,
+  packaged_after REAL NOT NULL,
+  packaged_delta REAL NOT NULL,
+  finished_units INTEGER NOT NULL CHECK (finished_units > 0),
+  reference TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS lab_batch_packaging_ledger_batch_idx ON lab_batch_packaging_ledger(batch_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS lab_batch_ingredients (
   id TEXT PRIMARY KEY,
   batch_id TEXT NOT NULL REFERENCES lab_batches(id) ON DELETE RESTRICT,
@@ -444,6 +494,8 @@ CREATE TABLE IF NOT EXISTS shopify_refund_line_items (
 );
 
 CREATE INDEX IF NOT EXISTS shopify_refund_line_items_order_idx ON shopify_refund_line_items(order_id, processed_at DESC);
+CREATE INDEX IF NOT EXISTS shopify_refund_line_items_processed_order_idx
+  ON shopify_refund_line_items(processed_at, order_id);
 
 -- The cutover guard intentionally baselines historical orders once. New
 -- orders can then be applied while later refunds for applied orders are still
@@ -478,6 +530,10 @@ CREATE TABLE IF NOT EXISTS physical_channel_listings (
 );
 
 CREATE INDEX IF NOT EXISTS physical_channel_listings_channel_active_idx ON physical_channel_listings(channel, active, title);
+CREATE INDEX IF NOT EXISTS physical_channel_listings_shopify_variant_idx
+  ON physical_channel_listings(channel, active, mapping_status, external_variant_id);
+CREATE INDEX IF NOT EXISTS physical_channel_listings_tiktok_product_variant_idx
+  ON physical_channel_listings(channel, active, mapping_status, external_product_id, external_variant_id);
 
 -- A channel product can be associated with one master product for product
 -- level organisation. This never replaces the exact variant-level component
@@ -504,6 +560,8 @@ CREATE TABLE IF NOT EXISTS physical_listing_components (
 );
 
 CREATE INDEX IF NOT EXISTS physical_listing_components_listing_idx ON physical_listing_components(listing_id);
+CREATE INDEX IF NOT EXISTS physical_listing_components_variant_listing_idx
+  ON physical_listing_components(physical_variant_id, listing_id);
 
 CREATE TABLE IF NOT EXISTS inventory_order_applications (
   order_id TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
@@ -547,6 +605,9 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   records_changed INTEGER NOT NULL DEFAULT 0,
   message TEXT
 );
+
+CREATE INDEX IF NOT EXISTS sync_runs_started_at_idx ON sync_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS sync_runs_status_finished_at_idx ON sync_runs(status, finished_at DESC);
 
 CREATE TABLE IF NOT EXISTS sync_leases (
   name TEXT PRIMARY KEY,
@@ -805,3 +866,54 @@ CREATE TABLE IF NOT EXISTS "verification" (
 );
 
 CREATE INDEX IF NOT EXISTS verification_identifier_idx ON "verification" (identifier);
+
+-- Remote assistant OAuth state. These tables contain only hashed, short-lived
+-- protocol values and are deliberately separate from Better Auth sessions.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  client_uri TEXT,
+  redirect_uris_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_authorization_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  code_challenge_method TEXT NOT NULL CHECK (code_challenge_method = 'S256'),
+  resource TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS mcp_oauth_codes_expiry_idx ON mcp_oauth_authorization_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  token_kind TEXT NOT NULL CHECK (token_kind IN ('access', 'refresh')),
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  token_family_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  used_at TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_family_idx ON mcp_oauth_tokens(token_family_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_expiry_idx ON mcp_oauth_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS mcp_rate_limit_buckets (
+  bucket_key TEXT NOT NULL,
+  window_start TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (bucket_key, window_start)
+);

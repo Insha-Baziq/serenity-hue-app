@@ -12,6 +12,7 @@ export async function POST(request: Request) {
     const body = await request.json() as {
       title?: unknown; subtitle?: unknown; notes?: unknown;
       lines?: Array<{ ingredient?: unknown; calculation?: unknown; percentage?: unknown; phase?: unknown; note?: unknown }>;
+      output?: { physicalVariantId?: unknown; fillQuantity?: unknown; fillUnit?: unknown } | null;
     };
     if (typeof body.title !== "string" || !Array.isArray(body.lines)) return Response.json({ ok: false, message: "A formula name and at least one ingredient are required" }, { status: 400 });
     const formula = await createLabFormula({
@@ -25,6 +26,9 @@ export async function POST(request: Request) {
         phase: typeof line.phase === "string" ? line.phase : "",
         note: typeof line.note === "string" ? line.note : "",
       })),
+      output: body.output && typeof body.output.physicalVariantId === "string" && typeof body.output.fillQuantity === "number" && (body.output.fillUnit === "g" || body.output.fillUnit === "ml")
+        ? { physicalVariantId: body.output.physicalVariantId, fillQuantity: body.output.fillQuantity, fillUnit: body.output.fillUnit }
+        : undefined,
     });
     return Response.json({ ok: true, formula }, { status: 201 });
   } catch (error) {

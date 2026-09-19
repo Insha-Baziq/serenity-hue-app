@@ -8,9 +8,11 @@ export const metadata = {
   description: "Sign in to the Serenity Hue operations workspace.",
 };
 
-export default async function LoginPage() {
+export default async function LoginPage({ searchParams }: { searchParams?: Promise<{ returnTo?: string }> }) {
   const session = await getCurrentSession();
-  if (session?.user) redirect("/overview");
+  const requestedReturnTo = (await searchParams)?.returnTo;
+  const returnTo = requestedReturnTo?.startsWith("/") && !requestedReturnTo.startsWith("//") ? requestedReturnTo : undefined;
+  if (session?.user) redirect(returnTo ?? "/overview");
 
   return (
     <main className="login-shell">
@@ -43,7 +45,7 @@ export default async function LoginPage() {
       </section>
       <section className="login-panel">
         <Image className="login-panel__logo" src="/serenity-hue-login-logo.png" alt="Serenity Hue by Shabina" width={170} height={170} priority />
-        <LoginForm />
+        <LoginForm returnTo={returnTo} />
       </section>
     </main>
   );

@@ -5,7 +5,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 
-export function LoginForm() {
+export function LoginForm({ returnTo }: { returnTo?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,7 +31,7 @@ export function LoginForm() {
         return;
       }
 
-      router.replace("/orders");
+      router.replace(returnTo ?? "/orders");
     } catch {
       setError("We could not sign you in right now. Check your connection and try again.");
     } finally {

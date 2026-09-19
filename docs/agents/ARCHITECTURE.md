@@ -27,8 +27,8 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 ### Operations workspaces and shared UI
 
-- **Owns**: client interaction for overview, analytics, KPI reporting, generated product reports, orders, customers, employees, inventory, packaging, channel listings, and Labs.
-- **Public interface**: exported `*Workspace(props)` components (including `ProductHealthReportWorkspace`) and shared UI primitives under `components/ui/`.
+- **Owns**: client interaction for overview, analytics, KPI reporting, orders, customers, employees, inventory, packaging, channel listings, and Labs.
+- **Public interface**: exported `*Workspace(props)` components and shared UI primitives under `components/ui/`.
 - **Hides**: browser state, optimistic drafts, sheets/dialogs, table presentation, and responsive presentation.
 - **Depends on**: `lib/types.ts`, authenticated API routes, `app/globals.css`, shared primitives.
 - **Tested at**: manual Playwright/browser review; `tests/labs-formula-layout.test.mjs` checks one CSS contract but is not in `npm test`.
@@ -44,12 +44,16 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
     conservative customer performance, fixed-window physical-variant restock decisions,
     complete current/previous product rows, product demand trends, refund/cancellation
     evidence, and an explicit all-time period resolved from the earliest recorded order
-  getProductHealthReport(period, physicalProductId?) -> deterministic all-products or
-    single-physical-product report model composed from KPI, physical stock, channel
-    listing/component mapping, and mapped-sales coverage reads
+  getKpiProductComparison(spec) -> two/three-month or four-week Europe/London
+    calendar comparison with refund-aware physical-product periods, deterministic
+    unit/revenue winners, partial-period identity, and like-for-like latest change
   getTikTokAffiliateDashboard(period) -> affiliate-attributed KPI snapshot with
     linked-order reconciliation, explicit unreconciled GMV, sync freshness, and
     bounded calendar-bucket trends for long reporting periods
+  getTikTokAffiliateComparison(spec) -> weekly or monthly creator comparison
+    grouped by stable TikTok creator/product identifiers with refund-aware revenue,
+    activity, best-product evidence, and a transparent non-transactional
+    offer-review signal
   create/consumeTikTokAdsOAuthState; save/getActiveTikTokAdsConnection;
   getTikTokAdsConnectionState -> safe connected/configuration state without tokens
   getTikTokAdsReport(period) -> retained, provider-attributed Ads KPI view model;
@@ -60,23 +64,16 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   create/update/deletePackagingMaterial
   applyPhysicalInventoryAdjustments / updatePhysicalProduct / add/update/deletePhysicalInventoryVariant
   getPhysicalChannelListings / savePhysicalListingMappings / savePhysicalChannelProductLink
-  getLabIngredients / getLabFormulas / getLabFormula / getLabBatches
-  createLabFormula / updateLabIngredient / createLabBatch
+  getLabIngredients / getLabFormulas / getLabFormula / getLabBatches / getLabBatchDetail
+  createLabFormula / updateLabFormulaOutput / updateLabIngredient / createLabBatch /
+  updateLabBatchPackaging
   recordSyncRun / takeSyncLease / releaseSyncLease / reconcileInventoryAlerts
   ```
 - **Hides**: SQL, row hydration, transactions, idempotency, migrations' data-shape assumptions, and audit writes.
 - **Depends on**: `lib/turso.ts`, `lib/types.ts`, integration parsers, auth-derived actor identity.
-- **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; repository behavior is otherwise untested.
+- **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; `tests/kpi-comparisons.test.mjs` protects the pure calendar-comparison contracts below the repository read; repository SQL behavior is otherwise untested.
 - **Depth**: shallow-but-known; `lib/repository.ts` is a large mixed-context module with a broad surface and is the primary deepening candidate.
 
-### Analytics reporting domain
-
-- **Owns**: shared Europe/London query-period normalization and deterministic Product Health Report composition for all-products and single-physical-product modes.
-- **Public interface**: `resolveReportingPeriod(params, now?)` and `buildProductHealthReport(input) -> ProductHealthReport`.
-- **Hides**: prior-period boundaries, neutral comparison wording, product/listing joins, separate physical/channel quantity presentation, bundle-component inclusion, and coverage availability states.
-- **Depends on**: the KPI dashboard contract plus physical inventory, channel listing, component mapping, and runway view models. It does not issue SQL or persist report runs.
-- **Tested at**: `tests/reporting-period.test.mjs` and `tests/product-health-report.test.mjs`; authenticated route composition and print/PDF presentation are covered by build and browser review.
-- **Depth**: deep enough for this slice; aggregation is pure while persistence remains at the repository boundary.
 
 ### Inventory rules and audit domain
 
@@ -125,12 +122,12 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 ### Labs production domain
 
-- **Owns**: gram-based ingredients, formulas, batch calculation, atomic deductions, and ingredient ledger behavior.
+- **Owns**: gram-based ingredient calculations, formula-to-physical-variant output links, batch bulk allocations, packaging increments, atomic finished-unit updates, and ingredient ledger behavior.
 - **Public interface**: formula/ingredient/batch repository functions plus `LabsWorkspace`, `LabFormulaWorkspace`, `LabIngredientsWorkspace`, and `LabBatchesWorkspace`.
-- **Hides**: percentage/remainder calculation and all-or-nothing quantity validation.
+- **Hides**: percentage/remainder calculation, advisory ingredient deduction planning, unit-compatible fill conversion, batch allocation invariants, and physical variant update transactions.
 - **Depends on**: repository, Labs seed definitions, authenticated routes, shared types.
-- **Tested at**: no calculation or route behavior tests; one CSS layout test is outside the package test command.
-- **Depth**: shallow-but-known; domain rules and UI behavior are not yet independently protected.
+- **Tested at**: `tests/lab-production.test.mjs` protects allocation, unit conversion, and advisory ingredient deduction rules; browser verification remains needed for the authenticated side-sheet flow.
+- **Depth**: mixed; pure allocation rules are isolated, while repository SQL remains broad.
 
 ## Known shallow spots
 
@@ -146,7 +143,28 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - App pages and route handlers never issue SQL; persistence goes through repository/domain interfaces.
 - Client components never read server credentials or call provider SDKs directly.
 - Physical catalogue quantities do not silently update Shopify/TikTok channel quantities.
-- Labs quantities are grams and do not affect finished-product or packaging stock.
+- Ingredient calculations remain grams. A formula may link to an exact physical variant with a per-unit fill amount in grams or milliliters; packaging increments finished physical stock, while remaining bulk stays in Labs.
 - Ledgers and historical application rows are append-only; corrections are new records.
 - Provider payloads are normalized before they reach UI contracts; tokens and buyer details remain server-only.
 - Authenticated mutation routes must validate the session before invoking a write.
+
+### Remote MCP assistant connector
+
+- **Owns**: the stateless Streamable HTTP MCP adapter, OAuth 2.1 authorization-code
+  flow with S256 PKCE, the versioned dataset registry, the validated read-only query DSL,
+  assistant report adapters, signed cursors, staged PII scope, distributed rate limits,
+  and redacted connector logging.
+- **Public interface**: `/api/mcp`; the OAuth/discovery routes documented in
+  `docs/REMOTE-MCP.md`; `describe_serenity_hue_data`, `query_serenity_hue`,
+  `get_serenity_hue_report`, and `get_serenity_hue_freshness`.
+- **Hides**: OAuth token/code hashes, client registration records, database credentials,
+  SQL fragments, provider payloads, synchronization behavior, and all unregistered or
+  secret-bearing fields.
+- **Depends on**: `lib/turso.ts` for the provider-enforced read-only database boundary,
+  the primary auth database for OAuth/rate-limit records, `lib/mcp-contracts.ts`,
+  `lib/assistant-read-repository.ts`, and the official MCP SDK.
+- **Tested at**: contract/import-graph tests in `tests/mcp-connector.test.mjs`; full
+  protocol and client compatibility requires live staging checks described in
+  `docs/REMOTE-MCP.md`.
+- **Depth**: new security-critical boundary; production remains gated on database-level
+  write rejection and live Claude/ChatGPT/Codex validation.

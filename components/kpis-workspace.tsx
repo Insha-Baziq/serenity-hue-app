@@ -10,11 +10,13 @@
 // rather than illustrated.
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useState, useTransition, type ReactNode } from "react";
+import { useId, useState, useTransition, type ReactNode } from "react";
 import { BarChart3, CalendarDays, ChevronDown, CircleHelp, Megaphone, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AffiliateComparisonSection, OfferReview, OfferReviewHeader, ProductComparisonSection } from "@/components/kpi-comparison-sections";
 import { formatMoney, relativeTime } from "@/lib/format";
 import type { KpiDashboard, KpiPeriod, KpiRestockPlan } from "@/lib/kpi-dashboard";
+import type { BestSellerMetric, KpiProductComparison, TikTokAffiliateComparison } from "@/lib/kpi-comparisons";
 import { rankTikTokAffiliates, type AffiliateRankingMode, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import type { TikTokAdsConnectionState } from "@/lib/repository";
 import type { TikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
@@ -25,7 +27,11 @@ export type KpiView = "overview" | "products" | "channels" | "customers" | "affi
 
 type Props = {
   dashboard: KpiDashboard;
+  productWeekly: KpiProductComparison;
+  productMonthly: KpiProductComparison;
   affiliateDashboard: TikTokAffiliateDashboard;
+  affiliateWeekly: TikTokAffiliateComparison;
+  affiliateMonthly: TikTokAffiliateComparison;
   adsConnection: TikTokAdsConnectionState;
   adsReportState: TikTokAdsReportState;
   adsReport: TikTokAdsReport;
@@ -217,6 +223,7 @@ function TrendChart({
   subtitle,
   current,
   prior,
+  dates,
   labels,
   currentLegend,
   formatValue,
@@ -227,12 +234,14 @@ function TrendChart({
   subtitle: string;
   current: number[];
   prior?: number[];
+  dates: string[];
   labels: string[];
   currentLegend: string;
   formatValue: (value: number) => string;
   actions?: ReactNode;
   disclosure?: ReactNode;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const series = prior && prior.length ? [...current, ...prior] : current;
   const hasData = current.some((value) => value !== 0);
   const rawMin = Math.min(0, ...series);
@@ -244,6 +253,26 @@ function TrendChart({
   const priorPoints = prior && prior.length ? polyline(prior, 720, 190, min, max) : "";
   const areaPath = currentPoints ? `M${currentPoints.split(" ").join(" L")} L720,199 L0,199 Z` : "";
   const peak = hasData ? formatValue(Math.max(...current)) : "";
+  const activePoint = activeIndex === null ? undefined : current[activeIndex];
+  const activeDate = activeIndex === null ? undefined : dates[activeIndex];
+  const activeX =
+    activeIndex === null || activePoint === undefined
+      ? undefined
+      : current.length === 1
+        ? 360
+        : (activeIndex / (current.length - 1)) * 720;
+  const activeY =
+    activePoint === undefined
+      ? undefined
+      : 190 - ((activePoint - min) / (max - min || 1)) * 190;
+  const activePrior = activeIndex === null ? undefined : prior?.[activeIndex];
+  const tooltipSide =
+    activeX !== undefined && activeX < 115
+      ? s.chartTooltipStart
+      : activeX !== undefined && activeX > 605
+        ? s.chartTooltipEnd
+        : s.chartTooltipMiddle;
+  const pointSpacing = current.length > 1 ? 720 / (current.length - 1) : 720;
 
   return (
     <Panel
@@ -268,12 +297,12 @@ function TrendChart({
       }
     >
       {hasData ? (
-        <div className={s.chartFrame}>
+        <div className={s.chartFrame} onPointerLeave={() => setActiveIndex(null)}>
           <svg
             viewBox="0 0 720 210"
             preserveAspectRatio="none"
             className={s.chartSvg}
-            role="img"
+            role="group"
             aria-label={`${title}. Highest point ${peak}.`}
           >
             <line x1="0" y1="10" x2="720" y2="10" stroke="var(--canvas-muted)" strokeWidth="1" />
@@ -301,7 +330,73 @@ function TrendChart({
               strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
             />
+            {current.map((value, index) => {
+              const x = current.length === 1 ? 360 : (index / (current.length - 1)) * 720;
+              const xStart = current.length === 1 ? 0 : index === 0 ? 0 : x - pointSpacing / 2;
+              const width =
+                current.length === 1 || index === 0 || index === current.length - 1
+                  ? current.length === 1
+                    ? 720
+                    : pointSpacing / 2
+                  : pointSpacing;
+              const date = dates[index];
+              const priorValue = prior?.[index];
+              return (
+                <rect
+                  key={`${date ?? "point"}-${index}`}
+                  x={xStart}
+                  y="0"
+                  width={width}
+                  height="199"
+                  fill="transparent"
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${date ? formatDate(date, true) : `Point ${index + 1}`}: ${currentLegend} ${formatValue(value)}${priorValue === undefined ? "" : `; preceding period ${formatValue(priorValue)}`}`}
+                  onPointerEnter={() => setActiveIndex(index)}
+                  onFocus={() => setActiveIndex(index)}
+                  onBlur={() => setActiveIndex(null)}
+                  onClick={() => setActiveIndex(activeIndex === index ? null : index)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setActiveIndex(activeIndex === index ? null : index);
+                    }
+                  }}
+                />
+              );
+            })}
+            {activePoint !== undefined && activeX !== undefined && activeY !== undefined && (
+              <>
+                <line x1={activeX} y1="10" x2={activeX} y2="199" className={s.chartHoverLine} />
+                {activePrior !== undefined && (
+                  <circle
+                    cx={activeX}
+                    cy={190 - ((activePrior - min) / (max - min || 1)) * 190}
+                    r="3.5"
+                    className={s.chartHoverPriorPoint}
+                  />
+                )}
+                <circle cx={activeX} cy={activeY} r="4.5" className={s.chartHoverPoint} />
+              </>
+            )}
           </svg>
+          {activePoint !== undefined && activeDate && activeX !== undefined && (
+            <div className={`${s.chartTooltip} ${tooltipSide}`} style={{ left: `${(activeX / 720) * 100}%` }} role="tooltip">
+              <span className={s.chartTooltipDate}>{formatDate(activeDate, true)}</span>
+              <span className={s.chartTooltipRow}>
+                <i className={s.chartTooltipSwatch} style={{ background: "var(--plum)" }} />
+                <span>{currentLegend}</span>
+                <strong>{formatValue(activePoint)}</strong>
+              </span>
+              {activePrior !== undefined && (
+                <span className={s.chartTooltipRow}>
+                  <i className={`${s.chartTooltipSwatch} ${s.chartTooltipSwatchPrior}`} />
+                  <span>Preceding period</span>
+                  <strong>{formatValue(activePrior)}</strong>
+                </span>
+              )}
+            </div>
+          )}
           <div className={s.chartAxis}>
             {labels.map((label, index) => (
               <span key={`${label}-${index}`}>{label}</span>
@@ -324,6 +419,80 @@ function axisLabels(points: Array<{ date: string }>) {
   return Array.from({ length: wanted }, (_, index) => formatDate(points[Math.round(index * step)]!.date));
 }
 
+function polarToCartesian(cx: number, cy: number, radius: number, angle: number) {
+  const radians = ((angle - 90) * Math.PI) / 180;
+  return { x: cx + radius * Math.cos(radians), y: cy + radius * Math.sin(radians) };
+}
+
+function pieSlicePath(startAngle: number, endAngle: number) {
+  const sweep = endAngle - startAngle;
+  if (sweep >= 359.999) {
+    return "M 100 10 A 90 90 0 1 1 100 190 A 90 90 0 1 1 100 10 Z";
+  }
+
+  const start = polarToCartesian(100, 100, 90, endAngle);
+  const end = polarToCartesian(100, 100, 90, startAngle);
+  const largeArcFlag = sweep > 180 ? 1 : 0;
+  return `M 100 100 L ${start.x.toFixed(3)} ${start.y.toFixed(3)} A 90 90 0 ${largeArcFlag} 0 ${end.x.toFixed(3)} ${end.y.toFixed(3)} Z`;
+}
+
+function ChannelMixPie({ channels }: { channels: KpiDashboard["channels"] }) {
+  const titleId = useId();
+  const totalOrders = channels.reduce((sum, channel) => sum + channel.orders, 0);
+  const share = (channel: KpiDashboard["channels"][number]) => totalOrders ? channel.orders / totalOrders : 0;
+  const positiveChannels = channels.filter((channel) => share(channel) > 0);
+  const totalShare = positiveChannels.reduce((sum, channel) => sum + share(channel), 0);
+  const slices = positiveChannels.reduce<Array<{ channel: (typeof channels)[number]; startAngle: number; endAngle: number }>>(
+    (result, channel) => {
+      const startAngle = result.at(-1)?.endAngle ?? 0;
+      const endAngle = startAngle + (share(channel) / totalShare) * 360;
+      return [...result, { channel, startAngle, endAngle }];
+    },
+    [],
+  );
+
+  return (
+    <div className={s.channelMix}>
+      <div className={s.channelPieFrame}>
+        <svg
+          viewBox="0 0 200 200"
+          className={s.channelPie}
+            role="img"
+            aria-labelledby={`${titleId}-title ${titleId}-description`}
+          >
+          <title id={`${titleId}-title`}>Channel mix by paid orders</title>
+          <desc id={`${titleId}-description`}>
+            {channels.map((channel) => `${channel.channel === "shopify" ? "Shopify" : "TikTok Shop"} ${percent(share(channel))}`).join(", ")}
+          </desc>
+          {slices.map(({ channel, startAngle, endAngle }) => (
+            <path
+              key={channel.channel}
+              d={pieSlicePath(startAngle, endAngle)}
+              fill={CHANNEL_COLOUR[channel.channel]}
+              className={s.channelPieSlice}
+            />
+          ))}
+        </svg>
+      </div>
+      <div className={s.channelLegend} aria-label="Channel mix details">
+        {channels.map((channel) => (
+          <div key={channel.channel} className={s.channelLegendItem}>
+            <i className={s.channelLegendSwatch} style={{ background: CHANNEL_COLOUR[channel.channel] }} aria-hidden="true" />
+            <div className={s.channelLegendHeading}>
+              <strong>{channel.channel === "shopify" ? "Shopify" : "TikTok Shop"}</strong>
+              <span>{number(channel.orders)} paid orders</span>
+            </div>
+            <strong className={s.channelLegendShare}>{percent(share(channel))}</strong>
+            <p className={s.channelMeta}>
+              {formatMoney(channel.netSales)} · {number(channel.orders)} orders · {formatMoney(channel.averageOrderValue)} AOV
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function urgencyStyle(urgency: KpiRestockPlan["urgency"]) {
   return urgency === "overdue"
     ? { colour: "var(--red)", wash: "var(--red-soft)", border: "#f6d9dc", label: "Overdue" }
@@ -332,12 +501,78 @@ function urgencyStyle(urgency: KpiRestockPlan["urgency"]) {
 
 /* ── Overview ─────────────────────────────────────────────────────────── */
 
-function OverviewView({ dashboard, onNavigate }: { dashboard: KpiDashboard; onNavigate: (view: KpiView) => void }) {
+function OverviewAdsSpend({
+  connection,
+  state,
+  report,
+  onNavigate,
+}: {
+  connection: TikTokAdsConnectionState;
+  state: TikTokAdsReportState;
+  report: TikTokAdsReport;
+  onNavigate: (view: KpiView) => void;
+}) {
+  const connected = connection.status === "connected";
+  const hasRows = report.rowCount > 0;
+  const value = connected && hasRows ? adsMoney(report.metrics.spendMinor, report.currency, true) : "—";
+  const status = !connected
+    ? connection.status === "not_configured"
+      ? "Ads reporting is not configured"
+      : connection.status === "reconnect_required"
+        ? "Ads reporting needs to be reconnected"
+        : "Ads reporting is not connected"
+    : state.status === "failed"
+      ? "Latest refresh failed; open TikTok Ads to review"
+      : state.status === "first_run"
+        ? "Connected; refresh TikTok Ads to load reporting"
+        : !hasRows
+          ? "No TikTok Ads activity was reported in this period"
+          : state.status === "stale"
+            ? "Showing the last successful TikTok Ads result"
+            : state.status === "partial"
+              ? "Account spend is available; some detail rows are partial"
+              : report.effectiveRange
+                ? rangeLabel(report.effectiveRange)
+                : "Reported by TikTok Ads";
+  return (
+    <section className={s.overviewAds} aria-label="TikTok Ads spend">
+      <div className={s.overviewAdsIcon}><Megaphone size={19} strokeWidth={1.5} aria-hidden="true" /></div>
+      <div className={s.overviewAdsCopy}>
+        <span className={s.metricLabel}>TikTok Ads spend</span>
+        <strong>{value}</strong>
+        <p>{status}</p>
+      </div>
+      <p className={s.overviewAdsDefinition}>TikTok BASIC Ads report · kept separate from Shopify and TikTok Shop revenue</p>
+      <button type="button" className={s.linkButton} onClick={() => onNavigate("ads")}>Open TikTok Ads →</button>
+    </section>
+  );
+}
+
+function OverviewView({
+  dashboard,
+  adsConnection,
+  adsReportState,
+  adsReport,
+  onNavigate,
+}: {
+  dashboard: KpiDashboard;
+  adsConnection: TikTokAdsConnectionState;
+  adsReportState: TikTokAdsReportState;
+  adsReport: TikTokAdsReport;
+  onNavigate: (view: KpiView) => void;
+}) {
   const { metrics, previous, trend, previousTrend, channels, products, restock, customers } = dashboard;
   const salesSeries = trend.map((point) => point.netSales);
   const orderSeries = trend.map((point) => point.orders);
   const aovSeries = trend.map((point) => (point.orders ? Math.round(point.netSales / point.orders) : 0));
-  const topProducts = products.slice(0, 5);
+  const [trendMetric, setTrendMetric] = useState<"sales" | "orders">("sales");
+  const showingSales = trendMetric === "sales";
+  const trendValues = showingSales ? salesSeries : orderSeries;
+  const previousTrendValues = previousTrend.map((point) => showingSales ? point.netSales : point.orders);
+  const trendValueLabel = showingSales ? "Net sales" : "Orders";
+  const topProducts = [...products]
+    .sort((left, right) => right.netRevenue - left.netRevenue || right.netUnits - left.netUnits || left.title.localeCompare(right.title, "en"))
+    .slice(0, 5);
   const maxRevenue = Math.max(1, ...topProducts.map((product) => Math.abs(product.netRevenue)));
   const urgent = restock.slice(0, 4);
   const interval = dashboard.trendIntervalDays;
@@ -376,31 +611,46 @@ function OverviewView({ dashboard, onNavigate }: { dashboard: KpiDashboard; onNa
         />
       </div>
 
+      <OverviewAdsSpend connection={adsConnection} state={adsReportState} report={adsReport} onNavigate={onNavigate} />
+
       <div className={s.primaryGrid}>
         <TrendChart
-          title="Net sales trend"
-          subtitle={`${interval > 1 ? `${interval}-day intervals` : "Daily"} · Europe/London · excludes cancelled, net of refunds`}
-          current={salesSeries}
-          prior={previousTrend.map((point) => point.netSales)}
+          title={showingSales ? "Net sales trend" : "Order count trend"}
+          subtitle={`${interval > 1 ? `${interval}-day intervals` : "Daily"} · Europe/London · ${showingSales ? "excludes cancelled, net of refunds" : "paid, non-cancelled orders"}`}
+          current={trendValues}
+          prior={previousTrendValues}
+          dates={trend.map((point) => point.date)}
           labels={axisLabels(trend)}
-          currentLegend="This period"
-          formatValue={formatMoney}
+          currentLegend={trendValueLabel}
+          formatValue={showingSales ? formatMoney : number}
+          actions={
+            <div className={s.chartActions}>
+              <div className={s.segmented} role="group" aria-label="Trend measure">
+                <button type="button" aria-pressed={showingSales} onClick={() => setTrendMetric("sales")}>Net sales</button>
+                <button type="button" aria-pressed={!showingSales} onClick={() => setTrendMetric("orders")}>Orders</button>
+              </div>
+              <div className={s.chartLegend} aria-label="Chart legend">
+                <span><i style={{ background: "var(--plum)" }} />{trendValueLabel}</span>
+                {previousTrendValues.length > 0 && <span><i style={{ background: "var(--line-strong)" }} />Preceding period</span>}
+              </div>
+            </div>
+          }
           disclosure={
             <div className={s.tableScroll}>
               <table className={s.table}>
                 <thead>
                   <tr>
                     <th>{interval > 1 ? "Interval begins" : "Date"}</th>
-                    <th className={s.numeric}>Net sales</th>
-                    <th className={s.numeric}>Orders</th>
+                    <th className={s.numeric}>{trendValueLabel}</th>
+                    <th className={s.numeric}>{showingSales ? "Orders" : "Net sales"}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {trend.map((point) => (
                     <tr key={point.date}>
                       <td>{formatDate(point.date, true)}</td>
-                      <td className={s.numeric}>{formatMoney(point.netSales)}</td>
-                      <td className={s.numeric}>{number(point.orders)}</td>
+                      <td className={s.numeric}>{showingSales ? formatMoney(point.netSales) : number(point.orders)}</td>
+                      <td className={s.numeric}>{showingSales ? number(point.orders) : formatMoney(point.netSales)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -409,32 +659,11 @@ function OverviewView({ dashboard, onNavigate }: { dashboard: KpiDashboard; onNa
           }
         />
 
-        <Panel title="Channel mix" subtitle="Unit share of net units">
-          {metrics.netUnits !== 0 ? (
-            <div className={s.channelList}>
-              {channels.map((channel) => (
-                <div key={channel.channel} className={s.channelRow}>
-                  <div className={s.channelRowTop}>
-                    <strong>{channel.channel === "shopify" ? "Shopify" : "TikTok Shop"}</strong>
-                    <span>{percent(channel.unitShare)}</span>
-                  </div>
-                  <div className={s.track}>
-                    <div
-                      className={s.trackFill}
-                      style={{
-                        width: percent(Math.max(0, channel.unitShare)),
-                        background: CHANNEL_COLOUR[channel.channel],
-                      }}
-                    />
-                  </div>
-                  <p className={s.channelMeta}>
-                    {formatMoney(channel.netSales)} · {number(channel.orders)} orders · {formatMoney(channel.averageOrderValue)} AOV
-                  </p>
-                </div>
-              ))}
-            </div>
+        <Panel title="Channel mix" subtitle="Paid order share by sales channel">
+          {metrics.orders !== 0 ? (
+            <ChannelMixPie channels={channels} />
           ) : (
-            <Empty>No units were sold on either channel in this period.</Empty>
+            <Empty>No paid orders were recorded on either channel in this period.</Empty>
           )}
         </Panel>
       </div>
@@ -542,9 +771,20 @@ function OverviewView({ dashboard, onNavigate }: { dashboard: KpiDashboard; onNa
 
 /* ── Products ─────────────────────────────────────────────────────────── */
 
-function ProductsView({ dashboard }: { dashboard: KpiDashboard }) {
+function ProductsView({
+  dashboard,
+  weekly,
+  monthly,
+}: {
+  dashboard: KpiDashboard;
+  weekly: KpiProductComparison;
+  monthly: KpiProductComparison;
+}) {
   const { products, unassigned, metrics } = dashboard;
-  const topShare = products.length && metrics.netSales ? products[0]!.netRevenue / metrics.netSales : null;
+  const [mode, setMode] = useState<"summary" | "weekly" | "monthly">("summary");
+  const [bestSellerMetric, setBestSellerMetric] = useState<BestSellerMetric>("units");
+  const [monthCount, setMonthCount] = useState<2 | 3>(3);
+  const topShare = products.length && metrics.netUnits ? products[0]!.netUnits / metrics.netUnits : null;
   const hasUnassigned = unassigned.netUnits !== 0 || unassigned.netRevenue !== 0;
 
   return (
@@ -553,54 +793,98 @@ function ProductsView({ dashboard }: { dashboard: KpiDashboard }) {
         <div className={s.tableCardHeader}>
           <div>
             <h2>Product performance</h2>
-            <p>{products.length ? `${number(products.length)} products with sales in this period · sorted by net units` : "Sorted by net units"}</p>
+              <p>{mode === "summary"
+              ? products.length ? `${number(products.length)} products with sales in the selected reporting period · ranked by net units` : "Selected reporting-period summary"
+              : mode === "weekly" ? "Latest four Monday–Sunday calendar weeks · Europe/London" : `Latest ${monthCount} calendar months · Europe/London`}</p>
           </div>
-          <dl className={s.tableTotals}>
-            <div>
-              <dt>Net revenue</dt>
-              <dd>{formatMoney(metrics.netSales)}</dd>
+          <div className={s.productHeaderControls}>
+            <div className={s.segmented} role="group" aria-label="Product performance view">
+              {(["summary", "weekly", "monthly"] as const).map((option) => (
+                <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
+                  {option === "summary" ? "Summary" : option === "weekly" ? "Weekly" : "Monthly"}
+                </button>
+              ))}
             </div>
-            <div>
-              <dt>Net units</dt>
-              <dd>{number(metrics.netUnits)}</dd>
-            </div>
-            <div>
-              <dt>Top product share</dt>
-              <dd>{topShare === null ? "—" : percent(topShare)}</dd>
-            </div>
-          </dl>
+            {mode !== "summary" && (
+              <>
+                <label className={s.inlineControlLabel}>Best seller by
+                  <span className={s.segmented} role="group" aria-label="Best seller ranking metric">
+                    <button type="button" aria-pressed={bestSellerMetric === "units"} onClick={() => setBestSellerMetric("units")}>Net units</button>
+                    <button type="button" aria-pressed={bestSellerMetric === "revenue"} onClick={() => setBestSellerMetric("revenue")}>Net revenue</button>
+                  </span>
+                </label>
+                {mode === "monthly" && (
+                  <div className={s.segmented} role="group" aria-label="Number of calendar months">
+                    {([2, 3] as const).map((count) => <button key={count} type="button" aria-pressed={monthCount === count} onClick={() => setMonthCount(count)}>{count} months</button>)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          {mode === "summary" && (
+            <dl className={s.tableTotals}>
+              <div><dt>Net revenue</dt><dd>{formatMoney(metrics.netSales)}</dd></div>
+              <div><dt>Net units</dt><dd>{number(metrics.netUnits)}</dd></div>
+              <div><dt>Top product unit share</dt><dd>{topShare === null ? "—" : percent(topShare)}</dd></div>
+            </dl>
+          )}
         </div>
-        {products.length ? (
-          <div className={s.tableScroll}>
-            <table className={s.table}>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th className={s.numeric}>Net units</th>
-                  <th className={s.numeric}>Net revenue</th>
-                  <th className={s.numeric}>Shopify units</th>
-                  <th className={s.numeric}>TikTok units</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((product) => (
-                  <tr key={product.id}>
-                    <td>
-                      <span className={s.cellTitle} title={product.title}>
-                        {product.title}
-                      </span>
-                    </td>
-                    <td className={s.numeric}>{number(product.netUnits)}</td>
-                    <td className={`${s.numeric} ${s.strong}`}>{formatMoney(product.netRevenue)}</td>
-                    <td className={`${s.numeric} ${s.muted}`}>{number(product.shopifyUnits)}</td>
-                    <td className={`${s.numeric} ${s.muted}`}>{number(product.tiktokUnits)}</td>
+        {mode === "summary" ? products.length ? (
+          <>
+            <div className={`${s.tableScroll} ${s.productDesktopTable}`}>
+              <table className={s.table}>
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className={s.numeric}>Net units</th>
+                    <th className={s.numeric}>Net revenue</th>
+                    <th className={s.numeric}>Shopify units</th>
+                    <th className={s.numeric}>TikTok units</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {products.map((product) => (
+                    <tr key={product.id}>
+                      <td><span className={s.cellTitle} title={product.title}>{product.title}</span></td>
+                      <td className={s.numeric}>{number(product.netUnits)}</td>
+                      <td className={`${s.numeric} ${s.strong}`}>{formatMoney(product.netRevenue)}</td>
+                      <td className={`${s.numeric} ${s.muted}`}>{number(product.shopifyUnits)}</td>
+                      <td className={`${s.numeric} ${s.muted}`}>{number(product.tiktokUnits)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className={s.productMobileList} aria-label="Product performance summary">
+              {products.map((product) => (
+                <details key={product.id} className={s.productMobileItem}>
+                  <summary>
+                    <span className={s.productMobileName} title={product.title}>{product.title}</span>
+                    <span className={s.productMobileStats}>
+                      <span className={s.productMobileStat}>
+                        <small>Net units</small>
+                        <strong>{number(product.netUnits)}</strong>
+                      </span>
+                      <span className={s.productMobileStat}>
+                        <small>Net revenue</small>
+                        <strong>{formatMoney(product.netRevenue)}</strong>
+                      </span>
+                    </span>
+                    <span className={s.productMobileChevron} aria-hidden="true"><ChevronDown size={16} /></span>
+                  </summary>
+                  <p className={s.productMobileExpandedTitle}>{product.title}</p>
+                  <dl>
+                    <div><dt>Shopify units</dt><dd>{number(product.shopifyUnits)}</dd></div>
+                    <div><dt>TikTok units</dt><dd>{number(product.tiktokUnits)}</dd></div>
+                  </dl>
+                </details>
+              ))}
+            </div>
+          </>
         ) : (
           <Empty>No product recorded a sale in this period.</Empty>
+        ) : (
+          <ProductComparisonSection comparison={mode === "weekly" ? weekly : monthly} metric={bestSellerMetric} visiblePeriodCount={mode === "weekly" ? 4 : monthCount} />
         )}
       </div>
 
@@ -909,7 +1193,7 @@ function RestockView({ dashboard }: { dashboard: KpiDashboard }) {
 
 /* ── TikTok affiliates ────────────────────────────────────────────────── */
 
-function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) {
+function AffiliatesView({ dashboard, comparison, monthlyComparison }: { dashboard: TikTokAffiliateDashboard; comparison: TikTokAffiliateComparison; monthlyComparison: TikTokAffiliateComparison }) {
   const [ranking, setRanking] = useState<AffiliateRankingMode>("revenue");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -920,6 +1204,7 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
   const rows = showAll ? filtered : filtered.slice(0, 10);
   const averageOrder = metrics.attributedOrders ? metrics.netSales / metrics.attributedOrders : 0;
   const videosPerCreator = metrics.activeAffiliates ? (metrics.publishedVideos / metrics.activeAffiliates).toFixed(1) : "0";
+  const comparisonByCreator = new Map(comparison.affiliates.map((affiliate) => [affiliate.creatorId, affiliate]));
 
   return (
     <>
@@ -968,6 +1253,7 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
         title="Affiliate sales"
         subtitle={`${dashboard.trendIntervalDays > 1 ? `${dashboard.trendIntervalDays}-day intervals` : "Daily"} · attributed, net of refunds`}
         current={dashboard.trend.map((point) => point.netSales)}
+        dates={dashboard.trend.map((point) => point.date)}
         labels={axisLabels(dashboard.trend)}
         currentLegend="Attributed net sales"
         formatValue={formatMoney}
@@ -994,6 +1280,8 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
           </div>
         }
       />
+
+      <AffiliateComparisonSection weekly={comparison} monthly={monthlyComparison} />
 
       <div className={s.tableCard}>
         <div className={s.tableCardHeader}>
@@ -1026,7 +1314,7 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
         </div>
         {rows.length ? (
           <>
-            <div className={s.tableScroll}>
+            <div className={`${s.tableScroll} ${s.desktopAffiliateLeaderboard}`}>
               <table className={s.table}>
                 <thead>
                   <tr>
@@ -1037,11 +1325,14 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
                     <th className={s.numeric}>Orders</th>
                     <th className={s.numeric}>Units</th>
                     <th>Best selling product</th>
+                    <th><OfferReviewHeader /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((affiliate) => (
-                    <tr key={affiliate.creator}>
+                  {rows.map((affiliate) => {
+                    const comparisonRow = comparisonByCreator.get(affiliate.creatorId);
+                    return (
+                    <tr key={affiliate.creatorId}>
                       <td>
                         <span className={s.cellTitle} title={affiliate.creator}>
                           {affiliate.creator}
@@ -1055,10 +1346,32 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
                       <td className={s.muted}>
                         <span className={s.cellTitle}>{affiliate.bestSellingProduct ?? "—"}</span>
                       </td>
+                      <td>{comparisonRow ? <OfferReview row={comparisonRow} compact /> : <span className={s.faint}>No four-week evidence</span>}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+            <div className={s.affiliateMobileLeaderboard}>
+              {rows.map((affiliate) => {
+                const comparisonRow = comparisonByCreator.get(affiliate.creatorId);
+                return (
+                  <details key={affiliate.creatorId} className={s.comparisonMobileItem}>
+                    <summary>
+                      <span><strong>{affiliate.creator}</strong><small>{formatMoney(affiliate.netSales)} · {number(affiliate.orders)} orders</small></span>
+                      <ChevronDown size={15} aria-hidden="true" />
+                    </summary>
+                    {comparisonRow && <div className={s.mobileOffer}><OfferReview row={comparisonRow} /></div>}
+                    <dl>
+                      <div><dt>Commission</dt><dd>{formatMoney(affiliate.estimatedCommission)}</dd></div>
+                      <div><dt>Units</dt><dd>{number(affiliate.units)}</dd></div>
+                      <div><dt>Published videos</dt><dd>{number(affiliate.publishedVideos)}</dd></div>
+                      <div><dt>Best selling product</dt><dd>{affiliate.bestSellingProduct ?? "—"}</dd></div>
+                    </dl>
+                  </details>
+                );
+              })}
             </div>
             {filtered.length > rows.length && (
               <div style={{ padding: "16px 26px" }}>
@@ -1097,7 +1410,7 @@ function AffiliatesView({ dashboard }: { dashboard: TikTokAffiliateDashboard }) 
               </thead>
               <tbody>
                 {dashboard.products.map((product) => (
-                  <tr key={product.product}>
+                  <tr key={product.productId}>
                     <td>
                       <span className={s.cellTitle} title={product.product}>
                         {product.product}
@@ -1386,6 +1699,7 @@ function AdsView({
         title="Ad performance over time"
         subtitle="Daily ad spend reported by TikTok"
         current={report.trend.map((point) => point.spendMinor)}
+        dates={report.trend.map((point) => point.date)}
         labels={axisLabels(report.trend)}
         currentLegend="Ad spend"
         formatValue={(value) => adsMoney(value, report.currency, hasRows)}
@@ -1495,7 +1809,11 @@ const TABS: Array<{ id: KpiView; label: string }> = [
 
 export function KpisWorkspace({
   dashboard,
+  productWeekly,
+  productMonthly,
   affiliateDashboard,
+  affiliateWeekly,
+  affiliateMonthly,
   adsConnection,
   adsReportState,
   adsReport,
@@ -1685,11 +2003,11 @@ export function KpisWorkspace({
         tabIndex={-1}
         className={`${s.content} ${isPending ? s.pending : ""}`}
       >
-        {view === "overview" && <OverviewView dashboard={dashboard} onNavigate={chooseView} />}
-        {view === "products" && <ProductsView dashboard={dashboard} />}
+        {view === "overview" && <OverviewView dashboard={dashboard} adsConnection={adsConnection} adsReportState={adsReportState} adsReport={adsReport} onNavigate={chooseView} />}
+        {view === "products" && <ProductsView dashboard={dashboard} weekly={productWeekly} monthly={productMonthly} />}
         {view === "channels" && <ChannelsView dashboard={dashboard} />}
         {view === "customers" && <CustomersView dashboard={dashboard} />}
-        {view === "affiliates" && <AffiliatesView dashboard={affiliateDashboard} />}
+        {view === "affiliates" && <AffiliatesView dashboard={affiliateDashboard} comparison={affiliateWeekly} monthlyComparison={affiliateMonthly} />}
         {view === "ads" && <AdsView connection={adsConnection} state={adsReportState} report={adsReport} />}
         {view === "restock" && <RestockView dashboard={dashboard} />}
       </div>

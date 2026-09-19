@@ -1,19 +1,27 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { getTursoClient } from "@/lib/turso";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
 import { hasTikTokAdsAppCredentials, type TikTokAdsTokenBundle } from "@/lib/tiktok-ads";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import { hashPassword } from "better-auth/crypto";
-import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabFormula, LabFormulaLine, LabIngredient, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaOutput, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
 import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
-import { buildProductHealthReport, type ProductHealthReport } from "@/lib/product-health-report";
 import { buildTikTokAffiliateDashboard, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
+import {
+  buildKpiProductComparison,
+  buildTikTokAffiliateComparison,
+  comparisonDateRange,
+  type ComparisonSpec,
+  type KpiProductComparison,
+  type TikTokAffiliateComparison,
+} from "@/lib/kpi-comparisons";
 import { changedColumns } from "@/lib/sql-upsert";
+import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, planIngredientDeduction } from "@/lib/lab-production";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -22,6 +30,12 @@ const changed = changedColumns;
 
 /** How much scheduled-sync bookkeeping to keep. Nothing reads beyond this. */
 const SYNC_RUN_RETENTION_DAYS = 30;
+const KPI_REPORTING_CACHE_TAG = "serenity-hue:kpi-reporting";
+
+function invalidateKpiReportingCache() {
+  revalidateTag(KPI_REPORTING_CACHE_TAG, "max");
+  revalidatePath("/kpis");
+}
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
@@ -443,9 +457,9 @@ function londonKpiToday() {
  * mode resolves to the complete recorded order history; no tax, delivery, client
  * tracking, or separate analytics store is involved.
  */
-export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
+export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClient): Promise<KpiDashboard> {
   if (!isKpiPeriod(range)) throw new Error("Choose a valid inclusive reporting period.");
-  const db = await getTursoClient();
+  const db = database ?? await getTursoClient();
   let reportingRange = range;
   if (range.allTime) {
     const earliestOrderResult = await db.execute("SELECT MIN(source_created_at) AS first_order_at FROM orders");
@@ -516,10 +530,24 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
                 FROM orders
                 ORDER BY source_created_at ASC, id ASC`),
     db.execute({
-      sql: `SELECT o.id AS order_id, o.source_created_at, o.financial_status, o.cancelled_at,
+      sql: `WITH relevant_order_ids AS (
+              SELECT o.id
+              FROM orders o
+              WHERE o.source_created_at >= ? AND o.source_created_at < ?
+              UNION
+              SELECT refund.order_id
+              FROM shopify_refund_line_items refund
+              WHERE refund.processed_at >= ? AND refund.processed_at < ?
+              UNION
+              SELECT after_sale.order_id
+              FROM tiktok_after_sales_line_items after_sale
+              WHERE after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?
+            )
+            SELECT o.id AS order_id, o.source_created_at, o.financial_status, o.cancelled_at,
                    oi.id AS order_item_id, oi.source_line_item_id, oi.quantity,
                    component.physical_variant_id, component.quantity_per_sale
-            FROM orders o
+            FROM relevant_order_ids relevant
+            JOIN orders o ON o.id = relevant.id
             JOIN order_items oi ON oi.order_id = o.id
             JOIN physical_channel_listings listing
               ON listing.active = 1 AND listing.mapping_status = 'confirmed' AND listing.channel = o.source
@@ -532,40 +560,36 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
                        AND exact_listing.external_product_id = oi.source_product_id
                        AND exact_listing.external_variant_id = oi.source_variant_id
                    )))))
-            JOIN physical_listing_components component ON component.listing_id = listing.id
-            JOIN physical_inventory_variants physical_variant ON physical_variant.id = component.physical_variant_id AND physical_variant.active = 1
-            WHERE (o.source_created_at >= ? AND o.source_created_at < ?)
-               OR EXISTS (SELECT 1 FROM shopify_refund_line_items refund
-                          WHERE refund.order_id = o.id AND refund.processed_at >= ? AND refund.processed_at < ?)
-               OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items after_sale
-                          WHERE after_sale.order_id = o.id AND after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?)
-            ORDER BY o.source_created_at ASC, o.id, oi.rowid, component.physical_variant_id`,
+             JOIN physical_listing_components component ON component.listing_id = listing.id
+             JOIN physical_inventory_variants physical_variant ON physical_variant.id = component.physical_variant_id AND physical_variant.active = 1
+             ORDER BY o.source_created_at ASC, o.id, oi.rowid, component.physical_variant_id`,
       args: [restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive],
     }),
-    db.execute(`SELECT physical_variant.id, physical_item.title AS product_title, physical_variant.title AS variant_title,
+    db.execute(`WITH first_paid_sales AS (
+                  SELECT component.physical_variant_id, MIN(o.source_created_at) AS first_paid_sale_at
+                  FROM physical_listing_components component
+                  JOIN physical_channel_listings listing ON listing.id = component.listing_id
+                    AND listing.active = 1 AND listing.mapping_status = 'confirmed'
+                  JOIN order_items oi
+                    ON ((listing.channel = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
+                      OR (listing.channel = 'tiktok' AND listing.external_product_id = oi.source_product_id
+                        AND (listing.external_variant_id = oi.source_variant_id
+                          OR (listing.external_variant_id IS NULL AND NOT EXISTS (
+                            SELECT 1 FROM physical_channel_listings exact_listing
+                            WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                              AND exact_listing.external_product_id = oi.source_product_id
+                              AND exact_listing.external_variant_id = oi.source_variant_id
+                          )))))
+                  JOIN orders o ON o.id = oi.order_id AND o.source = listing.channel
+                  WHERE o.cancelled_at IS NULL AND o.financial_status <> 'pending'
+                  GROUP BY component.physical_variant_id
+                )
+                SELECT physical_variant.id, physical_item.title AS product_title, physical_variant.title AS variant_title,
                        CASE WHEN physical_variant.quantity_known = 1 THEN physical_variant.quantity ELSE NULL END AS counted_stock,
-                       physical_item.lead_time_days,
-                       (
-                         SELECT MIN(o.source_created_at)
-                         FROM physical_listing_components component
-                         JOIN physical_channel_listings listing ON listing.id = component.listing_id
-                           AND listing.active = 1 AND listing.mapping_status = 'confirmed'
-                         JOIN order_items oi
-                           ON ((listing.channel = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
-                             OR (listing.channel = 'tiktok' AND listing.external_product_id = oi.source_product_id
-                               AND (listing.external_variant_id = oi.source_variant_id
-                                 OR (listing.external_variant_id IS NULL AND NOT EXISTS (
-                                   SELECT 1 FROM physical_channel_listings exact_listing
-                                   WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
-                                     AND exact_listing.external_product_id = oi.source_product_id
-                                     AND exact_listing.external_variant_id = oi.source_variant_id
-                                 )))))
-                         JOIN orders o ON o.id = oi.order_id AND o.source = listing.channel
-                         WHERE component.physical_variant_id = physical_variant.id
-                           AND o.cancelled_at IS NULL AND o.financial_status <> 'pending'
-                       ) AS first_paid_sale_at
+                       physical_item.lead_time_days, first_paid_sales.first_paid_sale_at
                 FROM physical_inventory_variants physical_variant
                 JOIN physical_inventory_items physical_item ON physical_item.id = physical_variant.physical_item_id
+                LEFT JOIN first_paid_sales ON first_paid_sales.physical_variant_id = physical_variant.id
                 WHERE physical_variant.active = 1 AND physical_item.active = 1
                 ORDER BY physical_item.title ASC, physical_variant.sort_order ASC, physical_variant.title ASC`),
     db.execute("SELECT finished_at FROM sync_runs WHERE status = 'succeeded' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1"),
@@ -592,16 +616,173 @@ export async function getKpiDashboard(range: KpiPeriod): Promise<KpiDashboard> {
   });
 }
 
-/** Deterministic, read-only Product Health Report composed from existing reporting and inventory contracts. */
-export async function getProductHealthReport(range: KpiPeriod, selectedProductId?: string): Promise<ProductHealthReport> {
-  const [dashboard, inventory, shopifyListings, tiktokListings, runways] = await Promise.all([
-    getKpiDashboard(range),
-    getPhysicalInventory(),
-    getPhysicalChannelListings("shopify"),
-    getPhysicalChannelListings("tiktok"),
-    getPhysicalInventoryRunways(),
+/** Calendar product comparison read. Bucketing and winner rules remain in the pure KPI domain. */
+export async function getKpiProductComparison(spec: ComparisonSpec): Promise<KpiProductComparison> {
+  const range = comparisonDateRange(spec);
+  const db = await getTursoClient();
+  const queryStart = shiftKpiDate(range.start, -1);
+  const queryEndExclusive = shiftKpiDate(range.end, 2);
+  const [salesResult, shopifyRefunds, tiktokRefunds] = await Promise.all([
+    db.execute({
+      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
+                   o.customer_name, o.customer_email, o.customer_phone,
+                   oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
+                   physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN physical_channel_listings listing
+              ON listing.active = 1 AND listing.mapping_status = 'confirmed' AND listing.channel = o.source
+             AND ((o.source = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
+               OR (o.source = 'tiktok' AND listing.external_product_id = oi.source_product_id
+                 AND (listing.external_variant_id = oi.source_variant_id
+                   OR (listing.external_variant_id IS NULL AND NOT EXISTS (
+                     SELECT 1 FROM physical_channel_listings exact_listing
+                     WHERE exact_listing.channel = 'tiktok' AND exact_listing.active = 1
+                       AND exact_listing.external_product_id = oi.source_product_id
+                       AND exact_listing.external_variant_id = oi.source_variant_id
+                   )))))
+            LEFT JOIN physical_channel_product_links product_link
+              ON product_link.channel = listing.channel AND product_link.external_product_id = listing.external_product_id
+            LEFT JOIN physical_inventory_items physical_item
+              ON physical_item.id = product_link.physical_item_id AND physical_item.active = 1
+            WHERE (o.source_created_at >= ? AND o.source_created_at < ?)
+               OR EXISTS (SELECT 1 FROM shopify_refund_line_items refund
+                          WHERE refund.order_id = o.id AND refund.processed_at >= ? AND refund.processed_at < ?)
+               OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items after_sale
+                          WHERE after_sale.order_id = o.id AND after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?)
+            ORDER BY o.source_created_at ASC, o.id, oi.rowid`,
+      args: [queryStart, queryEndExclusive, queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT order_id, source_line_item_id, quantity, processed_at
+            FROM shopify_refund_line_items refund
+            JOIN orders ordinary ON ordinary.id = refund.order_id
+            WHERE refund.processed_at < ?
+              AND ((ordinary.source_created_at >= ? AND ordinary.source_created_at < ?)
+                OR EXISTS (SELECT 1 FROM shopify_refund_line_items current_refund
+                           WHERE current_refund.order_id = refund.order_id
+                             AND current_refund.processed_at >= ? AND current_refund.processed_at < ?))`,
+      args: [queryEndExclusive, queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT refund.order_id, refund.source_line_item_id, refund.quantity, refund.source_updated_at
+            FROM tiktok_after_sales_line_items refund
+            JOIN orders ordinary ON ordinary.id = refund.order_id
+            WHERE refund.event_type = 'return' AND refund.return_type = 'RETURN_AND_REFUND'
+              AND refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+              AND refund.source_updated_at < ?
+              AND ((ordinary.source_created_at >= ? AND ordinary.source_created_at < ?)
+                OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items current_refund
+                           WHERE current_refund.order_id = refund.order_id
+                             AND current_refund.event_type = 'return' AND current_refund.return_type = 'RETURN_AND_REFUND'
+                             AND current_refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+                             AND current_refund.source_updated_at >= ? AND current_refund.source_updated_at < ?))`,
+      args: [queryEndExclusive, queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
   ]);
-  return buildProductHealthReport({ dashboard, inventory, listings: [...shopifyListings, ...tiktokListings], runways, selectedProductId });
+  return buildKpiProductComparison({
+    spec,
+    sales: groupKpiSales(salesResult.rows),
+    refunds: [
+      ...shopifyRefunds.rows.map((row) => ({
+        orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.processed_at),
+      })),
+      ...tiktokRefunds.rows.map((row) => ({
+        orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
+      })),
+    ],
+  });
+}
+
+/** Four-week affiliate comparison read with stable provider creator and product identifiers. */
+export async function getTikTokAffiliateComparison(spec: ComparisonSpec): Promise<TikTokAffiliateComparison> {
+  const range = comparisonDateRange(spec);
+  const db = await getTursoClient();
+  const queryStart = shiftKpiDate(range.start, -1);
+  const queryEndExclusive = shiftKpiDate(range.end, 2);
+  const [orders, refunds, videos] = await Promise.all([
+    db.execute({
+      sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
+                    affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
+                    affiliate.creator_open_id, affiliate.creator_username, affiliate.source_product_id,
+                    COALESCE(
+                      NULLIF(TRIM(affiliate.product_title), ''),
+                      (
+                        SELECT listing.title
+                        FROM physical_channel_listings listing
+                        WHERE listing.channel = 'tiktok'
+                          AND listing.external_product_id = affiliate.source_product_id
+                          AND listing.title IS NOT NULL AND TRIM(listing.title) <> ''
+                        ORDER BY listing.active DESC, listing.updated_at DESC, listing.id ASC
+                        LIMIT 1
+                      ),
+                      CASE WHEN affiliate.source_product_id IS NOT NULL AND TRIM(affiliate.source_product_id) <> ''
+                        THEN 'TikTok product ' || affiliate.source_product_id ELSE NULL END
+                    ) AS product_title,
+                    ordinary.financial_status, ordinary.cancelled_at
+             FROM tiktok_affiliate_orders affiliate
+             LEFT JOIN orders ordinary ON ordinary.source = 'tiktok' AND ordinary.source_order_id = affiliate.source_order_id
+             WHERE affiliate.source_created_at >= ? AND affiliate.source_created_at < ?
+                OR EXISTS (
+                  SELECT 1 FROM tiktok_after_sales_line_items refund
+                  WHERE refund.order_id = ordinary.id AND refund.source_line_item_id = affiliate.source_line_item_id
+                    AND refund.event_type = 'return' AND refund.return_type = 'RETURN_AND_REFUND'
+                    AND refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+                    AND refund.source_updated_at >= ? AND refund.source_updated_at < ?
+                )
+             ORDER BY affiliate.source_created_at ASC, affiliate.id ASC`,
+      args: [queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT ordinary.source_order_id, refund.source_line_item_id, refund.quantity, refund.source_updated_at
+             FROM tiktok_after_sales_line_items refund
+             JOIN orders ordinary ON ordinary.id = refund.order_id
+             JOIN tiktok_affiliate_orders affiliate
+               ON affiliate.source_order_id = ordinary.source_order_id
+              AND affiliate.source_line_item_id = refund.source_line_item_id
+             WHERE ordinary.source = 'tiktok' AND refund.event_type = 'return' AND refund.return_type = 'RETURN_AND_REFUND'
+               AND refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+               AND refund.source_updated_at < ?
+               AND ((affiliate.source_created_at >= ? AND affiliate.source_created_at < ?)
+                 OR EXISTS (SELECT 1 FROM tiktok_after_sales_line_items current_refund
+                            WHERE current_refund.order_id = refund.order_id
+                              AND current_refund.source_line_item_id = refund.source_line_item_id
+                              AND current_refund.event_type = 'return' AND current_refund.return_type = 'RETURN_AND_REFUND'
+                              AND current_refund.status IN ('RETURN_OR_REFUND_REQUEST_SUCCESS', 'RETURN_OR_REFUND_REQUEST_COMPLETE')
+                              AND current_refund.source_updated_at >= ? AND current_refund.source_updated_at < ?))`,
+      args: [queryEndExclusive, queryStart, queryEndExclusive, queryStart, queryEndExclusive],
+    }),
+    db.execute({
+      sql: `SELECT id, creator_open_id, creator_username, published_at
+             FROM tiktok_affiliate_videos WHERE published_at >= ? AND published_at < ? ORDER BY published_at ASC, id ASC`,
+      args: [queryStart, queryEndExclusive],
+    }),
+  ]);
+  return buildTikTokAffiliateComparison({
+    spec,
+    orders: orders.rows.map((row) => ({
+      id: stringValue(row.id), orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id),
+      createdAt: stringValue(row.source_created_at), quantity: numberValue(row.quantity), grossAmount: numberValue(row.gross_amount_minor),
+      estimatedCommission: numberValue(row.estimated_commission_minor),
+      creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
+      creatorName: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      product: optionalString(row.product_title) ?? null,
+      productId: optionalString(row.source_product_id) ?? optionalString(row.product_title) ?? null,
+      productTitle: optionalString(row.product_title) ?? null,
+      linked: row.financial_status == null ? null : { financialStatus: stringValue(row.financial_status), cancelledAt: optionalString(row.cancelled_at) ?? null },
+    })),
+    refunds: refunds.rows.map((row) => ({
+      orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
+    })),
+    videos: videos.rows.map((row) => ({
+      id: stringValue(row.id),
+      creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
+      creatorName: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      publishedAt: optionalString(row.published_at) ?? null,
+    })),
+  });
 }
 
 /** Server-shaped affiliate reporting read. TikTok affiliate records remain distinct from ordinary orders until a stable ID join succeeds. */
@@ -621,7 +802,7 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
     db.execute({
       sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
                     affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
-                    affiliate.creator_open_id, affiliate.creator_username,
+                    affiliate.creator_open_id, affiliate.creator_username, affiliate.source_product_id,
                     COALESCE(
                       NULLIF(TRIM(affiliate.product_title), ''),
                       (
@@ -677,11 +858,21 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
       createdAt: stringValue(row.source_created_at), quantity: numberValue(row.quantity), grossAmount: numberValue(row.gross_amount_minor),
       estimatedCommission: numberValue(row.estimated_commission_minor),
       creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
+      creatorName: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
       product: optionalString(row.product_title) ?? null,
+      productId: optionalString(row.source_product_id) ?? optionalString(row.product_title) ?? null,
+      productTitle: optionalString(row.product_title) ?? null,
       linked: row.financial_status == null ? null : { financialStatus: stringValue(row.financial_status), cancelledAt: optionalString(row.cancelled_at) ?? null },
     })),
     refunds: refunds.rows.map((row) => ({ orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at) })),
-    videos: videos.rows.map((row) => ({ id: stringValue(row.id), creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null, publishedAt: optionalString(row.published_at) ?? null })),
+    videos: videos.rows.map((row) => ({
+      id: stringValue(row.id),
+      creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
+      creatorName: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
+      publishedAt: optionalString(row.published_at) ?? null,
+    })),
     freshness: freshness.rows[0] ? { lastSuccessfulAt: optionalString(freshness.rows[0].last_successful_at) ?? null, lastErrorAt: optionalString(freshness.rows[0].last_error_at) ?? null } : null,
   });
 }
@@ -696,7 +887,9 @@ function labIngredientId(title: string) {
   return `lab-ingredient-${createHash("sha256").update(title).digest("hex").slice(0, 16)}`;
 }
 
-async function ensureLabsData() {
+/** Explicitly initializes the code-owned starter Labs catalogue. Read methods
+ * must call getTursoClient directly so an assistant read can never seed data. */
+export async function initializeLabsData() {
   const db = await getTursoClient();
   const now = new Date().toISOString();
   const ingredients = [...new Set(LAB_FORMULAS.flatMap((formula) => formula.lines.map((line) => line.ingredient)))];
@@ -1934,6 +2127,8 @@ export async function deletePhysicalInventoryVariant(variantId: string) {
     itemId = stringValue(variant.rows[0].physical_item_id);
     const mappings = await transaction.execute({ sql: "SELECT COUNT(*) AS mapping_count FROM physical_listing_components WHERE physical_variant_id = ?", args: [variantId] });
     if (numberValue(mappings.rows[0]?.mapping_count) > 0) throw new Error("Remove this variant's channel mappings before deleting it");
+    const formulaOutputs = await transaction.execute({ sql: "SELECT COUNT(*) AS output_count FROM lab_formula_outputs WHERE physical_variant_id = ? AND active = 1", args: [variantId] });
+    if (numberValue(formulaOutputs.rows[0]?.output_count) > 0) throw new Error("Remove this variant's Labs formula output link before deleting it");
     const remaining = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1", args: [itemId] });
     if (numberValue(remaining.rows[0]?.variant_count) <= 1) throw new Error("A product must keep at least one variant");
     const now = new Date().toISOString();
@@ -2379,7 +2574,7 @@ export async function updatePhysicalTikTokListingMetadata(updates: Array<{
 }
 
 export async function getPhysicalChannelListings(channel: PhysicalChannel): Promise<PhysicalChannelListing[]> {
-  const db = await ensurePhysicalChannelListings();
+  const db = await getTursoClient();
   const result = await db.execute({
     sql: `SELECT l.id, l.channel, l.external_product_id, l.external_variant_id, l.title, l.variant_title,
                  l.image_url, l.listing_url, l.channel_quantity, l.listing_kind, l.mapping_status, l.source_note,
@@ -2542,7 +2737,7 @@ export async function savePhysicalListingMappings(input: { mappings: Array<{ lis
   } finally {
     transaction.close();
   }
-  revalidatePath("/kpis");
+  invalidateKpiReportingCache();
   return getPhysicalChannelListings([...channels][0]);
 }
 
@@ -2581,7 +2776,7 @@ export async function savePhysicalChannelProductLink(input: { channel: PhysicalC
   } finally {
     transaction.close();
   }
-  revalidatePath("/kpis");
+  invalidateKpiReportingCache();
   return getPhysicalChannelListings(input.channel);
 }
 
@@ -3040,7 +3235,7 @@ export async function recordSyncRun(input: {
       sql: `DELETE FROM sync_runs WHERE started_at < ?`,
       args: [new Date(Date.now() - SYNC_RUN_RETENTION_DAYS * 86_400_000).toISOString()],
     });
-    revalidatePath("/kpis");
+    invalidateKpiReportingCache();
   }
 }
 
@@ -3073,6 +3268,30 @@ function batchQuantity(value: number) {
   return Math.round(value * 1000) / 1000;
 }
 
+function productionQuantity(value: number, allowZero = false) {
+  if (!Number.isFinite(value) || value < (allowZero ? 0 : 0.001) || value > 10_000_000) {
+    throw new Error(`Production quantity must be between ${allowZero ? "0" : "0.001"} and 10,000,000`);
+  }
+  return Math.round(value * 1000) / 1000;
+}
+
+function productionUnit(value: unknown): LabQuantityUnit {
+  if (value === "g" || value === "ml") return value;
+  throw new Error("Choose grams or milliliters");
+}
+
+function toLabFormulaOutput(row: Record<string, unknown> | undefined): LabFormulaOutput | null {
+  if (!row || !row.output_id) return null;
+  return {
+    id: stringValue(row.output_id),
+    physicalVariantId: stringValue(row.physical_variant_id),
+    product: stringValue(row.output_product),
+    variant: stringValue(row.output_variant),
+    fillQuantity: numberValue(row.fill_quantity),
+    fillUnit: productionUnit(row.fill_unit),
+  };
+}
+
 function toLabFormulaLine(row: Record<string, unknown>): LabFormulaLine {
   const calculation = stringValue(row.calculation);
   return {
@@ -3088,7 +3307,7 @@ function toLabFormulaLine(row: Record<string, unknown>): LabFormulaLine {
 }
 
 export async function getLabIngredients(): Promise<LabIngredient[]> {
-  const db = await ensureLabsData();
+  const db = await getTursoClient();
   const result = await db.execute(`
     SELECT i.id, i.title, i.quantity_grams, i.quantity_known, i.reorder_point_grams, i.updated_at,
            COUNT(DISTINCT fi.formula_id) AS formula_count
@@ -3106,20 +3325,25 @@ export async function getLabIngredients(): Promise<LabIngredient[]> {
 }
 
 export async function getLabFormulas(): Promise<LabFormula[]> {
-  const db = await ensureLabsData();
+  const db = await getTursoClient();
   const result = await db.execute(`
-    SELECT f.id, f.title, f.subtitle, f.notes, COUNT(fi.id) AS ingredient_count
+    SELECT f.id, f.title, f.subtitle, f.notes, COUNT(fi.id) AS ingredient_count,
+           fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
+           pi.title AS output_product, piv.title AS output_variant
     FROM lab_formulas f LEFT JOIN lab_formula_ingredients fi ON fi.formula_id = f.id
+    LEFT JOIN lab_formula_outputs fo ON fo.formula_id = f.id AND fo.active = 1
+    LEFT JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
+    LEFT JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1
     WHERE f.active = 1 GROUP BY f.id ORDER BY f.title
   `);
   return result.rows.map((row) => ({
     id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes),
-    ingredientCount: numberValue(row.ingredient_count), lines: [],
+    ingredientCount: numberValue(row.ingredient_count), lines: [], output: toLabFormulaOutput(row as Record<string, unknown>),
   }));
 }
 
 export async function getLabFormula(id: string): Promise<LabFormula | null> {
-  const db = await ensureLabsData();
+  const db = await getTursoClient();
   const formula = await db.execute({ sql: "SELECT id, title, subtitle, notes FROM lab_formulas WHERE id = ? AND active = 1", args: [id] });
   const row = formula.rows[0];
   if (!row) return null;
@@ -3128,18 +3352,61 @@ export async function getLabFormula(id: string): Promise<LabFormula | null> {
           FROM lab_formula_ingredients fi JOIN lab_ingredients i ON i.id = fi.ingredient_id
           WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [id],
   });
-  return { id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes), ingredientCount: lines.rows.length, lines: lines.rows.map((line) => toLabFormulaLine(line as Record<string, unknown>)) };
+  const output = await db.execute({
+    sql: `SELECT fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
+                 pi.title AS output_product, piv.title AS output_variant
+          FROM lab_formula_outputs fo
+          JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
+          JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1
+          WHERE fo.formula_id = ? AND fo.active = 1`,
+    args: [id],
+  });
+  return { id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes), ingredientCount: lines.rows.length, lines: lines.rows.map((line) => toLabFormulaLine(line as Record<string, unknown>)), output: toLabFormulaOutput(output.rows[0] as Record<string, unknown> | undefined) };
 }
 
+function toLabBatch(row: Record<string, unknown>): LabBatch {
+  const outputQuantity = numberValue(row.output_quantity);
+  const packagedQuantity = numberValue(row.packaged_quantity);
+  const output = toLabFormulaOutput(row);
+  let packagedUnitsValue = 0;
+  if (output && stringValue(row.output_unit) === output.fillUnit) {
+    try { packagedUnitsValue = packagedUnits(packagedQuantity, output.fillUnit, output.fillQuantity, output.fillUnit); } catch { packagedUnitsValue = 0; }
+  }
+  return {
+    id: stringValue(row.id), formula: stringValue(row.formula), batchNumber: stringValue(row.batch_number), targetGrams: numberValue(row.target_grams),
+    outputQuantity, outputUnit: productionUnit(row.output_unit || "g"), packagedQuantity,
+    remainingQuantity: Math.max(0, Math.round((outputQuantity - packagedQuantity) * 1_000_000) / 1_000_000), packagedUnits: packagedUnitsValue,
+    output, actor: stringValue(row.actor), createdAt: stringValue(row.created_at),
+  };
+}
+
+const labBatchSelect = `SELECT b.id, b.formula_id, b.batch_number, b.target_grams, b.actor, b.created_at, f.title AS formula,
+       COALESCE(a.total_quantity, b.target_grams) AS output_quantity,
+       COALESCE(a.quantity_unit, 'g') AS output_unit,
+       COALESCE(a.packaged_quantity, 0) AS packaged_quantity,
+       fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
+       pi.title AS output_product, piv.title AS output_variant
+       FROM lab_batches b
+       JOIN lab_formulas f ON f.id = b.formula_id
+       LEFT JOIN lab_batch_allocations a ON a.batch_id = b.id
+       LEFT JOIN lab_formula_outputs fo ON fo.formula_id = b.formula_id AND fo.active = 1
+       LEFT JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
+       LEFT JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1`;
+
 export async function getLabBatches(limit = 100, formulaId?: string): Promise<LabBatch[]> {
-  const db = await ensureLabsData();
+  const db = await getTursoClient();
   const result = await db.execute({
-    sql: `SELECT b.id, b.batch_number, b.target_grams, b.actor, b.created_at, f.title AS formula
-          FROM lab_batches b JOIN lab_formulas f ON f.id = b.formula_id
-          ${formulaId ? "WHERE b.formula_id = ?" : ""}
-          ORDER BY b.created_at DESC LIMIT ?`, args: formulaId ? [formulaId, Math.min(Math.max(1, limit), 100)] : [Math.min(Math.max(1, limit), 100)],
+    sql: `${labBatchSelect} ${formulaId ? "WHERE b.formula_id = ?" : ""} ORDER BY b.created_at DESC LIMIT ?`, args: formulaId ? [formulaId, Math.min(Math.max(1, limit), 100)] : [Math.min(Math.max(1, limit), 100)],
   });
-  return result.rows.map((row) => ({ id: stringValue(row.id), formula: stringValue(row.formula), batchNumber: stringValue(row.batch_number), targetGrams: numberValue(row.target_grams), actor: stringValue(row.actor), createdAt: stringValue(row.created_at) }));
+  return result.rows.map((row) => toLabBatch(row as Record<string, unknown>));
+}
+
+export async function getLabBatchDetail(id: string): Promise<LabBatchDetail | null> {
+  const db = await getTursoClient();
+  const result = await db.execute({ sql: `${labBatchSelect} WHERE b.id = ? LIMIT 1`, args: [id] });
+  const row = result.rows[0];
+  if (!row) return null;
+  return { ...toLabBatch(row as Record<string, unknown>), formulaId: stringValue(row.formula_id) };
 }
 
 export async function createLabFormula(input: {
@@ -3147,6 +3414,7 @@ export async function createLabFormula(input: {
   subtitle?: string;
   notes?: string;
   lines: Array<{ ingredient: string; calculation: "fixed" | "remainder" | "manual"; percentage?: number; phase?: string; note?: string }>;
+  output?: { physicalVariantId: string; fillQuantity: number; fillUnit: LabQuantityUnit };
 }) {
   const title = input.title.trim();
   const subtitle = input.subtitle?.trim() ?? "";
@@ -3169,8 +3437,9 @@ export async function createLabFormula(input: {
   if (new Set(lines.map((line) => line.ingredient.toLocaleLowerCase())).size !== lines.length) throw new Error("Use each ingredient only once in a formula");
   if (lines.filter((line) => line.calculation === "remainder").length > 1) throw new Error("A formula can have only one remainder-to-100% ingredient");
   if (lines.filter((line) => line.calculation === "fixed").reduce((sum, line) => sum + (line.percentage ?? 0), 0) > 100) throw new Error("Fixed percentages cannot total more than 100%");
+  const output = input.output ? { ...input.output, fillQuantity: productionQuantity(input.output.fillQuantity) } : undefined;
 
-  const db = await ensureLabsData();
+  const db = await initializeLabsData();
   const formulaId = `lab-formula-${randomUUID()}`;
   const now = new Date().toISOString();
   const transaction = await db.transaction("write");
@@ -3192,6 +3461,20 @@ export async function createLabFormula(input: {
         args: [`${formulaId}-line-${index + 1}`, formulaId, labIngredientId(line.ingredient), line.percentage, line.calculation, line.phase || null, line.note || null, index],
       });
     }
+    if (output) {
+      const variant = await transaction.execute({
+        sql: `SELECT piv.id FROM physical_inventory_variants piv
+              JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+              WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
+        args: [output.physicalVariantId],
+      });
+      if (!variant.rows[0]) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
+      await transaction.execute({
+        sql: `INSERT INTO lab_formula_outputs (id, formula_id, physical_variant_id, fill_quantity, fill_unit, active, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        args: [`lab-output-${randomUUID()}`, formulaId, output.physicalVariantId, output.fillQuantity, productionUnit(output.fillUnit), now, now],
+      });
+    }
     await transaction.commit();
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
   const formula = await getLabFormula(formulaId);
@@ -3199,8 +3482,41 @@ export async function createLabFormula(input: {
   return formula;
 }
 
+export async function updateLabFormulaOutput(input: {
+  formulaId: string;
+  physicalVariantId: string;
+  fillQuantity: number;
+  fillUnit: LabQuantityUnit;
+}) {
+  const fillQuantity = productionQuantity(input.fillQuantity);
+  const fillUnit = productionUnit(input.fillUnit);
+  const db = await initializeLabsData();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const formula = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
+    if (!formula.rows[0]) throw new Error("LAB_FORMULA_NOT_FOUND");
+    const variant = await transaction.execute({
+      sql: `SELECT piv.id FROM physical_inventory_variants piv
+            JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+            WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
+      args: [input.physicalVariantId],
+    });
+    if (!variant.rows[0]) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
+    await transaction.execute({
+      sql: `INSERT INTO lab_formula_outputs (id, formula_id, physical_variant_id, fill_quantity, fill_unit, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(formula_id) DO UPDATE SET physical_variant_id = excluded.physical_variant_id,
+              fill_quantity = excluded.fill_quantity, fill_unit = excluded.fill_unit, active = 1, updated_at = excluded.updated_at`,
+      args: [`lab-output-${randomUUID()}`, input.formulaId, input.physicalVariantId, fillQuantity, fillUnit, now, now],
+    });
+    await transaction.commit();
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+  return getLabFormula(input.formulaId);
+}
+
 export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; actor: string }) {
-  const db = await ensureLabsData();
+  const db = await initializeLabsData();
   const quantity = labQuantity(input.quantityGrams);
   const reorderPoint = input.reorderPointGrams === undefined ? undefined : labQuantity(input.reorderPointGrams);
   const transaction = await db.transaction("write");
@@ -3219,8 +3535,15 @@ export async function updateLabIngredient(input: { id: string; quantityGrams: nu
   return getLabIngredients();
 }
 
-export async function createLabBatch(input: { formulaId: string; batchNumber: string; targetGrams: number; actor: string }) {
-  const db = await ensureLabsData();
+export async function createLabBatch(input: {
+  formulaId: string;
+  batchNumber: string;
+  targetGrams: number;
+  outputQuantity?: number;
+  outputUnit?: LabQuantityUnit;
+  actor: string;
+}) {
+  const db = await initializeLabsData();
   const batchNumber = input.batchNumber.trim();
   if (batchNumber.length < 1 || batchNumber.length > 80) throw new Error("Enter a batch number of up to 80 characters");
   const targetGrams = batchQuantity(input.targetGrams);
@@ -3229,6 +3552,23 @@ export async function createLabBatch(input: { formulaId: string; batchNumber: st
   try {
     const formula = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
     if (!formula.rows[0]) throw new Error("LAB_FORMULA_NOT_FOUND");
+    const outputResult = await transaction.execute({
+      sql: `SELECT fo.physical_variant_id, fo.fill_quantity, fo.fill_unit
+            FROM lab_formula_outputs fo
+            WHERE fo.formula_id = ? AND fo.active = 1`,
+      args: [input.formulaId],
+    });
+    const outputRow = outputResult.rows[0];
+    const output = outputRow ? {
+      physicalVariantId: stringValue(outputRow.physical_variant_id),
+      fillQuantity: numberValue(outputRow.fill_quantity),
+      fillUnit: productionUnit(outputRow.fill_unit),
+    } : null;
+    const outputUnit = input.outputUnit ?? output?.fillUnit ?? "g";
+    productionUnit(outputUnit);
+    if (output && outputUnit !== output.fillUnit) throw new Error("LAB_OUTPUT_UNIT_MISMATCH");
+    const outputQuantity = input.outputQuantity === undefined ? targetGrams : productionQuantity(input.outputQuantity);
+    calculateBatchAllocation(outputQuantity, 0, outputUnit);
     const rows = await transaction.execute({ sql: `SELECT fi.ingredient_id, fi.percentage, fi.calculation, i.title, i.quantity_grams, i.quantity_known
       FROM lab_formula_ingredients fi JOIN lab_ingredients i ON i.id = fi.ingredient_id
       WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [input.formulaId] });
@@ -3240,20 +3580,102 @@ export async function createLabBatch(input: { formulaId: string; batchNumber: st
       const percentage = line.calculation === "remainder" ? 100 - fixedTotal : line.percentage ?? 0;
       return [{ ...line, required: Math.round(targetGrams * percentage * 10) / 1000 }];
     });
-    const unavailable = requirements.filter((line) => !line.known || line.quantity + 0.00001 < line.required);
-    if (unavailable.length) throw new Error(`LAB_INGREDIENTS_UNAVAILABLE:${unavailable.map((line) => line.title).join(", ")}`);
     const duplicate = await transaction.execute({ sql: "SELECT id FROM lab_batches WHERE batch_number = ?", args: [batchNumber] });
     if (duplicate.rows[0]) throw new Error("LAB_BATCH_ALREADY_EXISTS");
     const batchId = `lab-batch-${randomUUID()}`;
     await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor, now] });
+    await transaction.execute({
+      sql: "INSERT INTO lab_batch_allocations (batch_id, total_quantity, quantity_unit, packaged_quantity, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)",
+      args: [batchId, outputQuantity, outputUnit, now, now],
+    });
     for (const line of requirements) {
-      const after = Math.round((line.quantity - line.required) * 1000) / 1000;
-      await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, updated_at = ? WHERE id = ?", args: [after, now, line.id] });
-      await transaction.execute({ sql: "INSERT INTO lab_batch_ingredients (id, batch_id, ingredient_id, required_grams, quantity_before, quantity_after) VALUES (?, ?, ?, ?, ?, ?)", args: [randomUUID(), batchId, line.id, line.required, line.quantity, after] });
-      await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, batch_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
-        VALUES (?, ?, ?, 'batch_deduct', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), line.id, batchId, input.actor, line.quantity, after, -line.required, batchNumber, now] });
+      const deduction = planIngredientDeduction(line.quantity, line.known, line.required);
+      if (deduction.status === "deducted") {
+        await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, updated_at = ? WHERE id = ?", args: [deduction.after, now, line.id] });
+        await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, batch_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
+          VALUES (?, ?, ?, 'batch_deduct', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), line.id, batchId, input.actor, deduction.before, deduction.after, -deduction.deducted, batchNumber, now] });
+      }
+      await transaction.execute({ sql: "INSERT INTO lab_batch_ingredients (id, batch_id, ingredient_id, required_grams, quantity_before, quantity_after) VALUES (?, ?, ?, ?, ?, ?)", args: [randomUUID(), batchId, line.id, deduction.required, deduction.before, deduction.after] });
     }
     await transaction.commit();
-    return { id: batchId, batchNumber, targetGrams };
+    return { id: batchId, batchNumber, targetGrams, outputQuantity, outputUnit };
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+}
+
+export async function updateLabBatchPackaging(input: {
+  batchId: string;
+  addedQuantity: number;
+  actor: string;
+}) {
+  const added = productionQuantity(input.addedQuantity);
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  try {
+    const batch = await transaction.execute({
+      sql: `SELECT b.id, b.formula_id, b.target_grams,
+                   COALESCE(a.total_quantity, b.target_grams) AS total_quantity,
+                   COALESCE(a.quantity_unit, 'g') AS quantity_unit,
+                   COALESCE(a.packaged_quantity, 0) AS packaged_quantity,
+                   fo.physical_variant_id, fo.fill_quantity, fo.fill_unit
+            FROM lab_batches b
+            LEFT JOIN lab_batch_allocations a ON a.batch_id = b.id
+            LEFT JOIN lab_formula_outputs fo ON fo.formula_id = b.formula_id AND fo.active = 1
+            WHERE b.id = ? LIMIT 1`,
+      args: [input.batchId],
+    });
+    const row = batch.rows[0];
+    if (!row) throw new Error("LAB_BATCH_NOT_FOUND");
+
+    const total = productionQuantity(numberValue(row.total_quantity));
+    const unit = productionUnit(row.quantity_unit);
+    const current = productionQuantity(numberValue(row.packaged_quantity), true);
+    const allocation = addPackagingIncrement(total, current, added, unit);
+
+    const variantId = stringValue(row.physical_variant_id);
+    if (!variantId) throw new Error("LAB_OUTPUT_NOT_LINKED");
+    const fillUnit = productionUnit(row.fill_unit);
+    if (unit !== fillUnit) throw new Error("LAB_OUTPUT_UNIT_MISMATCH");
+    const finishedUnits = packagedUnits(added, unit, productionQuantity(numberValue(row.fill_quantity)), fillUnit);
+    const variant = await transaction.execute({
+      sql: `SELECT piv.id, piv.physical_item_id, piv.quantity, piv.quantity_known
+            FROM physical_inventory_variants piv
+            JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+            WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
+      args: [variantId],
+    });
+    const variantRow = variant.rows[0];
+    if (!variantRow) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
+    const before = numberValue(variantRow.quantity);
+    const after = before + finishedUnits;
+    if (!Number.isSafeInteger(after)) throw new Error("MASTER_INVENTORY_LIMIT");
+    const itemId = stringValue(variantRow.physical_item_id);
+
+    await transaction.execute({
+      sql: `INSERT INTO lab_batch_allocations (batch_id, total_quantity, quantity_unit, packaged_quantity, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(batch_id) DO UPDATE SET packaged_quantity = excluded.packaged_quantity, updated_at = excluded.updated_at`,
+      args: [input.batchId, allocation.total, allocation.unit, allocation.packaged, now, now],
+    });
+    await transaction.execute({
+      sql: "UPDATE physical_inventory_variants SET quantity = ?, updated_at = ? WHERE id = ?",
+      args: [after, now, variantId],
+    });
+    await transaction.execute({
+      sql: `UPDATE physical_inventory_items
+            SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0),
+                quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END,
+                updated_at = ?
+            WHERE id = ?`,
+      args: [itemId, itemId, now, itemId],
+    });
+    await transaction.execute({
+      sql: `INSERT INTO lab_batch_packaging_ledger
+            (id, batch_id, physical_variant_id, actor, packaged_before, packaged_after, packaged_delta, finished_units, reference, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [randomUUID(), input.batchId, variantId, input.actor, current, allocation.packaged, added, finishedUnits, `production fill · ${variantId}`, now],
+    });
+    await transaction.commit();
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+  return getLabBatchDetail(input.batchId);
 }

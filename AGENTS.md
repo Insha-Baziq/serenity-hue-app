@@ -73,11 +73,12 @@ For the local staff account used only to verify authenticated browser flows, con
 `LOCAL-VERIFICATION-CREDENTIALS.md`. This file is deliberately git-ignored: never
 copy its contents into source, documentation, commits, logs, or external services.
 
-### Vercel deployment
+### Vercel deployment (canonical command)
 
 This project is deployed directly to the Shabina Khan Vercel account. Do not use
-GitHub deployment flows or the default Vercel profile. From the repository root,
-always deploy with the dedicated profile:
+GitHub deployment flows or the default Vercel profile. This exact command is the
+only approved production deployment command for this project; use it whenever
+deploying this project to Vercel from the repository root:
 
 ```powershell
 npx vercel --prod --yes --global-config "C:\Users\baziq\AppData\Local\vercel-profile-shabina-khan"

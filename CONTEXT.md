@@ -12,16 +12,36 @@ product notes use distinct words for physical catalogue concepts and external li
 | Collision | Recommendation | Status |
 |---|---|---|
 | product / physical product / master product / physical inventory item | Use **physical product** for a countable catalogue parent; use **physical variant** for its child; reserve **channel listing** for a Shopify/TikTok listing. Keep **master inventory** only for the legacy/three-inventory per-variant quantity model. | Accepted — project owner, 2026-08-30 |
+| batch remainder / unpackaged stock | Use **remaining bulk** for the measured formulation left after packaged output. It stays in Labs and is not finished-product stock. | Accepted — product change, 2026-09-18 |
+| product output relationship | Use **formula output link** for the exact physical variant and per-unit fill quantity that a formula produces. | Accepted — product change, 2026-09-18 |
 
 Align new work to this ruling and avoid reintroducing its rejected alternatives.
 
 ## Domain terms
 
 ### Batch
-A production run made from one formula at a target gram weight. A batch records the
-calculated ingredient snapshots and the ledger deductions that occurred at confirmation.
+A production run made from one formula at a target gram calculation weight. A batch
+also records the measured bulk output and its allocation between packaged output and
+remaining bulk. Ingredient availability is advisory: known, sufficient ingredients are
+deducted; uncounted or insufficient ingredients retain their current count and are
+recorded as not deducted.
 - **Is not**: an order or an inventory recount
-- **Lives in**: `lab_batches`, `lab_batch_ingredients`, `lab_ingredient_ledger`
+- **Lives in**: `lab_batches`, `lab_batch_ingredients`, `lab_batch_allocations`, and the Lab ledgers
+
+### Formula output link
+The relationship between a formula and one exact physical variant in the master
+physical catalogue, including the amount filled into one finished unit and whether it
+is measured in grams or milliliters. This is required before packaging can add units to
+finished stock.
+- **Is not**: a channel listing, packaging material, or ingredient line
+- **Lives in**: `lab_formula_outputs`
+
+### Remaining bulk
+The measured formulation still available to package: batch output minus packaged
+output. It is a Labs production allocation, not a countable finished product and not an
+ingredient quantity.
+- **Is not**: finished-product stock or packaging material
+- **Lives in**: `lab_batch_allocations`
 
 ### Bundle
 A channel sale/listing composed of one or more physical variants with a per-sale
@@ -43,8 +63,10 @@ that may be mapped to one or more physical variants.
 ### Formula
 The ingredient definition used to calculate a production batch. Fixed percentages and
 remainder water are calculable; plain q.s. ingredients remain intentionally uncomputed.
+An optional formula output link identifies the exact finished physical variant and its
+per-unit fill amount.
 - **Is not**: a batch
-- **Lives in**: `lab_formulas` and `lab_formula_ingredients`
+- **Lives in**: `lab_formulas`, `lab_formula_ingredients`, and `lab_formula_outputs`
 
 ### Ingredient
 A Lab production material whose quantity is stored in grams and whose inventory is
@@ -141,3 +163,5 @@ or recommend a purchase quantity in V1.
 4. A channel bundle maps to its exact physical components and multipliers; uncertain mappings stay review/unmapped.
 5. A sync run cannot overlap another direct-channel run because the lease is database-backed.
 6. Secrets and provider tokens are read only in server-side code and are never sent to the client.
+7. Batch creation never requires a counted ingredient and never creates a negative ingredient quantity.
+8. A batch's packaged output cannot exceed its batch size; each packaging increment must produce a whole number of linked finished units.

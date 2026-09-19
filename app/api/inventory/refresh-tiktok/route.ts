@@ -1,5 +1,5 @@
 import { requireApiSession } from "@/lib/auth-guard";
-import { getPhysicalChannelListings } from "@/lib/repository";
+import { ensurePhysicalChannelListings, getPhysicalChannelListings } from "@/lib/repository";
 import { storeTikTokInventory } from "@/lib/tiktok-inventory";
 import { TikTokNotConnectedError } from "@/lib/tiktok-import";
 
@@ -14,6 +14,7 @@ export async function POST(request: Request) {
   }
   try {
     const result = await storeTikTokInventory();
+    await ensurePhysicalChannelListings();
     const listings = await getPhysicalChannelListings("tiktok");
     return Response.json({ ok: true, ...result, listings });
   } catch (error) {

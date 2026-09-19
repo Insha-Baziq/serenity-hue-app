@@ -29,6 +29,13 @@ const [schema, migrationManifest, physicalSeed] = await Promise.all([
 
 const client = createClient({ url, authToken });
 
+// Rebuilding the FTS index scans every order and its line items. It is a
+// maintenance migration, not part of the normal deployment heartbeat. Keep a
+// durable marker so repeated Vercel deployments do not pay that scan again.
+// Bump this value only when the index definition or its source projection
+// changes and a rebuild is genuinely required.
+const ORDER_SEARCH_REBUILD_VERSION = "2026-09-15-order-search-rebuild-v1";
+
 function encryptTikTokToken(value, key) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -55,14 +62,41 @@ try {
     }
   }
 
-  await client.execute("DELETE FROM order_search");
-  await client.execute(`
-    INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
-    SELECT o.rowid, o.id, o.order_number, COALESCE(o.customer_name, ''), COALESCE(o.customer_email, ''),
-      COALESCE((SELECT group_concat(COALESCE(oi.title, '') || ' ' || COALESCE(oi.sku, ''), ' ')
-                FROM order_items oi WHERE oi.order_id = o.id), '')
-    FROM orders o
-  `);
+  const orderSearchMaintenance = await client.execute({
+    sql: "SELECT version FROM schema_migrations WHERE version = ?",
+    args: [ORDER_SEARCH_REBUILD_VERSION],
+  });
+  if (!orderSearchMaintenance.rows[0]) {
+    // The previous deployment routine rebuilt this index on every deployment,
+    // so an existing production database has already been rebuilt by the
+    // current code. Only repair a clearly empty index for a non-empty orders
+    // table; this keeps the first rollout of the guard from causing another
+    // full-table scan.
+    const [ordersPresence, searchPresence] = await Promise.all([
+      client.execute("SELECT 1 FROM orders LIMIT 1"),
+      client.execute("SELECT 1 FROM order_search LIMIT 1"),
+    ]);
+    if (ordersPresence.rows.length > 0 && searchPresence.rows.length === 0) {
+      await client.execute("DELETE FROM order_search");
+      await client.execute(`
+        INSERT INTO order_search (rowid, order_id, order_number, customer_name, customer_email, line_items)
+        SELECT o.rowid, o.id, o.order_number, COALESCE(o.customer_name, ''), COALESCE(o.customer_email, ''),
+          COALESCE((SELECT group_concat(COALESCE(oi.title, '') || ' ' || COALESCE(oi.sku, ''), ' ')
+                    FROM order_items oi WHERE oi.order_id = o.id), '')
+        FROM orders o
+      `);
+      console.log("Order search index was empty; rebuilt from existing orders.");
+    } else {
+      console.log("Order search index already populated; skipped full rebuild.");
+    }
+    await client.execute({
+      sql: "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+      args: [ORDER_SEARCH_REBUILD_VERSION],
+    });
+    console.log(`Order search index maintenance ${ORDER_SEARCH_REBUILD_VERSION} recorded.`);
+  } else {
+    console.log("Order search index already current; skipped full rebuild.");
+  }
 
   const physicalCount = await client.execute("SELECT COUNT(*) AS count FROM physical_inventory_items");
   if (Number(physicalCount.rows[0]?.count ?? 0) === 0) {

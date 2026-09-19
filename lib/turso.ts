@@ -4,13 +4,18 @@ import { join } from "node:path";
 import migrations from "@/database/migrations.json";
 import physicalSeed from "@/database/physical-inventory-seed.json";
 
-type DatabaseClient = ReturnType<typeof createClient>;
+export type DatabaseClient = ReturnType<typeof createClient>;
 type ColumnMigration = readonly [table: string, column: string, definition: string];
 
 let client: DatabaseClient | undefined;
 let schemaReady: Promise<DatabaseClient> | undefined;
+let mcpReadClient: DatabaseClient | undefined;
 
 const migrationVersion = migrations.version;
+// Rebuilding the FTS index scans every order and its line items. Keep this
+// durable maintenance marker separate from the schema manifest so normal
+// runtime initialization never repeats the full scan.
+const orderSearchRebuildVersion = "2026-09-15-order-search-rebuild-v1";
 const columnMigrations = migrations.columns as unknown as readonly ColumnMigration[];
 const physicalInventorySeed = physicalSeed as {
   version: string;
@@ -27,6 +32,28 @@ const physicalInventorySeed = physicalSeed as {
 
 export function hasTursoConfiguration() {
   return Boolean(process.env.TURSO_DATABASE_URL?.trim() && process.env.TURSO_AUTH_TOKEN?.trim());
+}
+
+export function hasMcpReadDatabaseConfiguration() {
+  const url = process.env.MCP_READ_DATABASE_URL?.trim();
+  if (!url) return false;
+  if (url.startsWith("file:")) return true;
+  return Boolean(process.env.MCP_READ_DATABASE_AUTH_TOKEN?.trim());
+}
+
+export function assertMcpReadDatabaseConfiguration() {
+  if (process.env.NODE_ENV === "production" && process.env.MCP_READ_DATABASE_ENFORCED !== "true") {
+    throw new Error(
+      "The remote MCP connector requires MCP_READ_DATABASE_ENFORCED=true after the provider read-only boundary has been verified.",
+    );
+  }
+  if (hasMcpReadDatabaseConfiguration()) return;
+  const localFallback = process.env.NODE_ENV !== "production"
+    && process.env.MCP_ALLOW_PRIMARY_READ_FALLBACK === "true";
+  if (localFallback) return;
+  throw new Error(
+    "The remote MCP connector requires MCP_READ_DATABASE_URL and MCP_READ_DATABASE_AUTH_TOKEN (or an explicitly enabled local-only fallback).",
+  );
 }
 
 export function databaseMode() {
@@ -126,6 +153,27 @@ async function rebuildOrderSearchIndex(db: DatabaseClient) {
   `);
 }
 
+async function rebuildOrderSearchIndexOnce(db: DatabaseClient) {
+  const marker = await db.execute({
+    sql: "SELECT version FROM schema_migrations WHERE version = ?",
+    args: [orderSearchRebuildVersion],
+  });
+  if (marker.rows[0]) return false;
+
+  const [ordersPresence, searchPresence] = await Promise.all([
+    db.execute("SELECT 1 FROM orders LIMIT 1"),
+    db.execute("SELECT 1 FROM order_search LIMIT 1"),
+  ]);
+  if (ordersPresence.rows.length > 0 && searchPresence.rows.length === 0) {
+    await rebuildOrderSearchIndex(db);
+  }
+  await db.execute({
+    sql: "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+    args: [orderSearchRebuildVersion],
+  });
+  return true;
+}
+
 async function applyDatabaseMigrations(db: DatabaseClient) {
   // Existing databases need additive columns before executing schema statements
   // that create indexes or triggers referring to those columns. New databases
@@ -134,7 +182,7 @@ async function applyDatabaseMigrations(db: DatabaseClient) {
   await db.executeMultiple(schemaSql());
   await ensureColumns(db);
   await bootstrapPhysicalInventoryIfEmpty(db);
-  await rebuildOrderSearchIndex(db);
+  await rebuildOrderSearchIndexOnce(db);
   await db.execute({
     sql: "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
     args: [migrationVersion],
@@ -158,6 +206,30 @@ export async function getTursoClient(): Promise<DatabaseClient> {
   }
 
   return schemaReady;
+}
+
+/**
+ * Returns the business-data client used by the remote assistant. This client
+ * never runs migrations, seeders, or schema bootstrap code. Production must
+ * point it at a provider-enforced read-only replica/credential.
+ */
+export async function getMcpReadClient(): Promise<DatabaseClient> {
+  assertMcpReadDatabaseConfiguration();
+
+  if (mcpReadClient) return mcpReadClient;
+
+  const url = process.env.MCP_READ_DATABASE_URL?.trim();
+  if (!url) {
+    if (process.env.NODE_ENV !== "production" && process.env.MCP_ALLOW_PRIMARY_READ_FALLBACK === "true") {
+      return getTursoClient();
+    }
+    throw new Error("MCP_READ_DATABASE_URL is not configured.");
+  }
+
+  mcpReadClient = url.startsWith("file:")
+    ? createClient({ url })
+    : createClient({ url, authToken: process.env.MCP_READ_DATABASE_AUTH_TOKEN!.trim() });
+  return mcpReadClient;
 }
 
 /** Applies the complete, idempotent schema migration. Intended for deployments, never request paths. */

@@ -218,6 +218,18 @@ export type LabFormula = {
   notes: string;
   ingredientCount: number;
   lines: LabFormulaLine[];
+  output: LabFormulaOutput | null;
+};
+
+export type LabQuantityUnit = "g" | "ml";
+
+export type LabFormulaOutput = {
+  id: string;
+  physicalVariantId: string;
+  product: string;
+  variant: string;
+  fillQuantity: number;
+  fillUnit: LabQuantityUnit;
 };
 
 export type LabBatch = {
@@ -225,8 +237,18 @@ export type LabBatch = {
   formula: string;
   batchNumber: string;
   targetGrams: number;
+  outputQuantity: number;
+  outputUnit: LabQuantityUnit;
+  packagedQuantity: number;
+  remainingQuantity: number;
+  packagedUnits: number;
+  output: LabFormulaOutput | null;
   actor: string;
   createdAt: string;
+};
+
+export type LabBatchDetail = LabBatch & {
+  formulaId: string;
 };
 
 export type InventoryAlert = {

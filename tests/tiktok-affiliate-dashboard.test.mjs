@@ -103,11 +103,11 @@ test("affiliate intelligence ranks consistently, aggregates products, counts vid
   assert.deepEqual(rankTikTokAffiliates(dashboard.affiliates, "orders").map((affiliate) => affiliate.creator), ["Rose", "Ada", "Bea"]);
   assert.deepEqual(rankTikTokAffiliates(dashboard.affiliates, "commission").map((affiliate) => affiliate.creator), ["Rose", "Ada", "Bea"]);
   assert.deepEqual(dashboard.products, [
-    { product: "Face Mist", netSales: 14000, units: 3, orders: 3 },
-    { product: "Glow Oil", netSales: 4000, units: 2, orders: 2 },
+    { productId: "Face Mist", product: "Face Mist", netSales: 14000, units: 3, orders: 3 },
+    { productId: "Glow Oil", product: "Glow Oil", netSales: 4000, units: 2, orders: 2 },
   ]);
   assert.deepEqual(dashboard.affiliates.find((affiliate) => affiliate.creator === "Rose"), {
-    creator: "Rose", netSales: 6000, estimatedCommission: 1050, orders: 3, units: 3,
+    creatorId: "Rose", creator: "Rose", netSales: 6000, estimatedCommission: 1050, orders: 3, units: 3,
     publishedVideos: 2, bestSellingProduct: "Glow Oil", offerCandidate: "Review candidate",
   });
 });

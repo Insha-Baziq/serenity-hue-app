@@ -13,14 +13,25 @@ export type AffiliateOrder = {
   grossAmount: number;
   estimatedCommission: number;
   creator: string | null;
+  creatorId?: string | null;
+  creatorName?: string | null;
   product?: string | null;
+  productId?: string | null;
+  productTitle?: string | null;
   linked: { financialStatus: string; cancelledAt: string | null } | null;
 };
 
 export type AffiliateRefund = { orderId: string; lineItemId: string; quantity: number; processedAt: string };
-export type AffiliateVideo = { id: string; creator: string | null; publishedAt: string | null };
+export type AffiliateVideo = {
+  id: string;
+  creator: string | null;
+  creatorId?: string | null;
+  creatorName?: string | null;
+  publishedAt: string | null;
+};
 export type AffiliateRankingMode = "revenue" | "orders" | "commission";
 export type AffiliatePerformance = {
+  creatorId: string;
   creator: string;
   netSales: number;
   estimatedCommission: number;
@@ -47,7 +58,7 @@ export type TikTokAffiliateDashboard = {
   trendIntervalDays: number;
   trend: Array<{ date: string; netSales: number; orders: number }>;
   affiliates: AffiliatePerformance[];
-  products: Array<{ product: string; netSales: number; units: number; orders: number }>;
+  products: Array<{ productId: string; product: string; netSales: number; units: number; orders: number }>;
   status: { kind: "fresh" | "stale" | "unavailable"; lastSuccessfulAt: string | null; message: string };
   historyNote: string;
 };
@@ -76,7 +87,7 @@ export function rankTikTokAffiliates(affiliates: AffiliatePerformance[], mode: A
   const value = (affiliate: AffiliatePerformance) => mode === "revenue"
     ? affiliate.netSales
     : mode === "orders" ? affiliate.orders : affiliate.estimatedCommission;
-  return [...affiliates].sort((left, right) => value(right) - value(left) || left.creator.localeCompare(right.creator, "en"));
+  return [...affiliates].sort((left, right) => value(right) - value(left) || left.creator.localeCompare(right.creator, "en") || left.creatorId.localeCompare(right.creatorId, "en"));
 }
 
 export function buildTikTokAffiliateDashboard(input: {
@@ -97,7 +108,7 @@ export function buildTikTokAffiliateDashboard(input: {
   for (let offset = 0; offset < rangeDays; offset += trendIntervalDays) trend.set(shiftDate(input.range.start, offset), { netSales: 0, orders: 0 });
   const sourceByKey = new Map(input.orders.map((order) => [`${order.orderId}:${order.lineItemId}`, order]));
   const refundedByKey = new Map<string, number>();
-  const affiliateLines = new Map<string, { creator: string; product: string | null; netSales: number; estimatedCommission: number; quantity: number; orderId: string }>();
+  const affiliateLines = new Map<string, { creatorId: string; creator: string; productId: string | null; product: string | null; netSales: number; estimatedCommission: number; quantity: number; orderId: string }>();
   const totals = { netSales: 0, estimatedCommission: 0, attributedOrders: new Set<string>(), units: 0, activeAffiliates: new Set<string>(), publishedVideos: 0, unreconciledGmv: 0 };
 
   for (const order of input.orders) {
@@ -112,11 +123,22 @@ export function buildTikTokAffiliateDashboard(input: {
     totals.estimatedCommission += order.estimatedCommission;
     totals.units += order.quantity;
     totals.attributedOrders.add(order.orderId);
-    if (order.creator) totals.activeAffiliates.add(order.creator);
+    const creatorId = order.creatorId?.trim() || order.creator?.trim() || "";
+    const creator = order.creatorName?.trim() || order.creator?.trim() || creatorId;
+    if (creatorId) totals.activeAffiliates.add(creatorId);
     const point = trend.get(trendKey(date))!;
     point.netSales += order.grossAmount;
     point.orders += 1;
-    if (order.creator) affiliateLines.set(order.id, { creator: order.creator, product: order.product ?? null, netSales: order.grossAmount, estimatedCommission: order.estimatedCommission, quantity: order.quantity, orderId: order.orderId });
+    if (creatorId) affiliateLines.set(order.id, {
+      creatorId,
+      creator,
+      productId: order.productId?.trim() || order.product?.trim() || null,
+      product: order.productTitle?.trim() || order.product?.trim() || null,
+      netSales: order.grossAmount,
+      estimatedCommission: order.estimatedCommission,
+      quantity: order.quantity,
+      orderId: order.orderId,
+    });
   }
 
   for (const refund of [...input.refunds].sort((left, right) => left.processedAt.localeCompare(right.processedAt))) {
@@ -142,39 +164,43 @@ export function buildTikTokAffiliateDashboard(input: {
   const videosByCreator = new Map<string, number>();
   for (const video of input.videos) if (video.publishedAt && contains(input.range, londonDate(video.publishedAt))) {
     totals.publishedVideos += 1;
-    if (video.creator) videosByCreator.set(video.creator, (videosByCreator.get(video.creator) ?? 0) + 1);
+    const creatorId = video.creatorId?.trim() || video.creator?.trim() || "";
+    if (creatorId) videosByCreator.set(creatorId, (videosByCreator.get(creatorId) ?? 0) + 1);
   }
-  const affiliateStats = new Map<string, { netSales: number; estimatedCommission: number; units: number; orders: Set<string>; products: Map<string, { netSales: number; units: number; orders: Set<string> }> }>();
+  const affiliateStats = new Map<string, { creator: string; netSales: number; estimatedCommission: number; units: number; orders: Set<string>; products: Map<string, { title: string; netSales: number; units: number; orders: Set<string> }> }>();
   for (const line of affiliateLines.values()) {
-    const stats = affiliateStats.get(line.creator) ?? { netSales: 0, estimatedCommission: 0, units: 0, orders: new Set<string>(), products: new Map() };
+    const stats = affiliateStats.get(line.creatorId) ?? { creator: line.creator, netSales: 0, estimatedCommission: 0, units: 0, orders: new Set<string>(), products: new Map() };
+    stats.creator = line.creator || stats.creator;
     stats.netSales += line.netSales;
     stats.estimatedCommission += line.estimatedCommission;
     stats.units += line.quantity;
     stats.orders.add(line.orderId);
-    if (line.product) {
-      const product = stats.products.get(line.product) ?? { netSales: 0, units: 0, orders: new Set<string>() };
+    if (line.productId && line.product) {
+      const product = stats.products.get(line.productId) ?? { title: line.product, netSales: 0, units: 0, orders: new Set<string>() };
+      product.title = line.product;
       product.netSales += line.netSales;
       product.units += line.quantity;
       product.orders.add(line.orderId);
-      stats.products.set(line.product, product);
+      stats.products.set(line.productId, product);
     }
-    affiliateStats.set(line.creator, stats);
+    affiliateStats.set(line.creatorId, stats);
   }
-  const affiliates = [...affiliateStats.entries()].map(([creator, stats]) => {
-    const bestSellingProduct = [...stats.products.entries()].sort(([leftName, left], [rightName, right]) => right.netSales - left.netSales || leftName.localeCompare(rightName, "en"))[0]?.[0] ?? null;
+  const affiliates = [...affiliateStats.entries()].map(([creatorId, stats]) => {
+    const bestSellingProduct = [...stats.products.entries()].sort(([leftId, left], [rightId, right]) => right.netSales - left.netSales || left.title.localeCompare(right.title, "en") || leftId.localeCompare(rightId, "en"))[0]?.[1].title ?? null;
     return {
-      creator, netSales: stats.netSales, estimatedCommission: stats.estimatedCommission,
-      orders: stats.orders.size, units: stats.units, publishedVideos: videosByCreator.get(creator) ?? 0,
+      creatorId, creator: stats.creator, netSales: stats.netSales, estimatedCommission: stats.estimatedCommission,
+      orders: stats.orders.size, units: stats.units, publishedVideos: videosByCreator.get(creatorId) ?? 0,
       bestSellingProduct, offerCandidate: stats.orders.size >= 3 ? "Review candidate" as const : "Needs more activity" as const,
     };
   });
-  const products = new Map<string, { netSales: number; units: number; orders: Set<string> }>();
-  for (const line of affiliateLines.values()) if (line.product) {
-    const product = products.get(line.product) ?? { netSales: 0, units: 0, orders: new Set<string>() };
+  const products = new Map<string, { title: string; netSales: number; units: number; orders: Set<string> }>();
+  for (const line of affiliateLines.values()) if (line.productId && line.product) {
+    const product = products.get(line.productId) ?? { title: line.product, netSales: 0, units: 0, orders: new Set<string>() };
+    product.title = line.product;
     product.netSales += line.netSales;
     product.units += line.quantity;
     product.orders.add(line.orderId);
-    products.set(line.product, product);
+    products.set(line.productId, product);
   }
   const status = !input.freshness?.lastSuccessfulAt
     ? { kind: "unavailable" as const, lastSuccessfulAt: null, message: "Awaiting the first successful TikTok affiliate import." }
@@ -199,8 +225,8 @@ export function buildTikTokAffiliateDashboard(input: {
     trend: [...trend.entries()].map(([date, values]) => ({ date, ...values })),
     affiliates: rankTikTokAffiliates(affiliates, "revenue"),
     products: [...products.entries()]
-      .map(([product, values]) => ({ product, netSales: values.netSales, units: values.units, orders: values.orders.size }))
-      .sort((left, right) => right.netSales - left.netSales || left.product.localeCompare(right.product, "en")),
+      .map(([productId, values]) => ({ productId, product: values.title, netSales: values.netSales, units: values.units, orders: values.orders.size }))
+      .sort((left, right) => right.netSales - left.netSales || left.product.localeCompare(right.product, "en") || left.productId.localeCompare(right.productId, "en")),
     status,
     historyNote: input.range.allTime
       ? "All time includes affiliate records retained by Serenity Hue from the initial provider baseline onward."

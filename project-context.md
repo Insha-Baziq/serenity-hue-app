@@ -1,6 +1,6 @@
 # Serenity Hue Operations — Project Context
 
-Last updated: 12 September 2026
+Last updated: 13 September 2026
 
 This file is the working handoff for the Serenity Hue internal operations app. Read it before making product, data-model, integration, or UI decisions.
 
@@ -18,7 +18,7 @@ The goal is to give the client one reliable place to:
 
 The client previously had a static HTML dashboard generated with Claude. It was fragile and relied on scheduled scripts plus AfterShip/Dropbox files. The replacement app must be functional, direct, and deliberately modest in scope rather than recreate every speculative feature.
 
-## Latest authoritative implementation status — 23 August 2026
+## Latest authoritative implementation status — 13 September 2026
 
 This section supersedes older “local-only”, “pending deployment”, and “not yet wired” statements elsewhere in this historical handoff where they conflict.
 
@@ -109,6 +109,39 @@ What changed:
 
 Also still deferred: in-app caching (`unstable_cache` + tag invalidation) for read-heavy pages.
 
+## KPI analytics — implemented and deployed 13 September 2026
+
+The authenticated `/kpis` workspace is the client-facing performance surface for the Shopify and TikTok Shop business. It is implemented in `components/kpis-workspace.tsx`, with KPI aggregation in `lib/kpi-dashboard.ts` and period comparisons in `lib/kpi-comparisons.ts`. Pages and route adapters must not issue SQL directly; KPI reads go through the repository/domain layer.
+
+### Reporting and metric definitions
+
+- Reporting periods are 7 days, 30 days, 90 days, All time, or a custom date range. Business dates use **Europe/London** and comparison periods are calendar-aware.
+- **Net sales** means merchandise sales excluding VAT and delivery, excluding cancelled orders and net of processed refunds.
+- **Orders** means paid, non-cancelled orders. **Average order value** is net sales divided by paid orders.
+- **Net units** are refund-aware sold units. Product totals disclose units that cannot be attributed to a mapped catalogue product rather than inventing a product row.
+- TikTok affiliate-attributed sales remain separate from ordinary Shopify/TikTok Shop revenue. Estimated affiliate commission is an operational estimate, not business revenue.
+- TikTok Ads spend is reported separately from commerce revenue and is unavailable rather than zero when the provider has not returned a trustworthy report.
+
+### KPI views
+
+- **Overview:** headline net sales, paid orders, AOV, net units, separate TikTok Ads status, top products, restock risk, customer mix, and a date-level trend chart.
+- The trend chart has an accessible **Net sales / Orders** toggle. Each date point exposes current and preceding-period values through hover and keyboard focus; the disclosure table follows the selected measure.
+- Overview **Channel mix** is a pie chart showing paid-order share by sales channel, with order count, net sales, and AOV details. The Channels tab's separate channel/product tables retain their own net-unit-share definitions; do not silently merge these denominators.
+- **Products:** the Summary view is explicitly ranked by net units and shows net revenue, net units, channel units, and top product unit share. Weekly and Monthly views compare calendar periods, allow ranking by net units or net revenue, and support the requested month-count comparison.
+- **Channels:** channel performance cards and product/channel tables provide Shopify and TikTok Shop comparisons without implying that channel listings are interchangeable inventory.
+- **Customers:** refund-aware customer ranking and new-versus-repeat customer mix for the selected period.
+- **TikTok Affiliates:** attributed revenue, orders, units, commission estimate, creators, best-selling products, published video counts, trend data, weekly/monthly comparisons, and an evidence-based **Offer review**. Offer review is decision support for prioritising creator outreach, not an offer-management or automatic-discount workflow. Its header includes an explainer card because the label is intentionally not self-evident.
+- **TikTok Ads:** provider-reported ad spend and breakdowns, kept separate from Shopify/TikTok Shop sales.
+
+### KPI UX guardrails
+
+- Preserve the warm paper/plum editorial-operational design language in `DESIGN.md`.
+- Keep numeric table headers and values right-aligned and directly aligned; text columns remain left-aligned.
+- Preserve the responsive mobile treatment: dense tables become readable summary rows or disclosure panels rather than forcing a clipped horizontal layout.
+- Do not call a KPI a forecast, attribution, or recommendation unless its source data and limitations are visible. Keep partial periods, missing provider data, refunds, cancelled orders, and unmapped products explicit.
+
+The KPI implementation was validated with `npm run typecheck`, `npm run lint`, `npm test` (50 tests), and `npm run build`, plus signed-in local desktop/mobile browser checks. Production deployment is `dpl_2HCt8mexPPuFi7c1GfTvmU7vVEqr`, aliased to `https://serenity-hue-operations.vercel.app`. The protected production route correctly presents the login gate when unauthenticated.
+
 ## Agreed product decisions
 
 ### Data sources
@@ -146,12 +179,13 @@ npm run dev
 
 Primary local URLs:
 
-Every route under `app/(operations)/` is gated: the operations layout calls `getCurrentSession()` and redirects to `/login` when there is no valid Better Auth session. The root route `/` checks the session and redirects authenticated staff to `/overview`; unauthenticated visitors go to `/login`. The local change is validated but has not yet been deployed.
+Every route under `app/(operations)/` is gated: the operations layout calls `getCurrentSession()` and redirects to `/login` when there is no valid Better Auth session. The root route `/` checks the session and redirects authenticated staff to `/overview`; unauthenticated visitors go to `/login`. The current KPI and navigation implementation is deployed; older subsections below retain historical dates where useful.
 
 | Route | Current behaviour |
 | --- | --- |
-| `/login` | Sign-in screen (public). Split-panel layout: campaign portrait + email/password form via Better Auth. Authenticated visitors redirect to `/overview` rather than seeing the form again (local, pending deployment). |
+| `/login` | Sign-in screen (public). Split-panel layout: campaign portrait + email/password form via Better Auth. Authenticated visitors redirect to `/overview` rather than seeing the form again. |
 | `/overview` | Live overview workspace: order/channel summary, inventory counts (units on hand, live/low/out-of-stock variants, packaging types), recent orders, sync status, and a **Sync now** button. No longer a placeholder. |
+| `/kpis` | Authenticated KPI workspace with overview, products, channels, customers, TikTok affiliates, TikTok Ads, and restock views. See **KPI analytics — implemented and deployed 13 September 2026** above for metric definitions and UX guardrails. |
 | `/orders` | Live Shopify (and authorized TikTok) orders table and order detail sheet. |
 | `/employees` | Staff list (name, email, status, last seen) with a create-employee form. |
 | `/inventory` | Redirects to `/inventory/products`. |
@@ -162,14 +196,15 @@ Every route under `app/(operations)/` is gated: the operations layout calls `get
 
 ### Sidebar
 
-The desktop sidebar now uses the shadcn Sidebar composition (provider, header, content, grouped menu, footer, nested menu, and collapse rail), customised to retain Serenity Hue’s existing Avenir Next typography, dark plum/magenta palette, logo, and navigation. This local change is validated but pending deployment. It supports a persistent expanded/collapsed preference and the `Ctrl/Cmd+B` shortcut.
+The desktop sidebar now uses the shadcn Sidebar composition (provider, header, content, grouped menu, footer, nested menu, and collapse rail), customised to retain Serenity Hue’s existing Avenir Next typography, dark plum/magenta palette, logo, and navigation. It supports a persistent expanded/collapsed preference and the `Ctrl/Cmd+B` shortcut.
 
 The navigation contains:
 
 1. Overview
-2. Orders
-3. Employees
-4. Inventory — an expandable item with **Products** and **Packaging** sub-pages
+2. KPIs
+3. Orders
+4. Employees
+5. Inventory — an expandable item with **Products** and **Packaging** sub-pages
 
 A **Sign out** control sits at the bottom of the sidebar and calls `authClient.signOut()`. The existing mobile bottom navigation remains, exposing Overview, Orders, Employees, Products, and Packaging.
 
@@ -321,7 +356,7 @@ Key behaviour:
 - `ensureAuthDatabase()` runs on session checks. If `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` are set and no matching user exists, it bootstraps a single admin `user` + credential `account`. Remove those env values after the first admin exists.
 - `trustedOrigins` includes the resolved app URL, the Vercel production URL, and localhost. The cookie prefix is `serenity-hue`.
 - The operations layout redirects unauthenticated visitors to `/login`; API routes that mutate data (e.g. `POST /api/employees`) call `requireApiSession()` and return 401 without a session.
-- A checked **Remember me** option creates a persistent Better Auth session for 30 days. The root and login routes now respect that existing session: `/` and `/login` redirect authenticated staff to `/overview` (local, pending deployment).
+- A checked **Remember me** option creates a persistent Better Auth session for 30 days. The root and login routes respect that existing session: `/` and `/login` redirect authenticated staff to `/overview`.
 - `proxy.ts` no longer issues a Basic Auth challenge — it is a pass-through, and its matcher excludes `/login`, `/api/auth`, `/api/jobs/reconcile`, `/api/webhooks/parcel2go`, and the TikTok callback/webhook routes. `INTERNAL_APP_USERNAME` / `INTERNAL_APP_PASSWORD` remain only as a documented temporary fallback and are not the active mechanism.
 
 ## Data model
@@ -598,7 +633,7 @@ Channel sub-labels are plain ("Physical stock" / "Shopify stock" / "TikTok stock
 ### Deployment / access notes for this work
 
 - Production DB is the Vercel-managed Turso resource `serenity-hue-operations` (`dub1`), owned by the `serenity-hue` Vercel team rather than the old standalone `insha-khan` Turso account. Credentials are integration-managed: `vercel integration resource connect serenity-hue-operations` writes `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` into the project, so they rotate without hand-editing. Always pass the Shabina Khan CLI profile.
-- Deploys via `npx vercel --prod --yes` from the repo (project linked in `.vercel/`). Live at `https://serenity-hue-operations.vercel.app`.
+- Deploys via `npx vercel --prod --yes --global-config "C:\\Users\\baziq\\AppData\\Local\\vercel-profile-shabina-khan"` from the repo (project linked in `.vercel/`). Live at `https://serenity-hue-operations.vercel.app`.
 - Validation gate before every deploy: `npm run typecheck && npm run lint && npm run build` (all must pass).
 
 ## Current non-goals

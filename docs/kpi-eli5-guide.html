@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Serenity Hue KPIs — explained simply</title>
+  <style>
+    :root {
+      --paper: #f8f3ee;
+      --card: #fffdfb;
+      --ink: #24142d;
+      --muted: #786d79;
+      --line: #e8dcd9;
+      --plum: #6e245d;
+      --plum-soft: #f0dfea;
+      --pink: #c96390;
+      --green: #2c8068;
+      --green-soft: #e1f2eb;
+      --amber: #a56621;
+      --amber-soft: #fff0d7;
+      --red: #a24d58;
+      --red-soft: #fce7e8;
+      --shadow: 0 16px 40px rgba(64, 30, 53, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 36px 20px 72px; }
+    .hero {
+      background: linear-gradient(135deg, #fffdfb 0%, #f6eaf1 100%);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      padding: 34px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .eyebrow { color: var(--plum); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 12px; }
+    h1, h2, h3 { margin: 0; line-height: 1.1; letter-spacing: -.03em; }
+    h1 { font-size: clamp(36px, 6vw, 68px); max-width: 760px; margin-top: 12px; }
+    h2 { font-size: clamp(27px, 4vw, 42px); margin-bottom: 12px; }
+    h3 { font-size: 19px; margin-bottom: 8px; }
+    p { margin: 0 0 12px; }
+    .lead { color: var(--muted); font-size: 19px; max-width: 760px; margin-top: 18px; }
+    .note { margin-top: 22px; padding: 14px 16px; border-left: 4px solid var(--pink); background: rgba(255,255,255,.72); border-radius: 10px; color: #513b4e; }
+    section { margin-top: 52px; }
+    .section-intro { color: var(--muted); max-width: 780px; font-size: 17px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; box-shadow: 0 8px 22px rgba(64, 30, 53, .045); }
+    .card p:last-child { margin-bottom: 0; }
+    .icon { width: 58px; height: 58px; display: grid; place-items: center; background: var(--plum-soft); border-radius: 16px; font-size: 31px; margin-bottom: 15px; }
+    .small { color: var(--muted); font-size: 14px; }
+    .big-number { font-size: 30px; font-weight: 850; color: var(--plum); letter-spacing: -.05em; }
+    .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 12px; align-items: center; margin-top: 24px; }
+    .flow-box { min-height: 130px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: var(--card); }
+    .arrow { color: var(--pink); font-size: 30px; font-weight: 800; text-align: center; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 999px; font-size: 13px; font-weight: 800; }
+    .pill.plum { color: var(--plum); background: var(--plum-soft); }
+    .pill.green { color: var(--green); background: var(--green-soft); }
+    .pill.amber { color: var(--amber); background: var(--amber-soft); }
+    .pill.red { color: var(--red); background: var(--red-soft); }
+    .offer { border-top: 6px solid var(--plum); }
+    .offer.priority { border-top-color: var(--green); }
+    .offer.watch { border-top-color: var(--amber); }
+    .offer.quiet { border-top-color: var(--red); }
+    .offer .emoji { font-size: 42px; margin-bottom: 12px; }
+    .offer strong { display: block; margin-top: 14px; }
+    .map { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 24px; }
+    .map .card { min-height: 160px; }
+    .number { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--plum); color: white; font-weight: 800; margin-bottom: 13px; }
+    ul { margin: 10px 0 0; padding-left: 20px; }
+    li { margin: 5px 0; }
+    .metric { display: flex; gap: 13px; align-items: flex-start; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .metric:last-child { border-bottom: 0; padding-bottom: 0; }
+    .metric b { display: block; }
+    .metric .symbol { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 10px; background: var(--plum-soft); }
+    .chart { border: 1px solid var(--line); background: #fffdfb; border-radius: 18px; padding: 18px; margin-top: 20px; }
+    .chart svg { width: 100%; height: auto; display: block; }
+    .table-demo { overflow-x: auto; margin-top: 16px; border: 1px solid var(--line); border-radius: 14px; }
+    table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--card); }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+    th { color: var(--plum); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; background: #fbf5f7; }
+    td:not(:first-child), th:not(:first-child) { text-align: right; }
+    tr:last-child td { border-bottom: 0; }
+    .footer { margin-top: 54px; padding: 22px; border-radius: 18px; background: var(--ink); color: #fff8fb; }
+    .footer p { color: #eadce6; }
+    @media (max-width: 820px) {
+      .grid, .grid.two, .map { grid-template-columns: 1fr 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+    }
+    @media (max-width: 560px) {
+      .wrap { padding: 18px 13px 48px; }
+      .hero { padding: 24px 20px; border-radius: 22px; }
+      .grid, .grid.two, .map { grid-template-columns: 1fr; }
+      section { margin-top: 38px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="hero">
+      <div class="eyebrow">Serenity Hue Operations</div>
+      <h1>KPIs, explained like you’re 5</h1>
+      <p class="lead">The KPI page is a scoreboard for the shop. It answers three simple questions: “How much did we sell?”, “What caused it?”, and “Where should we look next?”</p>
+      <div class="note"><b>Important:</b> an Offer review is a helpful “look here first” label. It is not a promise, an automatic discount, a commission decision, or a message sent to anyone.</div>
+    </div>
+
+    <section id="offer-review">
+      <h2>First: what is Offer review?</h2>
+      <p class="section-intro">Imagine three sticky notes on creator names. The app looks at the creator’s attributed sales, orders, activity, and rank during the selected comparison window. Then it places one sticky note beside them.</p>
+      <div class="grid" style="margin-top:22px">
+        <article class="card offer priority">
+          <div class="emoji">🌟</div>
+          <span class="pill green">Priority review</span>
+          <p style="margin-top:14px">“This creator has stronger evidence. Look at them first.”</p>
+          <strong>What earns it?</strong>
+          <p class="small">At least 3 attributed orders, activity in at least 2 weeks or months, and a top-five position by revenue or orders.</p>
+        </article>
+        <article class="card offer watch">
+          <div class="emoji">👀</div>
+          <span class="pill amber">Watch</span>
+          <p style="margin-top:14px">“Something is happening, but we need more proof.”</p>
+          <strong>What earns it?</strong>
+          <p class="small">The creator has some positive sales, orders, units, or activity, but not enough to be a priority yet.</p>
+        </article>
+        <article class="card offer quiet">
+          <div class="emoji">⏳</div>
+          <span class="pill red">Needs more activity</span>
+          <p style="margin-top:14px">“We do not have enough recent evidence to judge.”</p>
+          <strong>What does it mean?</strong>
+          <p class="small">No positive attributed activity appeared in the selected comparison periods. It does not mean the creator is bad.</p>
+        </article>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>So why was it added?</h3>
+        <p>Because a long creator table gives you numbers, but numbers alone do not tell you who deserves attention first. Offer review turns those numbers into a small, explainable shortlist signal.</p>
+        <p><b>It tells you:</b> “Based on the evidence we have right now, how urgently should I inspect this creator?”</p>
+        <p><b>It does not tell you:</b> profit margin, content quality, audience fit, follower quality, commission cost, stock availability, or whether you must send an offer.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The whole KPI page in one picture</h2>
+      <p class="section-intro">The page is split into focused rooms. Each room answers a different business question.</p>
+      <div class="map">
+        <article class="card"><span class="number">1</span><h3>Controls</h3><p class="small">Choose the date window. The page uses Europe/London calendar dates and GBP.</p></article>
+        <article class="card"><span class="number">2</span><h3>Overview</h3><p class="small">The big scoreboard: sales, orders, average order value, units, trends, channels, products, and customers.</p></article>
+        <article class="card"><span class="number">3</span><h3>Products</h3><p class="small">Find what sold, where it sold, and which products are winning over time.</p></article>
+        <article class="card"><span class="number">4</span><h3>Channels</h3><p class="small">Compare Shopify and TikTok Shop without mixing their numbers together.</p></article>
+        <article class="card"><span class="number">5</span><h3>Customers</h3><p class="small">See new versus repeat customers and the customers behind the period’s sales.</p></article>
+        <article class="card"><span class="number">6</span><h3>TikTok Affiliates</h3><p class="small">Understand creator-attributed sales, videos, products, commissions, and offer-review signals.</p></article>
+        <article class="card"><span class="number">7</span><h3>TikTok Ads</h3><p class="small">See advertising spend and provider-reported ad performance as a separate cost/report.</p></article>
+        <article class="card"><span class="number">8</span><h3>Restock</h3><p class="small">See which physical variants may need attention based on stock, demand, and lead time.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Date controls</h2>
+      <div class="grid two">
+        <article class="card">
+          <div class="icon">🗓️</div>
+          <h3>7 days, 30 days, 90 days, All time, Custom</h3>
+          <p>These buttons tell the scoreboard which slice of time to use. “All time” means all retained/recorded history available to the app.</p>
+        </article>
+        <article class="card">
+          <div class="icon">🔍</div>
+          <h3>Comparison and freshness</h3>
+          <p>The page can compare the selected window with the preceding window. It also tells you when the data was last updated and whether a source is unavailable.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Overview tab</h2>
+      <p class="section-intro">This is the “how is the shop doing?” page.</p>
+      <div class="grid two" style="margin-top:22px">
+        <article class="card">
+          <h3>The four big numbers</h3>
+          <div class="metric"><div class="symbol">💷</div><div><b>Net sales</b><span class="small">Money from eligible orders, minus processed refunds.</span></div></div>
+          <div class="metric"><div class="symbol">🧾</div><div><b>Orders</b><span class="small">How many eligible orders were counted.</span></div></div>
+          <div class="metric"><div class="symbol">➗</div><div><b>Average order value (AOV)</b><span class="small">Net sales ÷ orders. If there are no orders, it stays safely at zero.</span></div></div>
+          <div class="metric"><div class="symbol">📦</div><div><b>Net units</b><span class="small">Units sold minus refunded units.</span></div></div>
+        </article>
+        <article class="card">
+          <h3>Net sales trend</h3>
+          <p>Each point is a day’s sales. The line helps you see peaks and quiet days.</p>
+          <p><b>Hover or focus a point:</b> see the exact date and value. Open “View chart data” when you want the exact list without guessing from the line.</p>
+          <div class="chart" aria-label="Simple sales trend illustration">
+            <svg viewBox="0 0 600 150" role="img">
+              <path d="M30 120 H575" stroke="#e8dcd9" stroke-width="2"/>
+              <path d="M30 28 V120" stroke="#e8dcd9" stroke-width="2"/>
+              <polyline points="35,105 125,92 205,101 285,47 365,78 450,34 560,63" fill="none" stroke="#6e245d" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+              <g fill="#fffdfb" stroke="#6e245d" stroke-width="4"><circle cx="35" cy="105" r="6"/><circle cx="125" cy="92" r="6"/><circle cx="205" cy="101" r="6"/><circle cx="285" cy="47" r="6"/><circle cx="365" cy="78" r="6"/><circle cx="450" cy="34" r="6"/><circle cx="560" cy="63" r="6"/></g>
+              <text x="25" y="143" fill="#786d79" font-size="12">date →</text><text x="4" y="22" fill="#786d79" font-size="12">£</text>
+            </svg>
+          </div>
+        </article>
+        <article class="card">
+          <div class="icon">🍰</div>
+          <h3>Channel mix</h3>
+          <p>A split of paid orders between Shopify and TikTok Shop. It answers, “Where did the orders come from?”</p>
+          <p class="small">The mix uses order-count logic so a channel with a negative revenue adjustment does not make the picture confusing.</p>
+        </article>
+        <article class="card">
+          <div class="icon">🏆</div>
+          <h3>Product performance</h3>
+          <p>Products are ranked by net units, while net revenue is also shown. This answers, “What did people buy?”</p>
+          <p class="small">The table keeps product names and their values in aligned columns so each number sits under its own heading.</p>
+        </article>
+        <article class="card">
+          <div class="icon">👥</div>
+          <h3>Customer composition</h3>
+          <p><b>New</b> means one recorded order. <b>Repeat</b> means more than one order across the recorded history.</p>
+          <p class="small">This is based on the history the app knows about; it does not pretend to know missing history.</p>
+        </article>
+        <article class="card">
+          <div class="icon">📣</div>
+          <h3>TikTok Ads spend</h3>
+          <p>Ad spend is shown as a separate strip because advertising cost is not shop revenue. If TikTok Ads is unavailable, the page says so instead of inventing a number.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Products tab</h2>
+      <p class="section-intro">This is the “which products are winning?” room.</p>
+      <div class="grid two" style="margin-top:22px">
+        <article class="card">
+          <div class="icon">🛍️</div>
+          <h3>Summary, weekly, monthly</h3>
+          <p><b>Summary</b> shows the selected date range. <b>Weekly</b> compares the latest four Monday–Sunday weeks. <b>Monthly</b> compares the latest calendar months.</p>
+          <p class="small">The latest partial week or month is labelled. When needed, it compares the same number of elapsed days for a fairer comparison.</p>
+        </article>
+        <article class="card">
+          <div class="icon">🔀</div>
+          <h3>Best seller by</h3>
+          <p>Switch the winner rule between <b>Net units</b> and <b>Net revenue</b>. That lets you find the product that moved the most or made the most money.</p>
+        </article>
+      </div>
+      <div class="table-demo">
+        <table>
+          <thead><tr><th>Product</th><th>Net units</th><th>Net revenue</th><th>Shopify units</th><th>TikTok units</th></tr></thead>
+          <tbody>
+            <tr><td>Example product</td><td>42</td><td>£840</td><td>30</td><td>12</td></tr>
+            <tr><td>Another product</td><td>18</td><td>£360</td><td>11</td><td>7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small" style="margin-top:10px">The numbers above are only a picture of the table shape, not live shop data.</p>
+    </section>
+
+    <section>
+      <h2>4. Channels tab</h2>
+      <p class="section-intro">This is the “Shopify versus TikTok Shop” room. They stay separate because they are different selling channels.</p>
+      <div class="grid two" style="margin-top:22px">
+        <article class="card">
+          <div class="icon">🟣</div>
+          <h3>Each channel card</h3>
+          <div class="metric"><div class="symbol">💷</div><div><b>Total revenue</b><span class="small">Net revenue attributed to that channel.</span></div></div>
+          <div class="metric"><div class="symbol">🧾</div><div><b>Orders</b><span class="small">Orders from that channel.</span></div></div>
+          <div class="metric"><div class="symbol">➗</div><div><b>AOV</b><span class="small">Revenue divided by channel orders.</span></div></div>
+          <div class="metric"><div class="symbol">📦</div><div><b>Net units</b><span class="small">Units sold minus refunded units for that channel.</span></div></div>
+          <div class="metric"><div class="symbol">📊</div><div><b>Unit share</b><span class="small">That channel’s share of the counted units.</span></div></div>
+        </article>
+        <article class="card">
+          <div class="icon">🎯</div>
+          <h3>Why the alignment matters</h3>
+          <p>The heading and the number are one little pair. They should sit together and have the same visual anchor.</p>
+          <p>The cards are now balanced and centred, while the metric label and its value are consistently aligned. This prevents “AOV” from looking like it belongs to a different number.</p>
+          <p class="small">Channel quantities can legitimately differ. The page does not force Shopify and TikTok Shop to add up in a misleading way.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. Customers tab</h2>
+      <div class="grid two">
+        <article class="card"><div class="icon">🌱</div><h3>New versus repeat</h3><p>New customers have one known order. Repeat customers have more than one known order. This helps answer, “Are people coming back?”</p></article>
+        <article class="card"><div class="icon">📇</div><h3>Customer table</h3><p>For each known customer, the table can show period net spend, order count, and latest purchase. Matching stays conservative so the app does not accidentally merge two different people.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. TikTok Affiliates tab</h2>
+      <p class="section-intro">This is the “which creators helped sell?” room. Affiliate numbers are kept separate from ordinary shop totals because one order can appear in both views.</p>
+      <div class="grid two" style="margin-top:22px">
+        <article class="card">
+          <h3>The six headline numbers</h3>
+          <div class="metric"><div class="symbol">💷</div><div><b>Affiliate net sales</b><span class="small">Attributed TikTok revenue after linked refunds.</span></div></div>
+          <div class="metric"><div class="symbol">🤝</div><div><b>Estimated commission</b><span class="small">TikTok’s estimated creator commission; it is not your revenue.</span></div></div>
+          <div class="metric"><div class="symbol">🧾</div><div><b>Attributed orders</b><span class="small">Orders or order lines linked to affiliate activity, as labelled by the report.</span></div></div>
+          <div class="metric"><div class="symbol">🧑‍🎤</div><div><b>Active affiliates</b><span class="small">Creators with attributed sales in the selected period.</span></div></div>
+          <div class="metric"><div class="symbol">🎬</div><div><b>Published videos</b><span class="small">Published creator videos; LIVE content is excluded from this count.</span></div></div>
+          <div class="metric"><div class="symbol">🧩</div><div><b>Unreconciled GMV</b><span class="small">Affiliate sales that could not be matched to an ordinary order yet.</span></div></div>
+        </article>
+        <article class="card">
+          <div class="icon">📈</div>
+          <h3>Affiliate trend</h3>
+          <p>Shows affiliate-attributed sales over time. Hover or focus a point for the exact date and value. “View chart data” gives you the exact values in a readable list.</p>
+          <p class="small">Unreconciled GMV remains visible as its own explanation rather than being quietly added to shop revenue.</p>
+        </article>
+        <article class="card">
+          <div class="icon">🧭</div>
+          <h3>Comparison toggle</h3>
+          <p><b>Summary</b> gives a current-period snapshot. <b>Weekly</b> compares the latest four calendar weeks. <b>Monthly</b> compares the latest three calendar months.</p>
+          <p class="small">The table shows creator, videos, net sales, commission, orders, units, best product, and Offer review. On small screens, creator details can be expanded instead of being squeezed into a tiny table.</p>
+        </article>
+        <article class="card">
+          <div class="icon">🏅</div>
+          <h3>Creator leaderboard</h3>
+          <p>Rank creators by <b>Revenue</b>, <b>Orders</b>, or <b>Commission</b>. Search creators, view the first ten, or show everyone.</p>
+          <p class="small">“Best product” means the product most associated with that creator’s attributed activity in the selected view.</p>
+        </article>
+        <article class="card">
+          <div class="icon">📦</div>
+          <h3>Products sold by affiliates</h3>
+          <p>A product-level view of affiliate net sales, units, and orders. It answers, “What did creators help sell?”</p>
+        </article>
+        <article class="card">
+          <div class="icon">📘</div>
+          <h3>About this affiliate report</h3>
+          <p>Explains the history window, unreconciled sales, and commission meaning, so the report’s numbers are not mistaken for the ordinary Shop totals.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. TikTok Ads tab</h2>
+      <div class="grid two">
+        <article class="card"><div class="icon">📣</div><h3>Advertising is a cost</h3><p>This tab shows the provider-reported TikTok Ads spend and performance state. It is not shop revenue and it is not affiliate commission.</p></article>
+        <article class="card"><div class="icon">🔌</div><h3>Connection status matters</h3><p>The page shows whether the ads source is connected and whether the report is available. Missing data is labelled instead of being made up.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Restock tab</h2>
+      <div class="card">
+        <div class="icon">🚚</div>
+        <h3>“What might run out?”</h3>
+        <p>Restock uses the counted physical catalogue, recent sales history, lead time, and urgency to suggest which physical variants deserve attention.</p>
+        <p><b>It does not change stock.</b> It does not change Shopify quantities, TikTok quantities, or the product catalogue. It is a decision aid.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What was added or strengthened</h2>
+      <div class="grid two">
+        <article class="card"><div class="icon">🖱️</div><h3>Charts can be inspected</h3><p>Trend charts now support hover/focus tooltips and an exact-value disclosure, so a peak is not just a pretty shape—you can read the date and amount.</p></article>
+        <article class="card"><div class="icon">📐</div><h3>Tables line up</h3><p>Column headings, labels, and values use the same column structure. Channel cards also keep each metric label paired with its number and balance the card layout.</p></article>
+        <article class="card"><div class="icon">🔁</div><h3>Products have time views</h3><p>Products can be viewed as a summary, weekly comparison, or monthly comparison, with a choice of units or revenue for the winner.</p></article>
+        <article class="card"><div class="icon">🧑‍🎤</div><h3>Affiliates have time views</h3><p>Affiliate performance now has Summary, Weekly, and Monthly views, with readable best-product values, creator comparisons, and the Offer review signal.</p></article>
+        <article class="card"><div class="icon">📱</div><h3>Small screens are considered</h3><p>Wide comparison tables can turn into expandable creator details on mobile, so important values do not get cut off.</p></article>
+        <article class="card"><div class="icon">🛡️</div><h3>Data edge cases are disclosed</h3><p>Refunds, missing sources, unreconciled affiliate GMV, partial periods, and unavailable ads data are handled explicitly instead of silently producing a confident-looking wrong answer.</p></article>
+      </div>
+    </section>
+
+    <div class="footer">
+      <h3>The one-sentence version</h3>
+      <p>The KPI page is a set of honest shop scoreboards: Overview tells you how the shop did, Products tells you what sold, Channels tells you where it sold, Customers tells you who bought, Affiliates tells you which creators helped, Ads tells you what promotion cost, and Restock tells you what may need attention next.</p>
+      <p style="margin-bottom:0"><b>Offer review is only the app saying:</b> “Based on recent creator activity, this name may deserve your attention first.”</p>
+    </div>
+  </main>
+</body>
+</html>
