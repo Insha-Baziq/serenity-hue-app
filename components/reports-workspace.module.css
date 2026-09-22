@@ -728,18 +728,23 @@
 
 .matrixRow {
   display: grid;
-  grid-template-columns: 1fr 1.5fr .7fr;
+  grid-template-columns: minmax(70px, 1fr) minmax(0, 1.5fr) max-content;
   gap: 8px;
   align-items: center;
-  padding: 9px 8px;
+  min-width: 0;
+  padding: 6px 8px;
   color: var(--ink-soft);
   font-size: 10px;
+  line-height: 1.15;
   background: #fdf8fb;
 }
 
 .matrixRow:nth-child(even) { background: #faeef5; }
-.matrixRow span:first-child { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
-.matrixRow strong { color: var(--report-plum); font-variant-numeric: tabular-nums; }
+.matrixRow span { min-width: 0; }
+.matrixRow span:first-child,
+.matrixRow span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.matrixRow span:first-child { color: var(--ink); }
+.matrixRow strong { color: var(--report-plum); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .reportNotice {
   display: flex;

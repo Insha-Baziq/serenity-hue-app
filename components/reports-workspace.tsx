@@ -86,6 +86,12 @@ function affiliateAreaData(affiliate: TikTokAffiliateDashboard) {
   return chartData(affiliate.trend.map((point) => ({ date: point.date, value: point.netSales })));
 }
 
+function affiliateProductLabel(product: string | null) {
+  const value = product?.trim();
+  if (!value) return "Product not reported";
+  return value.split(" - ")[0]?.trim() || value;
+}
+
 function adsMoney(value: number | null, currency: string | null) {
   if (value === null) return "Not reported";
   return currency ? formatMoney(value, currency) : "Currency not reported";
@@ -272,7 +278,7 @@ function AffiliateReport({ affiliate }: { affiliate: TikTokAffiliateDashboard })
       <Panel title="Key Affiliate Metrics" subtitle="Provider-reported" className={s.spanThree}><div className={s.statusGrid}><div><span>Average order</span><strong>{affiliate.metrics.attributedOrders ? formatMoney(Math.round(affiliate.metrics.netSales / affiliate.metrics.attributedOrders)) : "—"}</strong></div><div><span>Commission rate</span><strong>{affiliate.metrics.netSales ? percent(affiliate.metrics.estimatedCommission / affiliate.metrics.netSales) : "—"}</strong></div><div><span>Unreconciled GMV</span><strong>{formatMoney(affiliate.metrics.unreconciledGmv)}</strong></div></div></Panel>
       <Panel title="Videos vs Attributed Sales" subtitle="Published videos and attributed net sales" className={s.spanSeven}><ReportAreaChart data={affiliateAreaData(affiliate)} money /></Panel>
       <Panel title="Creator Efficiency" subtitle="Attributed net sales vs. published videos" className={s.spanFive}><div className={s.dataTable}><div className={s.dataHead}><span>Creator</span><span>Net sales</span><span>Orders</span><span>Videos</span></div>{creators.map((creator) => <div className={s.dataRow} key={creator.creatorId}><span>{creator.creator}</span><strong>{formatMoney(creator.netSales)}</strong><span>{number(creator.orders)}</span><span>{number(creator.publishedVideos)}</span></div>)}</div></Panel>
-      <Panel title="Product by Creator Matrix" subtitle="Affiliate-attributed net sales" className={s.spanFive}><div className={s.matrixGrid}>{creators.slice(0, 5).map((creator) => <div key={creator.creatorId} className={s.matrixRow}><span>{creator.creator}</span><span>{creator.bestSellingProduct || "Product not reported"}</span><strong>{formatMoney(creator.netSales)}</strong></div>)}</div></Panel>
+      <Panel title="Product by Creator Matrix" subtitle="Affiliate-attributed net sales" className={s.spanFive}><div className={s.matrixGrid}>{creators.slice(0, 5).map((creator) => <div key={creator.creatorId} className={s.matrixRow}><span>{creator.creator}</span><span title={creator.bestSellingProduct || undefined}>{affiliateProductLabel(creator.bestSellingProduct)}</span><strong>{formatMoney(creator.netSales)}</strong></div>)}</div></Panel>
       <Panel title="Affiliate Trend" subtitle="Affiliate-attributed net sales" className={s.spanFour}><ReportAreaChart data={affiliateAreaData(affiliate)} money /></Panel>
       <Panel title="Reconciled vs Unreconciled GMV" subtitle="TikTok affiliate GMV" className={s.spanThree}><ReportDonut data={[{ name: "Reconciled GMV", value: Math.max(0, affiliate.metrics.netSales - affiliate.metrics.unreconciledGmv) }, { name: "Unreconciled GMV", value: affiliate.metrics.unreconciledGmv }]} centre={formatMoney(affiliate.metrics.netSales)} /><p className={s.mutedNote}>Unreconciled GMV remains excluded from net sales.</p></Panel>
     </div>
