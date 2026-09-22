@@ -1217,6 +1217,7 @@
 .spanThree { grid-column: span 3; }
 .spanFour { grid-column: span 4; }
 .spanFive { grid-column: span 5; }
+.spanSix { grid-column: span 6; }
 .spanSeven { grid-column: span 7; }
 
 .panel {
@@ -1372,6 +1373,21 @@
 
 .closingLockup em { margin-left: 0; }
 .closingLockup span { padding-left: 12px; border-left: 1px solid #d88a9e; color: #756a70; font-size: 7px; letter-spacing: .16em; line-height: 1.5; text-transform: uppercase; }
+
+.channelPanel .donutWrap {
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 142px;
+}
+
+.channelPanel .donutCanvas {
+  width: 118px;
+  height: 118px;
+}
+
+.channelPanel .legendList { gap: 9px; }
+.channelPanel .legendRow { font-size: 9px; line-height: 1.2; }
+.channelPanel .legendRow strong { font-size: 11px; }
 
 @media screen and (max-width: 900px) {
   .reportPage { transform-origin: top center; }

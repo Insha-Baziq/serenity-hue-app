@@ -159,14 +159,13 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={FileText} label="Products with activity" value={number(products.length)} note={`${number(dashboard.unassigned.netUnits)} units remain unmapped`} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="Top-Selling Products" subtitle="Top five · by units sold" className={`${s.spanFive} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
-      <Panel title="Product Revenue Ranking" subtitle="Top five · by net sales" className={`${s.spanFour} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
-      <Panel title="Channel Contribution" subtitle="By net sales" className={s.spanThree}><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
+      <Panel title="Top-Selling Products" subtitle="Top five · by units sold" className={`${s.spanSix} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
+      <Panel title="Product Revenue Ranking" subtitle="Top five · by net sales" className={`${s.spanSix} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
       <Panel title="Product Sales Trend" subtitle="Monthly net sales" className={s.spanSeven}><ReportAreaChart data={trend} money /></Panel>
       <Panel title="Variant Performance" subtitle="Top five · net units sold by variant" className={s.spanFive}><VariantPerformanceChart rows={dashboard.variantPerformance ?? []} /></Panel>
       <Panel title="Stock Coverage" subtitle="Counted variants · reorder signal" className={s.spanFive}><ReportBarChart data={coverage.map((item) => ({ label: item.label, value: item.value, secondary: item.secondary }))} colour="#437d67" secondaryColour="#d8781b" /></Panel>
-      <Panel title="Physical vs Channel Stock" subtitle="Units" className={s.spanFour}><PanelEmpty message="Physical and allocated channel stock are not available in this report source." /></Panel>
-      <Panel title="Attention Notes" subtitle="Visible data boundaries" className={s.spanThree}><div className={s.noteList}><p><strong>Unmapped product lines</strong> {number(dashboard.unassigned.netUnits)} units remain outside product rows.</p><p><strong>Restock runway</strong> appears only for counted variants with a stored demand signal.</p></div></Panel>
+      <Panel title="Physical vs Channel Stock" subtitle="Units" className={s.spanThree}><PanelEmpty message="Physical and allocated channel stock are not available in this report source." /></Panel>
+      <Panel title="Channel Contribution" subtitle="By net sales" className={`${s.spanFour} ${s.channelPanel}`}><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
   </>;
