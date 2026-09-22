@@ -269,3 +269,27 @@ test("KPI dashboard forecasts only complete, urgent physical-variant restock dec
     { variantId: "rose", productTitle: "Brow Pomade", variantTitle: "Rose", countedStock: 20, dailyDemand: 1, forecastStockout: "2026-09-19", reorderBy: "2026-09-05", urgency: "due-soon" },
   ]);
 });
+
+test("KPI dashboard reports mapped variant units across Shopify and TikTok independently of restock urgency", () => {
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales: [],
+    refunds: [{ orderId: "shopify-order", lineItemId: "shopify-line", quantity: 1, processedAt: "2026-08-03T10:00:00.000Z" }],
+    variantPerformance: {
+      variants: [
+        { id: "v-serum-50", productTitle: "Glow Veil Serum", variantTitle: "50ml", countedStock: 12, leadTimeDays: 7, firstPaidSaleAt: null },
+        { id: "v-serum-100", productTitle: "Glow Veil Serum", variantTitle: "100ml", countedStock: 8, leadTimeDays: 7, firstPaidSaleAt: null },
+      ],
+      demandLines: [
+        { orderId: "shopify-order", lineItemId: "shopify-line", variantId: "v-serum-50", channel: "shopify", createdAt: "2026-08-01T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 3, quantityPerSale: 1 },
+        { orderId: "tiktok-order", lineItemId: "tiktok-line", variantId: "v-serum-100", channel: "tiktok", createdAt: "2026-08-02T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 4, quantityPerSale: 1 },
+      ],
+    },
+    freshness: null,
+  });
+
+  assert.deepEqual(dashboard.variantPerformance, [
+    { id: "v-serum-100", productTitle: "Glow Veil Serum", variantTitle: "100ml", netUnits: 4, shopifyUnits: 0, tiktokUnits: 4, countedStock: 8 },
+    { id: "v-serum-50", productTitle: "Glow Veil Serum", variantTitle: "50ml", netUnits: 2, shopifyUnits: 2, tiktokUnits: 0, countedStock: 12 },
+  ]);
+});

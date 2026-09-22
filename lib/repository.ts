@@ -423,6 +423,7 @@ function groupKpiRestockDemandLines(rows: QueryRows): KpiRestockDemandLine[] {
     orderId: stringValue(row.order_id),
     lineItemId: stringValue(row.source_line_item_id) || stringValue(row.order_item_id),
     variantId: stringValue(row.physical_variant_id),
+    channel: stringValue(row.channel) === "tiktok" ? "tiktok" as const : "shopify" as const,
     createdAt: stringValue(row.source_created_at),
     financialStatus: stringValue(row.financial_status),
     cancelledAt: optionalString(row.cancelled_at) ?? null,
@@ -479,6 +480,11 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
   const restockToday = londonKpiToday();
   const restockQueryStart = shiftKpiDate(restockToday, -90);
   const restockQueryEndExclusive = shiftKpiDate(restockToday, 2);
+  // The same mapped component rows power both the rolling restock signal and
+  // the selected-period variant report. Query the union so custom historical
+  // ranges do not silently render an empty variant chart.
+  const variantDemandQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
+  const variantDemandQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
   const refundQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
   const refundQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
   const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, freshnessResult] = await Promise.all([
@@ -543,7 +549,7 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
               FROM tiktok_after_sales_line_items after_sale
               WHERE after_sale.source_updated_at >= ? AND after_sale.source_updated_at < ?
             )
-            SELECT o.id AS order_id, o.source_created_at, o.financial_status, o.cancelled_at,
+            SELECT o.id AS order_id, o.source AS channel, o.source_created_at, o.financial_status, o.cancelled_at,
                    oi.id AS order_item_id, oi.source_line_item_id, oi.quantity,
                    component.physical_variant_id, component.quantity_per_sale
             FROM relevant_order_ids relevant
@@ -563,7 +569,7 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
              JOIN physical_listing_components component ON component.listing_id = listing.id
              JOIN physical_inventory_variants physical_variant ON physical_variant.id = component.physical_variant_id AND physical_variant.active = 1
              ORDER BY o.source_created_at ASC, o.id, oi.rowid, component.physical_variant_id`,
-      args: [restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive, restockQueryStart, restockQueryEndExclusive],
+      args: [variantDemandQueryStart, variantDemandQueryEndExclusive, variantDemandQueryStart, variantDemandQueryEndExclusive, variantDemandQueryStart, variantDemandQueryEndExclusive],
     }),
     db.execute(`WITH first_paid_sales AS (
                   SELECT component.physical_variant_id, MIN(o.source_created_at) AS first_paid_sale_at
@@ -609,6 +615,10 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
     ],
     restock: {
       today: restockToday,
+      variants: groupKpiRestockVariants(restockVariantsResult.rows),
+      demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
+    },
+    variantPerformance: {
       variants: groupKpiRestockVariants(restockVariantsResult.rows),
       demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
     },

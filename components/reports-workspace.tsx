@@ -8,7 +8,7 @@ import { useState, useTransition, type ElementType, type ReactNode } from "react
 import { Button } from "@/components/ui/button";
 import { ReportAreaChart, ReportBarChart, ReportDonut, type ReportChartPoint } from "@/components/report-charts";
 import { formatMoney } from "@/lib/format";
-import type { KpiDashboard, KpiPeriod } from "@/lib/kpi-dashboard";
+import type { KpiDashboard, KpiPeriod, KpiVariantPerformance } from "@/lib/kpi-dashboard";
 import type { TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import type { TikTokAdsConnectionState } from "@/lib/repository";
 import type { TikTokAdsReport } from "@/lib/tiktok-ads-reporting";
@@ -107,6 +107,19 @@ function PanelEmpty({ message }: { message: string }) {
   return <div className={s.panelEmpty}><BarChart3 size={23} strokeWidth={1.3} aria-hidden="true" /><span>{message}</span></div>;
 }
 
+function VariantPerformanceChart({ rows }: { rows: KpiVariantPerformance[] }) {
+  const visibleRows = rows.slice(0, 5);
+  if (!visibleRows.length) return <PanelEmpty message="No mapped variant sales were recorded in this period." />;
+  const maximum = Math.max(...visibleRows.map((row) => row.netUnits), 1);
+  return <div className={s.variantBars} aria-label="Top variants by net units sold">
+    {visibleRows.map((row) => <div className={s.variantBarRow} key={row.id}>
+      <div className={s.variantBarLabel}><span>{row.variantTitle || "Default variant"}</span><small>{row.productTitle} · S {number(row.shopifyUnits)} · T {number(row.tiktokUnits)}</small></div>
+      <div className={s.variantBarTrack}><span style={{ width: `${Math.max(4, row.netUnits / maximum * 100)}%` }} /></div>
+      <strong>{number(row.netUnits)}</strong>
+    </div>)}
+  </div>;
+}
+
 function ReportHeader({ title, eyebrow: _eyebrow, range, freshness: _freshness, note, periodNote }: { title: string; eyebrow: string; range: KpiPeriod; freshness?: string | null; note: string; periodNote: string }) {
   void _eyebrow;
   void _freshness;
@@ -146,11 +159,11 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={FileText} label="Products with activity" value={number(products.length)} note={`${number(dashboard.unassigned.netUnits)} units remain unmapped`} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="Top-Selling Products" subtitle="By units sold" className={s.spanFive}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
-      <Panel title="Product Revenue Ranking" subtitle="By net sales" className={s.spanFour}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Top-Selling Products" subtitle="Top five · by units sold" className={`${s.spanFive} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
+      <Panel title="Product Revenue Ranking" subtitle="Top five · by net sales" className={`${s.spanFour} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
       <Panel title="Channel Contribution" subtitle="By net sales" className={s.spanThree}><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
       <Panel title="Product Sales Trend" subtitle="Monthly net sales" className={s.spanSeven}><ReportAreaChart data={trend} money /></Panel>
-      <Panel title="Variant Performance" subtitle="Sell-through rate by variant" className={s.spanFive}><PanelEmpty message="Variant sell-through is not returned by the reporting source yet." /></Panel>
+      <Panel title="Variant Performance" subtitle="Top five · net units sold by variant" className={s.spanFive}><VariantPerformanceChart rows={dashboard.variantPerformance ?? []} /></Panel>
       <Panel title="Stock Coverage" subtitle="Counted variants · reorder signal" className={s.spanFive}><ReportBarChart data={coverage.map((item) => ({ label: item.label, value: item.value, secondary: item.secondary }))} colour="#437d67" secondaryColour="#d8781b" /></Panel>
       <Panel title="Physical vs Channel Stock" subtitle="Units" className={s.spanFour}><PanelEmpty message="Physical and allocated channel stock are not available in this report source." /></Panel>
       <Panel title="Attention Notes" subtitle="Visible data boundaries" className={s.spanThree}><div className={s.noteList}><p><strong>Unmapped product lines</strong> {number(dashboard.unassigned.netUnits)} units remain outside product rows.</p><p><strong>Restock runway</strong> appears only for counted variants with a stored demand signal.</p></div></Panel>
@@ -161,7 +174,7 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
 
 function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
   const { summary, topCustomers } = dashboard.customers;
-  const channelData = dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify orders" : "TikTok orders", value: channel.orders }));
+  const channelData = dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.orders }));
   return <>
     <ReportHeader title="Serenity Hue Customer Performance Report" eyebrow="Customers · lasting relationships" range={dashboard.range} freshness={dashboard.freshness} note="Real customers · lasting relationships · a more radiant tomorrow" periodNote="Beauty builds brighter connections" />
     <div className={`${s.kpiGrid} ${s.kpiGridFive}`}>
@@ -173,7 +186,7 @@ function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
     </div>
     <div className={s.reportGrid}>
       <Panel title="New vs Repeat Customers" subtitle="Share of total customers" className={s.spanFour}><ReportDonut data={[{ name: "New customers", value: summary.new }, { name: "Repeat customers", value: summary.repeat }]} centre={number(summary.total)} /></Panel>
-      <Panel title="Top Customers by Spend" subtitle="Total spend" className={s.spanFive}><ReportBarChart data={topCustomers.slice(0, 5).map((customer) => ({ label: customer.name, value: customer.netSpend }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Top Customers by Spend" subtitle="Top five · total spend" className={`${s.spanFive} ${s.rankChart}`}><ReportBarChart data={topCustomers.slice(0, 5).map((customer) => ({ label: customer.name, value: customer.netSpend }))} money colour="#c13a9b" /></Panel>
       <Panel title="Shopify vs TikTok Customers" subtitle="Customer-period order share" className={s.spanThree}><ReportDonut data={channelData} centre={number(dashboard.metrics.orders)} /></Panel>
       <Panel title="Customer Activity Trend" subtitle="Monthly active customer proxy" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "orders")} /></Panel>
       <Panel title="Repeat-Customer Contribution" subtitle="Share of identified customers" className={s.spanFive}><ReportDonut data={[{ name: "Repeat customers", value: summary.repeat }, { name: "New customers", value: summary.new }]} centre={percent(summary.total ? summary.repeat / summary.total : 0)} /><p className={s.mutedNote}>Revenue and order contribution by repeat customers is not returned by the current source.</p></Panel>

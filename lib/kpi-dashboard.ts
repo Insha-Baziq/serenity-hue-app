@@ -85,11 +85,22 @@ export type KpiRestockDemandLine = {
   orderId: string;
   lineItemId: string;
   variantId: string;
+  channel: KpiChannel;
   createdAt: string;
   financialStatus: string;
   cancelledAt: string | null;
   quantity: number;
   quantityPerSale: number;
+};
+
+export type KpiVariantPerformance = {
+  id: string;
+  productTitle: string;
+  variantTitle: string;
+  netUnits: number;
+  shopifyUnits: number;
+  tiktokUnits: number;
+  countedStock: number | null;
 };
 
 export type KpiRestockPlan = {
@@ -123,6 +134,8 @@ export type KpiDashboard = {
   previousProducts?: KpiProductPerformance[];
   /** Refund-aware mapped physical-product demand on the report's display buckets. */
   productTrends?: Record<string, Array<{ date: string; netRevenue: number; netUnits: number }>>;
+  /** Refund-aware physical-variant demand split by channel for the report period. */
+  variantPerformance: KpiVariantPerformance[];
   dataQuality?: { refundEvents: number; refundedUnits: number; cancelledOrders: number };
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
@@ -432,6 +445,48 @@ function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[
   }).sort((left, right) => left.reorderBy.localeCompare(right.reorderBy) || left.productTitle.localeCompare(right.productTitle) || left.variantTitle.localeCompare(right.variantTitle));
 }
 
+function buildVariantPerformance(input: {
+  range: KpiPeriod;
+  variants: KpiRestockVariant[];
+  demandLines: KpiRestockDemandLine[];
+  refunds: KpiRefund[];
+}): KpiVariantPerformance[] {
+  const sourceQuantity = new Map<string, number>();
+  for (const line of input.demandLines) {
+    sourceQuantity.set(`${line.orderId}:${line.lineItemId}`, Math.max(sourceQuantity.get(`${line.orderId}:${line.lineItemId}`) ?? 0, line.quantity));
+  }
+
+  const refundedByLine = new Map<string, number>();
+  for (const refund of [...input.refunds].sort((left, right) => left.processedAt.localeCompare(right.processedAt))) {
+    if (!contains(input.range, londonDate(refund.processedAt))) continue;
+    const key = `${refund.orderId}:${refund.lineItemId}`;
+    const maximum = sourceQuantity.get(key) ?? 0;
+    const alreadyRefunded = refundedByLine.get(key) ?? 0;
+    const units = Math.max(0, Math.min(refund.quantity, maximum - alreadyRefunded));
+    if (units) refundedByLine.set(key, alreadyRefunded + units);
+  }
+
+  const totals = new Map<string, { netUnits: number; shopifyUnits: number; tiktokUnits: number }>();
+  for (const line of input.demandLines) {
+    if (line.cancelledAt || line.financialStatus === "pending" || !contains(input.range, londonDate(line.createdAt))) continue;
+    const refundUnits = refundedByLine.get(`${line.orderId}:${line.lineItemId}`) ?? 0;
+    const units = (line.quantity - refundUnits) * line.quantityPerSale;
+    if (!units) continue;
+    const total = totals.get(line.variantId) ?? { netUnits: 0, shopifyUnits: 0, tiktokUnits: 0 };
+    total.netUnits += units;
+    if (line.channel === "shopify") total.shopifyUnits += units;
+    else total.tiktokUnits += units;
+    totals.set(line.variantId, total);
+  }
+
+  return input.variants.map((variant) => {
+    const total = totals.get(variant.id);
+    if (!total || total.netUnits === 0) return null;
+    return { id: variant.id, productTitle: variant.productTitle, variantTitle: variant.variantTitle, ...total, countedStock: variant.countedStock };
+  }).filter((variant): variant is KpiVariantPerformance => Boolean(variant))
+    .sort((left, right) => right.netUnits - left.netUnits || left.productTitle.localeCompare(right.productTitle) || left.variantTitle.localeCompare(right.variantTitle));
+}
+
 /**
  * Applies sales on their purchase day and partial refunds on their processed
  * day. Inputs are already bounded by the repository query; this pure function
@@ -443,6 +498,7 @@ export function buildKpiDashboard(input: {
   refunds: KpiRefund[];
   customerOrders?: KpiCustomerOrder[];
   restock?: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
+  variantPerformance?: { variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
   freshness: string | null;
 }): KpiDashboard {
   const previousRange = input.range.allTime ? null : precedingRange(input.range);
@@ -566,6 +622,12 @@ export function buildKpiDashboard(input: {
     productTrends: Object.fromEntries([...productTrends.entries()].map(([productId, points]) => [productId,
       [...trend.keys()].map((date) => ({ date, ...(points.get(date) ?? { netRevenue: 0, netUnits: 0 }) })),
     ])),
+    variantPerformance: input.variantPerformance ? buildVariantPerformance({
+      range: input.range,
+      variants: input.variantPerformance.variants,
+      demandLines: input.variantPerformance.demandLines,
+      refunds: input.refunds,
+    }) : [],
     dataQuality: {
       refundEvents: selectedRefundEvents,
       refundedUnits: selectedRefundedUnits,

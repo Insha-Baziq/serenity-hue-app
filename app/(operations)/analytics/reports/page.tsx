@@ -13,7 +13,7 @@ const REPORT_CACHE_TAG = "serenity-hue:visual-reports";
 
 const getCachedKpiDashboard = unstable_cache(
   async (range: KpiPeriod) => getKpiDashboard(range),
-  ["visual-report-kpi-dashboard-v1"],
+  ["visual-report-kpi-dashboard-v2"],
   { revalidate: REPORT_CACHE_SECONDS, tags: [REPORT_CACHE_TAG] },
 );
 

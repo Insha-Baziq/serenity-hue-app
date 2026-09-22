@@ -843,6 +843,117 @@
   .reportFooter { break-inside: avoid; }
 }
 
+/* Data-density refinements for the report cards. These keep the fixed A4
+   composition intact while making the intended five-row rankings readable. */
+.rankChart .chartCanvas {
+  height: 143px;
+  min-height: 143px;
+}
+
+.variantBars {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.variantBarRow {
+  display: grid;
+  grid-template-columns: minmax(70px, 1.05fr) minmax(48px, 1.35fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.variantBarLabel {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.variantBarLabel span {
+  overflow: hidden;
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 8px;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variantBarLabel small {
+  overflow: hidden;
+  color: #756a70;
+  font-size: 6px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variantBarTrack {
+  height: 8px;
+  overflow: hidden;
+  background: #f0e8ec;
+}
+
+.variantBarTrack span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #6c285f, #c13a9b);
+}
+
+.variantBarRow strong {
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Three-column cards are intentionally compact in the approved A4 layout.
+   Keep the donut and legend inside that card instead of letting long labels
+   escape into the neighbouring panel. */
+.spanThree .donutWrap {
+  gap: 8px;
+  min-width: 0;
+}
+
+.spanThree .donutCanvas {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+}
+
+.spanThree .donutCentre {
+  width: 94%;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.spanThree .legendList {
+  min-width: 0;
+  gap: 6px;
+}
+
+.spanThree .legendRow {
+  grid-template-columns: 6px minmax(0, 1fr) max-content;
+  min-width: 0;
+  gap: 4px;
+  align-items: start;
+  font-size: 7px;
+  line-height: 1.15;
+}
+
+.spanThree .legendRow > span:not(.legendSwatch) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.spanThree .legendRow strong {
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 /* Approved HTML preview composition. Keep the report itself A4-sized so the
    screen, print dialog, and saved PDF all use the same editorial canvas. */
 .reportPage {
@@ -1097,6 +1208,7 @@
 
 .reportGrid {
   grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 190px;
   gap: 7px;
   margin-top: 8px;
 }
@@ -1264,6 +1376,10 @@
 @media screen and (max-width: 900px) {
   .reportPage { transform-origin: top center; }
   .reportBrandRow { grid-template-columns: 148px minmax(0, 1fr) 150px; gap: 12px; }
+}
+
+@media screen and (max-width: 700px) {
+  .reportGrid { grid-auto-rows: auto; }
 }
 
 @media print {
