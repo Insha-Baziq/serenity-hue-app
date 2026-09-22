@@ -35,8 +35,9 @@ function tooltipValue(value: unknown, money: boolean) {
   return money ? `£${(numeric / 100).toLocaleString("en-GB", { minimumFractionDigits: 2 })}` : numeric.toLocaleString("en-GB");
 }
 
-export function ReportAreaChart({ data, dataKey = "value", money = false, colour = magenta }: { data: ReportChartPoint[]; dataKey?: "value" | "secondary"; money?: boolean; colour?: string }) {
+export function ReportAreaChart({ data, dataKey = "value", money = false, colour = magenta, secondaryColour = rose }: { data: ReportChartPoint[]; dataKey?: "value" | "secondary"; money?: boolean; colour?: string; secondaryColour?: string }) {
   if (!data.length) return <div className={s.chartEmpty}>No recorded activity in this period.</div>;
+  const hasSecondary = data.some((point) => point.secondary !== undefined);
   return (
     <div className={s.chartCanvas}>
       <ChartContainer id="report-area-chart" config={{ series: { label: "Series", color: colour } }}>
@@ -46,6 +47,7 @@ export function ReportAreaChart({ data, dataKey = "value", money = false, colour
             <XAxis dataKey="label" tickFormatter={shortLabel} tick={{ fill: axis, fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={24} />
             <YAxis tickFormatter={money ? moneyTick : countTick} tick={{ fill: axis, fontSize: 10 }} axisLine={false} tickLine={false} width={42} />
             <Tooltip formatter={(value: unknown) => tooltipValue(value, money)} />
+            {hasSecondary && <Area type="monotone" dataKey="secondary" stroke={secondaryColour} fill={secondaryColour} fillOpacity={0.08} strokeWidth={2} dot={{ r: 2, fill: secondaryColour, strokeWidth: 0 }} activeDot={{ r: 4 }} />}
             <Area type="monotone" dataKey={dataKey} stroke={colour} fill={colour} fillOpacity={0.14} strokeWidth={2.5} dot={{ r: 2.5, fill: colour, strokeWidth: 0 }} activeDot={{ r: 4 }} />
           </AreaChart>
         </ResponsiveContainer>

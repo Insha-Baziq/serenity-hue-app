@@ -842,3 +842,441 @@
   .panel { break-inside: avoid; }
   .reportFooter { break-inside: avoid; }
 }
+
+/* Approved HTML preview composition. Keep the report itself A4-sized so the
+   screen, print dialog, and saved PDF all use the same editorial canvas. */
+.reportPage {
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  overflow: hidden;
+  margin: 0 auto;
+  padding: 8.5mm 8mm 6.5mm;
+  border: 0;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(244, 186, 212, .26), transparent 20%),
+    radial-gradient(circle at 0% 100%, rgba(248, 213, 228, .22), transparent 19%),
+    var(--report-paper);
+  box-shadow: 0 22px 62px rgba(74, 33, 57, .18);
+  color: #33212d;
+}
+
+.reportPage::before,
+.reportPage::after {
+  position: absolute;
+  z-index: 0;
+  width: 138px;
+  height: 138px;
+  border-radius: 50%;
+  content: "";
+  opacity: .18;
+  filter: blur(1px);
+  pointer-events: none;
+}
+
+.reportPage::before {
+  top: -72px;
+  right: -35px;
+  background:
+    radial-gradient(ellipse at 27% 48%, #e9a1bf 0 18%, transparent 19%),
+    radial-gradient(ellipse at 59% 29%, #f3c4d6 0 22%, transparent 23%),
+    radial-gradient(ellipse at 69% 69%, #dda0ba 0 18%, transparent 19%);
+  transform: rotate(18deg);
+}
+
+.reportPage::after {
+  bottom: -80px;
+  left: -45px;
+  background:
+    radial-gradient(ellipse at 32% 38%, #e8abc2 0 18%, transparent 19%),
+    radial-gradient(ellipse at 72% 62%, #f3c2d6 0 25%, transparent 26%),
+    radial-gradient(ellipse at 49% 85%, #df91b1 0 16%, transparent 17%);
+  transform: rotate(-22deg);
+}
+
+.reportPage > * { position: relative; z-index: 1; }
+
+.reportHeader {
+  display: block;
+  min-height: 0;
+  padding-bottom: 11px;
+  border-bottom: 1px solid #dbc9d2;
+}
+
+.reportBrandRow {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr) 170px;
+  gap: 18px;
+  align-items: start;
+  min-height: 93px;
+  padding-bottom: 11px;
+  border-bottom: 0;
+}
+
+.logoSlot { min-width: 0; }
+
+.logoFrame {
+  display: block;
+  width: 104px;
+  height: 104px;
+  margin-top: 2px;
+}
+
+.brandCopy {
+  display: block;
+  grid-column: 2;
+  min-width: 0;
+  padding: 5px 0 0 18px;
+  border-left: 1px solid #d88a9e;
+  color: #756a70;
+  font-family: var(--type-sans);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .22em;
+  line-height: 1.8;
+  text-transform: uppercase;
+}
+
+.brandCopy::after {
+  display: block;
+  width: 32px;
+  margin-top: 7px;
+  border-top: 1px solid #c13a9b;
+  content: "";
+}
+
+.mantra {
+  position: absolute;
+  top: -1px;
+  right: 188px;
+  align-self: start;
+  margin: 0;
+  color: #c13a9b;
+  font-family: "Brush Script MT", "Segoe Script", cursive;
+  font-size: 23px;
+  font-style: italic;
+  letter-spacing: 0;
+  line-height: .82;
+  text-align: center;
+  transform: rotate(-3deg);
+}
+
+.mantra em { margin-left: 0; }
+
+.periodBlock {
+  display: block;
+  grid-column: 3;
+  min-width: 0;
+  padding: 3px 0 0 17px;
+  border-left: 1px solid #d88a9e;
+}
+
+.periodBlock span,
+.periodBlock small {
+  display: block;
+  color: #756a70;
+  font-family: var(--type-sans);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .2em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+.periodBlock strong {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 20px;
+  font-weight: 400;
+  letter-spacing: -.045em;
+  line-height: 1.02;
+}
+
+.periodBlock small { margin-top: 8px; font-weight: 700; letter-spacing: .16em; }
+
+.reportTitleRow {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: -1px;
+  padding-top: 0;
+}
+
+.reportTitleRow h1 {
+  max-width: 610px;
+  margin: 0;
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -.045em;
+  line-height: .9;
+}
+
+.reportTitleRow p {
+  flex: 0 0 205px;
+  max-width: 205px;
+  margin: 0 0 3px;
+  color: #756a70;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .22em;
+  line-height: 1.55;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.kpiGrid {
+  gap: 7px;
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+.metricCard {
+  display: block;
+  min-height: 68px;
+  padding: 8px 8px 7px;
+  border: 1px solid #e9dfe2;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .62);
+}
+
+.metricTop { display: flex; align-items: center; gap: 6px; }
+
+.iconTile {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f8e9f2;
+  color: #49163f;
+}
+
+.iconTile svg { width: 13px; height: 13px; }
+
+.metricLabel {
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.05;
+  text-transform: none;
+}
+
+.metricValue {
+  display: block;
+  margin: 2px 0 0 28px;
+  overflow: hidden;
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -.045em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricDelta,
+.metricNote {
+  display: block;
+  margin-left: 28px;
+  font-size: 8px;
+  line-height: 1.2;
+}
+
+.metricDelta { margin-top: 3px; color: #2d9460; }
+.metricNote { margin-top: 3px; color: #756a70; }
+
+.reportGrid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.spanTwo { grid-column: span 2; }
+.spanThree { grid-column: span 3; }
+.spanFour { grid-column: span 4; }
+.spanFive { grid-column: span 5; }
+.spanSeven { grid-column: span 7; }
+
+.panel {
+  display: flex;
+  min-height: 0;
+  gap: 0;
+  padding: 8px 9px;
+  border: 1px solid #e9dfe2;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .55);
+}
+
+.panelHeader { margin-bottom: 2px; }
+
+.panelHeader h2 {
+  color: #49163f;
+  font-family: var(--type-display);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -.025em;
+  line-height: 1;
+}
+
+.panelHeader p {
+  margin-top: 4px;
+  color: #756a70;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .2em;
+  line-height: 1.2;
+}
+
+.chartCanvas {
+  width: 100%;
+  height: 103px;
+  min-height: 103px;
+  margin-top: 4px;
+}
+
+.chartCanvas .recharts-cartesian-axis-tick text,
+.chartCanvas .recharts-label { font-size: 7px !important; }
+.chartCanvas .recharts-cartesian-grid line { stroke: #eadfe3; }
+.chartCanvas .recharts-cartesian-axis line { stroke: #dbc9d2; }
+
+.chartEmpty,
+.panelEmpty {
+  display: grid;
+  min-height: 86px;
+  flex: 1 1 auto;
+  place-items: center;
+  gap: 6px;
+  color: #a89da2;
+  font-size: 8px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.donutWrap {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 114px;
+  margin-top: 5px;
+}
+
+.donutCanvas { width: 92px; height: 92px; flex: 0 0 92px; }
+.donutCentre { font-size: 12px; }
+.legendList { display: grid; gap: 8px; }
+.legendRow { grid-template-columns: 7px minmax(0, 1fr) auto; gap: 4px; font-size: 8px; }
+.legendRow strong { font-family: var(--type-display); font-size: 10px; font-weight: 500; }
+.legendSwatch { width: 7px; height: 7px; }
+
+.dataTable {
+  margin-top: 5px;
+  border: 0;
+  border-radius: 0;
+}
+
+.dataHead,
+.dataRow {
+  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, .75fr));
+  gap: 5px;
+  padding: 4px 3px;
+  font-size: 8px;
+}
+
+.dataHead { color: #756a70; font-size: 7px; letter-spacing: .08em; }
+.dataRow { border-top: 1px solid #f0e7ea; }
+.dataRow strong { color: #49163f; font-family: var(--type-display); font-size: 9px; font-weight: 500; }
+
+.noteList { gap: 7px; margin-top: 5px; font-size: 8px; line-height: 1.35; }
+.noteList p { padding-bottom: 6px; }
+.noteList strong { color: #6c285f; }
+
+.statusGrid { gap: 5px; }
+.statusGrid > div,
+.comparisonList > div { gap: 3px; padding: 6px; border-radius: 5px; }
+.statusGrid span,
+.comparisonList span { font-size: 7px; }
+.statusGrid strong,
+.comparisonList strong { font-size: 15px; }
+.mutedNote,
+.definitionNote { font-size: 7px; line-height: 1.35; }
+
+.comparisonList { gap: 5px; }
+
+.funnel { min-height: 90px; gap: 5px; margin-top: 5px; }
+.funnel > div { gap: 4px; padding: 9px 5px; border-radius: 5px; }
+.funnel strong { font-size: 16px; }
+.funnel span { font-size: 7px; }
+
+.matrixGrid { gap: 1px; margin-top: 5px; }
+.matrixRow { grid-template-columns: 1fr 1.35fr .8fr; gap: 5px; padding: 5px 4px; font-size: 8px; }
+
+.reportNotice { padding: 7px 9px; border-radius: 6px; font-size: 8px; }
+
+.reportFooter {
+  position: absolute;
+  right: 8mm;
+  bottom: 6.5mm;
+  left: 8mm;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 0;
+  padding-top: 5px;
+  border-top: 0;
+  color: #756a70;
+  font-size: 7px;
+  letter-spacing: .19em;
+  text-transform: uppercase;
+}
+
+.closingLockup {
+  position: absolute;
+  bottom: 22mm;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #c13a9b;
+}
+
+.closingLockup strong {
+  font-family: "Brush Script MT", "Segoe Script", cursive;
+  font-size: 22px;
+  font-style: italic;
+  font-weight: 400;
+  line-height: .82;
+  transform: rotate(-4deg);
+}
+
+.closingLockup em { margin-left: 0; }
+.closingLockup span { padding-left: 12px; border-left: 1px solid #d88a9e; color: #756a70; font-size: 7px; letter-spacing: .16em; line-height: 1.5; text-transform: uppercase; }
+
+@media screen and (max-width: 900px) {
+  .reportPage { transform-origin: top center; }
+  .reportBrandRow { grid-template-columns: 148px minmax(0, 1fr) 150px; gap: 12px; }
+}
+
+@media print {
+  .reportPage {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 8.5mm 8mm 6.5mm;
+    box-shadow: none;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .reportHeader { padding-bottom: 11px; }
+  .reportGrid { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 7px; }
+  .panel { break-inside: avoid; }
+  .reportFooter { break-inside: avoid; }
+}

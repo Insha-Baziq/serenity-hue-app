@@ -7,7 +7,7 @@ import { ArrowLeft, BarChart3, CalendarDays, CircleDollarSign, Download, Eye, Fi
 import { useState, useTransition, type ElementType, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ReportAreaChart, ReportBarChart, ReportDonut, type ReportChartPoint } from "@/components/report-charts";
-import { formatMoney, relativeTime } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import type { KpiDashboard, KpiPeriod } from "@/lib/kpi-dashboard";
 import type { TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import type { TikTokAdsConnectionState } from "@/lib/repository";
@@ -96,7 +96,7 @@ function IconTile({ icon: Icon }: { icon: ElementType }) {
 }
 
 function MetricCard({ icon, label, value, note, change }: { icon: ElementType; label: string; value: string; note?: string; change?: string }) {
-  return <article className={s.metricCard}><IconTile icon={icon} /><div className={s.metricCopy}><span className={s.metricLabel}>{label}</span><strong>{value}</strong>{change && <span className={s.metricChange}>{change}</span>}{note && <small>{note}</small>}</div></article>;
+  return <article className={s.metricCard}><div className={s.metricTop}><IconTile icon={icon} /><span className={s.metricLabel}>{label}</span></div><strong className={s.metricValue}>{value}</strong>{change && <span className={s.metricDelta}>{change}</span>}{note && <small className={s.metricNote}>{note}</small>}</article>;
 }
 
 function Panel({ title, subtitle, children, className = "", action }: { title: string; subtitle?: string; children: ReactNode; className?: string; action?: ReactNode }) {
@@ -107,17 +107,22 @@ function PanelEmpty({ message }: { message: string }) {
   return <div className={s.panelEmpty}><BarChart3 size={23} strokeWidth={1.3} aria-hidden="true" /><span>{message}</span></div>;
 }
 
-function ReportHeader({ title, eyebrow, range, freshness, note }: { title: string; eyebrow: string; range: KpiPeriod; freshness?: string | null; note: string }) {
+function ReportHeader({ title, eyebrow: _eyebrow, range, freshness: _freshness, note, periodNote }: { title: string; eyebrow: string; range: KpiPeriod; freshness?: string | null; note: string; periodNote: string }) {
+  void _eyebrow;
+  void _freshness;
+  const shortTitle = title.replace(/^Serenity Hue\s+/, "");
   return <header className={s.reportHeader}>
     <div className={s.reportBrandRow}>
-      <span className={s.logoFrame}><Image src="/serenity-hue-logo-black.png" alt="Serenity Hue by Shabina" fill sizes="(max-width: 900px) 112px, 155px" priority /></span>
-      <div className={s.brandDivider} />
+      <div className={s.logoSlot}>
+        <span className={s.logoFrame}><Image src="/serenity-hue-logo-black.png" alt="Serenity Hue by Shabina" fill sizes="104px" priority /></span>
+      </div>
       <span className={s.brandCopy}>Skincare that<br />brings out a calmer,<br />brighter you.</span>
       <div className={s.mantra}>Beauty<br /><em>in Balance</em></div>
+      <div className={s.periodBlock}><span>Report period</span><strong>{range.allTime ? "All recorded activity" : rangeLabel(range)}</strong><small>{periodNote}</small></div>
     </div>
     <div className={s.reportTitleRow}>
-      <div><span className={s.reportEyebrow}>{eyebrow}</span><h1>{title}</h1><p>{note}</p></div>
-      <div className={s.periodBlock}><span>Report period</span><strong>{range.allTime ? "All recorded activity" : rangeLabel(range)}</strong>{freshness && <small>Updated {relativeTime(freshness)}</small>}</div>
+      <h1>Serenity Hue<br />{shortTitle}</h1>
+      <p>{note}</p>
     </div>
   </header>;
 }
@@ -133,7 +138,7 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
   const coverage = dashboard.restock.slice(0, 6).map((item) => ({ label: `${item.productTitle} · ${item.variantTitle}`, value: item.countedStock, secondary: Math.round(item.dailyDemand * 7) }));
   const trend = topProduct && dashboard.productTrends?.[topProduct.id] ? chartData(dashboard.productTrends[topProduct.id]!.map((point) => ({ date: point.date, value: point.netRevenue }))) : areaData(dashboard, "netSales");
   return <>
-    <ReportHeader title="Serenity Hue Product Performance Report" eyebrow="Product performance · product growth" range={dashboard.range} freshness={dashboard.freshness} note="Sales insights · product growth · a more radiant tomorrow" />
+    <ReportHeader title="Serenity Hue Product Performance Report" eyebrow="Product performance · product growth" range={dashboard.range} freshness={dashboard.freshness} note="Sales insights · product growth · a more radiant tomorrow" periodNote="Beauty drives a brighter tomorrow" />
     <div className={`${s.kpiGrid} ${s.kpiGridFour}`}>
       <MetricCard icon={ShoppingBag} label="Net product sales" value={formatMoney(dashboard.metrics.netSales)} change={changeLabel(changeAgainst(dashboard.metrics.netSales, dashboard.previous?.metrics.netSales))} />
       <MetricCard icon={Package} label="Net units sold" value={number(dashboard.metrics.netUnits)} change={changeLabel(changeAgainst(dashboard.metrics.netUnits, dashboard.previous?.metrics.netUnits))} />
@@ -141,13 +146,14 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={FileText} label="Products with activity" value={number(products.length)} note={`${number(dashboard.unassigned.netUnits)} units remain unmapped`} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="Top-selling products" subtitle="By net units sold" className={s.spanTwo}><ReportBarChart data={products.map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
-      <Panel title="Product revenue ranking" subtitle="By net sales"><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
-      <Panel title="Channel contribution" subtitle="Net sales by recorded channel"><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
-      <Panel title={topProduct ? `${topProduct.title} sales trend` : "Product sales trend"} subtitle="Net revenue across the selected period" className={s.spanTwo}><ReportAreaChart data={trend} money /></Panel>
-      <Panel title="Product mix" subtitle="Mapped units by source"><div className={s.dataTable}><div className={s.dataHead}><span>Product</span><span>Shopify</span><span>TikTok</span><span>Total</span></div>{products.slice(0, 6).map((product) => <div className={s.dataRow} key={product.id}><span>{product.title}</span><span>{number(product.shopifyUnits)}</span><span>{number(product.tiktokUnits)}</span><strong>{number(product.netUnits)}</strong></div>)}</div></Panel>
-      <Panel title="Restock runway candidates" subtitle="Counted stock versus seven-day demand where a reorder signal exists"><ReportBarChart data={coverage} colour="#437d67" secondaryColour="#d8781b" /></Panel>
-      <Panel title="Reporting notes" subtitle="What this report can prove"><div className={s.noteList}><p><strong>Net sales</strong> excludes pending and cancelled orders and applies recorded refund events.</p><p><strong>Unmapped demand</strong> remains in totals but is not assigned to a product row.</p><p><strong>Restock runway</strong> appears only for counted variants with a stored lead time and trailing demand; it is not a total portfolio stock-coverage calculation.</p></div></Panel>
+      <Panel title="Top-Selling Products" subtitle="By units sold" className={s.spanFive}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
+      <Panel title="Product Revenue Ranking" subtitle="By net sales" className={s.spanFour}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Channel Contribution" subtitle="By net sales" className={s.spanThree}><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
+      <Panel title="Product Sales Trend" subtitle="Monthly net sales" className={s.spanSeven}><ReportAreaChart data={trend} money /></Panel>
+      <Panel title="Variant Performance" subtitle="Sell-through rate by variant" className={s.spanFive}><PanelEmpty message="Variant sell-through is not returned by the reporting source yet." /></Panel>
+      <Panel title="Stock Coverage" subtitle="Counted variants · reorder signal" className={s.spanFive}><ReportBarChart data={coverage.map((item) => ({ label: item.label, value: item.value, secondary: item.secondary }))} colour="#437d67" secondaryColour="#d8781b" /></Panel>
+      <Panel title="Physical vs Channel Stock" subtitle="Units" className={s.spanFour}><PanelEmpty message="Physical and allocated channel stock are not available in this report source." /></Panel>
+      <Panel title="Attention Notes" subtitle="Visible data boundaries" className={s.spanThree}><div className={s.noteList}><p><strong>Unmapped product lines</strong> {number(dashboard.unassigned.netUnits)} units remain outside product rows.</p><p><strong>Restock runway</strong> appears only for counted variants with a stored demand signal.</p></div></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
   </>;
@@ -157,7 +163,7 @@ function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
   const { summary, topCustomers } = dashboard.customers;
   const channelData = dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify orders" : "TikTok orders", value: channel.orders }));
   return <>
-    <ReportHeader title="Serenity Hue Customer Performance Report" eyebrow="Customers · lasting relationships" range={dashboard.range} freshness={dashboard.freshness} note="Real customers · lasting relationships · a more radiant tomorrow" />
+    <ReportHeader title="Serenity Hue Customer Performance Report" eyebrow="Customers · lasting relationships" range={dashboard.range} freshness={dashboard.freshness} note="Real customers · lasting relationships · a more radiant tomorrow" periodNote="Beauty builds brighter connections" />
     <div className={`${s.kpiGrid} ${s.kpiGridFive}`}>
       <MetricCard icon={Users} label="Total active customers" value={number(summary.total)} change={changeLabel(changeAgainst(summary.total, undefined))} />
       <MetricCard icon={Users} label="New customers" value={number(summary.new)} note="One recorded order" />
@@ -166,12 +172,14 @@ function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={ShoppingBag} label="Average order value" value={formatMoney(dashboard.metrics.averageOrderValue)} change={changeLabel(changeAgainst(dashboard.metrics.averageOrderValue, dashboard.previous?.metrics.averageOrderValue))} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="New vs repeat customers" subtitle="Share of identified customers"><ReportDonut data={[{ name: "New customers", value: summary.new }, { name: "Repeat customers", value: summary.repeat }]} centre={number(summary.total)} /></Panel>
-      <Panel title="Top customers by spend" subtitle="Net spend in selected period" className={s.spanTwo}><ReportBarChart data={topCustomers.slice(0, 7).map((customer) => ({ label: customer.name, value: customer.netSpend }))} money colour="#c13a9b" /></Panel>
-      <Panel title="Orders by channel" subtitle="Customer-period order share"><ReportDonut data={channelData} centre={number(dashboard.metrics.orders)} /></Panel>
-      <Panel title="Order activity trend" subtitle="A truthful proxy for customer-period activity"><ReportAreaChart data={areaData(dashboard, "orders")} /></Panel>
-      <Panel title="Customer purchase depth" subtitle="Top ranked customers and qualifying recorded orders" className={s.spanTwo}><div className={s.dataTable}><div className={s.dataHead}><span>Customer</span><span>Net spend</span><span>Recorded orders</span><span>Latest purchase</span></div>{topCustomers.slice(0, 8).map((customer) => <div className={s.dataRow} key={`${customer.name}-${customer.latestPurchase}`}><span>{customer.name}</span><strong>{formatMoney(customer.netSpend)}</strong><span>{number(customer.qualifyingOrders)}</span><span>{formatDate(customer.latestPurchase, true)}</span></div>)}</div></Panel>
-      <Panel title="Customer reporting notes" subtitle="Identity and history rules"><div className={s.noteList}><p>Customers are grouped using the stored email, phone, and compatible name evidence.</p><p>Guest orders without a stable identity are not silently merged into a customer.</p><p>Spend is refund-aware for recorded events and the top-customer table is capped to the available ranked sample.</p></div></Panel>
+      <Panel title="New vs Repeat Customers" subtitle="Share of total customers" className={s.spanFour}><ReportDonut data={[{ name: "New customers", value: summary.new }, { name: "Repeat customers", value: summary.repeat }]} centre={number(summary.total)} /></Panel>
+      <Panel title="Top Customers by Spend" subtitle="Total spend" className={s.spanFive}><ReportBarChart data={topCustomers.slice(0, 5).map((customer) => ({ label: customer.name, value: customer.netSpend }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Shopify vs TikTok Customers" subtitle="Customer-period order share" className={s.spanThree}><ReportDonut data={channelData} centre={number(dashboard.metrics.orders)} /></Panel>
+      <Panel title="Customer Activity Trend" subtitle="Monthly active customer proxy" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "orders")} /></Panel>
+      <Panel title="Repeat-Customer Contribution" subtitle="Share of identified customers" className={s.spanFive}><ReportDonut data={[{ name: "Repeat customers", value: summary.repeat }, { name: "New customers", value: summary.new }]} centre={percent(summary.total ? summary.repeat / summary.total : 0)} /><p className={s.mutedNote}>Revenue and order contribution by repeat customers is not returned by the current source.</p></Panel>
+      <Panel title="Customer Value Distribution" subtitle="By total spend per customer" className={s.spanFour}><PanelEmpty message="Customer spend bands are not available in this report source." /></Panel>
+      <Panel title="Channel Preference" subtitle="Preferred shopping channel" className={s.spanFour}><ReportBarChart data={channelData.map((item) => ({ label: item.name.replace(" orders", ""), value: item.value }))} money={false} colour="#c13a9b" /></Panel>
+      <Panel title="Customer Health Indicators" subtitle="Derived only where definitions exist" className={s.spanFour}><div className={s.noteList}><p><strong>Identity coverage</strong> {number(summary.total)} customers were identified in the selected period.</p><p><strong>Retention and VIP rates</strong> are not reported without approved definitions.</p></div></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
   </>;
@@ -179,9 +187,8 @@ function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
 
 function OrdersReport({ dashboard }: { dashboard: KpiDashboard }) {
   const channelData = dashboard.channels.map((channel) => ({ label: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.orders }));
-  const products = (dashboard.allProducts ?? dashboard.products).slice(0, 6);
   return <>
-    <ReportHeader title="Serenity Hue Orders & Sales Report" eyebrow="Orders · channels · customer love" range={dashboard.range} freshness={dashboard.freshness} note="Orders · channels · customer love · a more radiant tomorrow" />
+    <ReportHeader title="Serenity Hue Orders & Sales Report" eyebrow="Orders · channels · customer love" range={dashboard.range} freshness={dashboard.freshness} note="Orders · channels · customer love · a more radiant tomorrow" periodNote="Real orders · brighter people" />
     <div className={`${s.kpiGrid} ${s.kpiGridFour}`}>
       <MetricCard icon={ShoppingBag} label="Net merchandise sales" value={formatMoney(dashboard.metrics.netSales)} change={changeLabel(changeAgainst(dashboard.metrics.netSales, dashboard.previous?.metrics.netSales))} />
       <MetricCard icon={ShoppingCart} label="Paid orders" value={number(dashboard.metrics.orders)} change={changeLabel(changeAgainst(dashboard.metrics.orders, dashboard.previous?.metrics.orders))} />
@@ -189,12 +196,14 @@ function OrdersReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={Package} label="Net units sold" value={number(dashboard.metrics.netUnits)} change={changeLabel(changeAgainst(dashboard.metrics.netUnits, dashboard.previous?.metrics.netUnits))} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="Orders by channel" subtitle="Paid order count and net sales" className={s.spanTwo}><ReportBarChart data={channelData} money={false} /></Panel>
-      <Panel title="Monthly sales trend" subtitle="Net merchandise sales"><ReportAreaChart data={areaData(dashboard, "netSales")} money /></Panel>
-      <Panel title="Channel sales mix" subtitle="Net sales by recorded channel"><ReportDonut data={dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.netSales }))} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
-      <Panel title="Order status evidence" subtitle="Recorded data-quality signals"><div className={s.statusGrid}><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div><div><span>Refunded units</span><strong>{number(dashboard.dataQuality?.refundedUnits ?? 0)}</strong></div><div><span>Cancelled orders</span><strong>{number(dashboard.dataQuality?.cancelledOrders ?? 0)}</strong></div><div><span>Unmapped units</span><strong>{number(dashboard.unassigned.netUnits)}</strong></div></div><p className={s.mutedNote}>Payment, fulfilment, and shipment statuses remain in the Orders workspace; this report does not invent status counts from KPI totals.</p></Panel>
-      <Panel title="Product demand" subtitle="Net units sold by mapped product" className={s.spanTwo}><ReportBarChart data={products.map((product) => ({ label: product.title, value: product.netUnits }))} /></Panel>
-      <Panel title="Quick comparison" subtitle="Selected period versus the preceding period"><div className={s.comparisonList}><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>Orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>AOV</span><strong>{formatMoney(dashboard.metrics.averageOrderValue)}</strong></div><div><span>Units</span><strong>{number(dashboard.metrics.netUnits)}</strong></div></div></Panel>
+      <Panel title="Orders by Channel" subtitle="Total orders & share" className={s.spanFive}><ReportBarChart data={channelData} money={false} /></Panel>
+      <Panel title="Monthly Sales Trend" subtitle="Net merchandise sales" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "netSales")} money /></Panel>
+      <Panel title="Order Status" subtitle="By number of orders" className={s.spanFour}><div className={s.statusGrid}><div><span>Recorded orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div><div><span>Cancelled orders</span><strong>{number(dashboard.dataQuality?.cancelledOrders ?? 0)}</strong></div><div><span>Unmapped units</span><strong>{number(dashboard.unassigned.netUnits)}</strong></div></div></Panel>
+      <Panel title="Refund Impact" subtitle="Net sales impact" className={s.spanFour}><div className={s.comparisonList}><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div></div><p className={s.mutedNote}>Recorded refund events are included where the source exposes them.</p></Panel>
+      <Panel title="Fulfillment Status" subtitle="Of paid orders" className={s.spanFour}><PanelEmpty message="Fulfillment statuses are not returned by the KPI report source." /></Panel>
+      <Panel title="Shipment Status" subtitle="Of fulfilled orders" className={s.spanFour}><PanelEmpty message="Shipment statuses are not returned by the KPI report source." /></Panel>
+      <Panel title="Order Activity Heatmap" subtitle="Orders by day & hour" className={s.spanFive}><PanelEmpty message="Hourly order activity is not available in this report source." /></Panel>
+      <Panel title="Quick Comparison" subtitle="Vs. previous period" className={s.spanThree}><div className={s.comparisonList}><div><span>Orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>AOV</span><strong>{formatMoney(dashboard.metrics.averageOrderValue)}</strong></div><div><span>Units sold</span><strong>{number(dashboard.metrics.netUnits)}</strong></div></div></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
   </>;
@@ -206,9 +215,8 @@ function AdsReport({ ads, connection, state }: { ads: TikTokAdsReport; connectio
   const campaignRows = ads.breakdowns.campaign.filter((row) => row.attributedRevenueMinor !== null).sort((left, right) => (right.attributedRevenueMinor ?? 0) - (left.attributedRevenueMinor ?? 0)).slice(0, 6);
   const hasData = ads.rowCount > 0;
   const ctr = ads.metrics.impressions && ads.metrics.clicks !== null && ads.metrics.impressions > 0 ? ads.metrics.clicks / ads.metrics.impressions : null;
-  const cpc = ads.metrics.clicks && ads.metrics.clicks > 0 && ads.metrics.spendMinor !== null ? ads.metrics.spendMinor / ads.metrics.clicks : null;
   return <>
-    <ReportHeader title="Serenity Hue TikTok Ads Report" eyebrow="Creative beauty · real connections" range={ads.requestedRange as KpiPeriod} freshness={state.lastSuccessfulAt} note="Creative beauty · real connections · a more radiant tomorrow" />
+    <ReportHeader title="Serenity Hue TikTok Ads Report" eyebrow="Creative beauty · real connections" range={ads.requestedRange as KpiPeriod} freshness={state.lastSuccessfulAt} note="Creative beauty · real connections · a more radiant tomorrow" periodNote="TikTok ads drive beauty discoveries" />
     {!hasData && <div className={s.reportNotice}><Megaphone size={18} aria-hidden="true" /><span>{connection.status === "not_configured" ? "TikTok Ads is not configured." : connection.status !== "connected" ? "TikTok Ads is not connected." : state.lastErrorMessage || "No TikTok Ads rows were reported in this period."}</span></div>}
     <div className={`${s.kpiGrid} ${s.kpiGridSix}`}>
       <MetricCard icon={Megaphone} label="Ad spend" value={adsMoney(ads.metrics.spendMinor, currency)} change={hasData ? "TikTok BASIC report" : undefined} />
@@ -219,12 +227,13 @@ function AdsReport({ ads, connection, state }: { ads: TikTokAdsReport; connectio
       <MetricCard icon={TrendingUp} label="Clicks" value={ads.metrics.clicks === null ? "Not reported" : compact(ads.metrics.clicks)} />
     </div>
     <div className={s.reportGrid}>
-      <Panel title="Spend vs. attributed revenue trend" subtitle="TikTok BASIC daily report · spend / revenue" className={s.spanTwo}><ReportBarChart data={trend} money colour="#d88a9e" secondaryColour="#6c285f" /></Panel>
-      <Panel title="Campaign ranking" subtitle="By TikTok-attributed revenue"><ReportBarChart data={campaignRows.map((row) => ({ label: row.name || row.id, value: row.attributedRevenueMinor ?? 0 }))} money colour="#c13a9b" /></Panel>
-      <Panel title="ROAS trend" subtitle="Attributed revenue divided by spend"><ReportAreaChart data={ads.trend.map((point) => ({ label: point.date, value: point.roas ?? 0 }))} /></Panel>
-      <Panel title="Impressions → clicks → purchases" subtitle="Reported Ads funnel"><div className={s.funnel}><div><strong>{ads.metrics.impressions === null ? "—" : compact(ads.metrics.impressions)}</strong><span>Impressions</span></div><div><strong>{ads.metrics.clicks === null ? "—" : compact(ads.metrics.clicks)}</strong><span>Clicks {ctr === null ? "" : `· ${percent(ctr)}`}</span></div><div><strong>{ads.metrics.attributedPurchases === null ? "—" : number(ads.metrics.attributedPurchases)}</strong><span>Purchases</span></div></div></Panel>
-      <Panel title="Ad-group performance" subtitle="Provider breakdown evidence" className={s.spanTwo}>{ads.breakdowns.adgroup.length ? <div className={s.dataTable}><div className={s.dataHead}><span>Ad group</span><span>Spend</span><span>Revenue</span><span>ROAS</span></div>{ads.breakdowns.adgroup.slice(0, 8).map((row) => <div className={s.dataRow} key={row.id}><span>{row.name || row.id}</span><span>{adsMoney(row.spendMinor, row.currency || currency)}</span><strong>{adsMoney(row.attributedRevenueMinor, row.currency || currency)}</strong><span>{row.roas === null ? "—" : `${row.roas.toFixed(2)}×`}</span></div>)}</div> : <PanelEmpty message="TikTok did not return ad-group identifiers for this report." />}</Panel>
-      <Panel title="Key metrics snapshot" subtitle="Derived from provider-reported values"><div className={s.statusGrid}><div><span>CTR</span><strong>{ctr === null ? "—" : percent(ctr)}</strong></div><div><span>CPC</span><strong>{cpc === null ? "—" : currency ? formatMoney(Math.round(cpc), currency) : "Currency not reported"}</strong></div><div><span>Attribution window</span><strong>{ads.attributionWindow || "—"}</strong></div><div><span>Report rows</span><strong>{number(ads.rowCount)}</strong></div></div></Panel>
+      <Panel title="Spend vs. Attributed Revenue Trend" subtitle="Monthly TikTok Ads performance" className={s.spanSeven}><ReportAreaChart data={trend} money colour="#d88a9e" secondaryColour="#6c285f" /></Panel>
+      <Panel title="Spend vs. Revenue" subtitle="Campaign performance" className={s.spanFive}><ReportAreaChart data={campaignRows.map((row) => ({ label: row.name || row.id, value: row.spendMinor ?? 0, secondary: row.attributedRevenueMinor ?? undefined }))} money /></Panel>
+      <Panel title="Campaign Ranking" subtitle="By TikTok-attributed revenue" className={s.spanFour}><ReportBarChart data={campaignRows.map((row) => ({ label: row.name || row.id, value: row.attributedRevenueMinor ?? 0 }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Ad-Group Performance" subtitle="Spend · purchases · ROAS" className={s.spanFour}>{ads.breakdowns.adgroup.length ? <div className={s.dataTable}><div className={s.dataHead}><span>Ad group</span><span>Spend</span><span>Revenue</span><span>ROAS</span></div>{ads.breakdowns.adgroup.slice(0, 8).map((row) => <div className={s.dataRow} key={row.id}><span>{row.name || row.id}</span><span>{adsMoney(row.spendMinor, row.currency || currency)}</span><strong>{adsMoney(row.attributedRevenueMinor, row.currency || currency)}</strong><span>{row.roas === null ? "—" : `${row.roas.toFixed(2)}×`}</span></div>)}</div> : <PanelEmpty message="TikTok did not return ad-group identifiers for this report." />}</Panel>
+      <Panel title="ROAS Trend" subtitle="Monthly TikTok Ads ROAS" className={s.spanFour}><ReportAreaChart data={ads.trend.map((point) => ({ label: point.date, value: point.roas ?? 0 }))} /></Panel>
+      <Panel title="Impressions → Clicks → Purchases" subtitle="TikTok Ads funnel (attributed)" className={s.spanFive}><div className={s.funnel}><div><strong>{ads.metrics.impressions === null ? "—" : compact(ads.metrics.impressions)}</strong><span>Impressions</span></div><div><strong>{ads.metrics.clicks === null ? "—" : compact(ads.metrics.clicks)}</strong><span>Clicks {ctr === null ? "" : `· ${percent(ctr)}`}</span></div><div><strong>{ads.metrics.attributedPurchases === null ? "—" : number(ads.metrics.attributedPurchases)}</strong><span>Purchases</span></div></div></Panel>
+      <Panel title="Campaign Efficiency Matrix" subtitle="ROAS vs. CPC" className={s.spanThree}><div className={s.dataTable}><div className={s.dataHead}><span>Campaign</span><span>Spend</span><span>ROAS</span><span>Purchases</span></div>{campaignRows.slice(0, 5).map((row) => <div className={s.dataRow} key={`eff-${row.id}`}><span>{row.name || row.id}</span><span>{adsMoney(row.spendMinor, row.currency || currency)}</span><strong>{row.roas === null ? "—" : `${row.roas.toFixed(2)}×`}</strong><span>{row.attributedPurchases === null ? "—" : number(row.attributedPurchases)}</span></div>)}</div></Panel>
     </div>
     <p className={s.definitionNote}>{ads.metricDefinition}</p>
     <ReportFooter range={ads.requestedRange as KpiPeriod} />
@@ -235,7 +244,7 @@ function AffiliateReport({ affiliate }: { affiliate: TikTokAffiliateDashboard })
   const creators = affiliate.affiliates.slice(0, 6);
   const products = affiliate.products.slice(0, 6);
   return <>
-    <ReportHeader title="Serenity Hue TikTok Affiliate Report" eyebrow="Creators · content · conversions" range={affiliate.range} freshness={affiliate.status.lastSuccessfulAt} note="Creators · content · conversions · a more radiant tomorrow" />
+    <ReportHeader title="Serenity Hue TikTok Affiliate Report" eyebrow="Creators · content · conversions" range={affiliate.range} freshness={affiliate.status.lastSuccessfulAt} note="Creators · content · conversions · a more radiant tomorrow" periodNote="Real creators · real beauty impact" />
     <div className={`${s.kpiGrid} ${s.kpiGridSix}`}>
       <MetricCard icon={ShoppingBag} label="Affiliate-attributed sales" value={formatMoney(affiliate.metrics.netSales)} />
       <MetricCard icon={CircleDollarSign} label="Estimated commission" value={formatMoney(affiliate.metrics.estimatedCommission)} />
@@ -246,13 +255,14 @@ function AffiliateReport({ affiliate }: { affiliate: TikTokAffiliateDashboard })
     </div>
     {affiliate.status.kind !== "fresh" && <div className={s.reportNotice}><Sparkles size={18} aria-hidden="true" /><span>{affiliate.status.message}</span></div>}
     <div className={s.reportGrid}>
-      <Panel title="Creator leaderboard" subtitle="By affiliate-attributed net sales" className={s.spanTwo}><ReportBarChart data={creators.map((creator) => ({ label: creator.creator, value: creator.netSales }))} money colour="#c13a9b" /></Panel>
-      <Panel title="Best-performing affiliate products" subtitle="By attributed net sales"><ReportBarChart data={products.map((product) => ({ label: product.product, value: product.netSales }))} money /></Panel>
-      <Panel title="Key affiliate metrics" subtitle="Provider attribution evidence"><div className={s.statusGrid}><div><span>Average order</span><strong>{affiliate.metrics.attributedOrders ? formatMoney(Math.round(affiliate.metrics.netSales / affiliate.metrics.attributedOrders)) : "—"}</strong></div><div><span>Commission rate</span><strong>{affiliate.metrics.netSales ? percent(affiliate.metrics.estimatedCommission / affiliate.metrics.netSales) : "—"}</strong></div><div><span>Unreconciled GMV</span><strong>{formatMoney(affiliate.metrics.unreconciledGmv)}</strong></div><div><span>Report status</span><strong>{affiliate.status.kind}</strong></div></div></Panel>
-      <Panel title="Affiliate sales trend" subtitle="Attributed net sales"><ReportAreaChart data={affiliateAreaData(affiliate)} money /></Panel>
-      <Panel title="Creator efficiency" subtitle="Attributed sales versus published videos" className={s.spanTwo}><div className={s.dataTable}><div className={s.dataHead}><span>Creator</span><span>Net sales</span><span>Orders</span><span>Videos</span></div>{creators.map((creator) => <div className={s.dataRow} key={creator.creatorId}><span>{creator.creator}</span><strong>{formatMoney(creator.netSales)}</strong><span>{number(creator.orders)}</span><span>{number(creator.publishedVideos)}</span></div>)}</div></Panel>
-      <Panel title="Product by creator evidence" subtitle="Top creator records retained by TikTok" className={s.spanTwo}><div className={s.matrixGrid}>{creators.slice(0, 5).map((creator) => <div key={creator.creatorId} className={s.matrixRow}><span>{creator.creator}</span><span>{creator.bestSellingProduct || "Product not reported"}</span><strong>{formatMoney(creator.netSales)}</strong></div>)}</div></Panel>
-      <Panel title="Affiliate notes" subtitle="Interpretation and reconciliation"><div className={s.noteList}><p>Affiliate-attributed sales remain separate from ordinary TikTok Shop sales.</p><p>Estimated commission is not added to business revenue.</p><p>{formatMoney(affiliate.metrics.unreconciledGmv)} of GMV is awaiting a stable order reconciliation and is excluded from net sales.</p></div></Panel>
+      <Panel title="Creator Leaderboard" subtitle="By affiliate-attributed net sales" className={s.spanFive}><ReportBarChart data={creators.map((creator) => ({ label: creator.creator, value: creator.netSales }))} money colour="#c13a9b" /></Panel>
+      <Panel title="Best-Performing Affiliate Products" subtitle="By attributed net sales" className={s.spanFour}><ReportBarChart data={products.map((product) => ({ label: product.product, value: product.netSales }))} money /></Panel>
+      <Panel title="Key Affiliate Metrics" subtitle="Provider-reported" className={s.spanThree}><div className={s.statusGrid}><div><span>Average order</span><strong>{affiliate.metrics.attributedOrders ? formatMoney(Math.round(affiliate.metrics.netSales / affiliate.metrics.attributedOrders)) : "—"}</strong></div><div><span>Commission rate</span><strong>{affiliate.metrics.netSales ? percent(affiliate.metrics.estimatedCommission / affiliate.metrics.netSales) : "—"}</strong></div><div><span>Unreconciled GMV</span><strong>{formatMoney(affiliate.metrics.unreconciledGmv)}</strong></div></div></Panel>
+      <Panel title="Videos vs Attributed Sales" subtitle="Published videos and attributed net sales" className={s.spanSeven}><ReportAreaChart data={affiliateAreaData(affiliate)} money /></Panel>
+      <Panel title="Creator Efficiency" subtitle="Attributed net sales vs. published videos" className={s.spanFive}><div className={s.dataTable}><div className={s.dataHead}><span>Creator</span><span>Net sales</span><span>Orders</span><span>Videos</span></div>{creators.map((creator) => <div className={s.dataRow} key={creator.creatorId}><span>{creator.creator}</span><strong>{formatMoney(creator.netSales)}</strong><span>{number(creator.orders)}</span><span>{number(creator.publishedVideos)}</span></div>)}</div></Panel>
+      <Panel title="Product by Creator Matrix" subtitle="Affiliate-attributed net sales" className={s.spanFive}><div className={s.matrixGrid}>{creators.slice(0, 5).map((creator) => <div key={creator.creatorId} className={s.matrixRow}><span>{creator.creator}</span><span>{creator.bestSellingProduct || "Product not reported"}</span><strong>{formatMoney(creator.netSales)}</strong></div>)}</div></Panel>
+      <Panel title="Affiliate Trend" subtitle="Affiliate-attributed net sales" className={s.spanFour}><ReportAreaChart data={affiliateAreaData(affiliate)} money /></Panel>
+      <Panel title="Reconciled vs Unreconciled GMV" subtitle="TikTok affiliate GMV" className={s.spanThree}><ReportDonut data={[{ name: "Reconciled GMV", value: Math.max(0, affiliate.metrics.netSales - affiliate.metrics.unreconciledGmv) }, { name: "Unreconciled GMV", value: affiliate.metrics.unreconciledGmv }]} centre={formatMoney(affiliate.metrics.netSales)} /><p className={s.mutedNote}>Unreconciled GMV remains excluded from net sales.</p></Panel>
     </div>
     <ReportFooter range={affiliate.range} />
   </>;
