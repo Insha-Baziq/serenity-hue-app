@@ -20,6 +20,7 @@ export type KpiSale = {
   createdAt: string;
   channel: KpiChannel;
   financialStatus: string;
+  fulfillmentStatus?: string | null;
   cancelledAt: string | null;
   customer?: KpiCustomerIdentity | null;
   items: KpiSaleLine[];
@@ -70,6 +71,43 @@ export type KpiChannelPerformance = {
 export type KpiCustomerPerformance = {
   summary: { new: number; repeat: number; total: number };
   topCustomers: Array<{ name: string; netSpend: number; qualifyingOrders: number; latestPurchase: string }>;
+  valueDistribution: KpiCustomerValueBand[];
+};
+
+export type KpiCustomerValueBand = {
+  label: string;
+  customers: number;
+  netSpend: number;
+  share: number;
+};
+
+export type KpiFulfillmentStatus = {
+  status: string;
+  orders: number;
+  share: number;
+};
+
+export type KpiShipmentRecord = {
+  orderId: string;
+  status: string;
+};
+
+export type KpiShipmentStatus = {
+  status: string;
+  orders: number;
+  share: number;
+};
+
+export type KpiOrderActivityCell = {
+  day: number;
+  hour: number;
+  orders: number;
+};
+
+export type KpiOrderActivity = {
+  cells: KpiOrderActivityCell[];
+  peak: number;
+  totalOrders: number;
 };
 
 export type KpiRestockVariant = {
@@ -114,6 +152,27 @@ export type KpiRestockPlan = {
   urgency: "overdue" | "due-soon";
 };
 
+export type KpiStockCoverage = {
+  variantId: string;
+  productTitle: string;
+  variantTitle: string;
+  countedStock: number | null;
+  dailyDemand: number;
+  weeksCoverage: number | null;
+  leadTimeDays: number | null;
+  state: "healthy" | "monitor" | "low" | "no-demand" | "not-counted";
+};
+
+export type KpiChannelStock = {
+  variantId: string;
+  productTitle: string;
+  variantTitle: string;
+  master: number | null;
+  shopify: number;
+  tiktok: number | null;
+  tiktokProductLevel: number | null;
+};
+
 export type KpiDashboard = {
   range: KpiPeriod;
   previous: { range: KpiPeriod; metrics: KpiMetricSet } | null;
@@ -140,6 +199,11 @@ export type KpiDashboard = {
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
   customers: KpiCustomerPerformance;
+  fulfillmentStatuses: KpiFulfillmentStatus[];
+  shipmentStatuses: KpiShipmentStatus[];
+  orderActivity: KpiOrderActivity;
+  stockCoverage: KpiStockCoverage[];
+  channelStock: KpiChannelStock[];
   restock: KpiRestockPlan[];
   freshness: string | null;
 };
@@ -159,6 +223,15 @@ const MAX_BUCKETED_TREND_POINTS = 180;
 /** Rows retained for the dedicated Products and Customers reporting tabs. */
 const PRODUCT_LIMIT = 50;
 const TOP_CUSTOMER_LIMIT = 20;
+const CUSTOMER_VALUE_BANDS = [
+  { label: "£0 or less", minimum: Number.NEGATIVE_INFINITY, maximum: 0 },
+  { label: "£1 – £25", minimum: 1, maximum: 2500 },
+  { label: "£26 – £50", minimum: 2501, maximum: 5000 },
+  { label: "£51 – £100", minimum: 5001, maximum: 10000 },
+  { label: "£101 – £200", minimum: 10001, maximum: 20000 },
+  { label: "Over £200", minimum: 20001, maximum: Number.POSITIVE_INFINITY },
+] as const;
+const ACTIVITY_DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function londonDate(iso: string) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -399,10 +472,22 @@ function buildCustomerPerformance(input: {
   }).sort((left, right) => right.netSpend - left.netSpend || right.qualifyingOrders - left.qualifyingOrders || right.latestPurchase.localeCompare(left.latestPurchase) || left.name.localeCompare(right.name)).slice(0, TOP_CUSTOMER_LIMIT);
 
   const repeat = activeGroups.filter((group) => group.orders.length > 1).length;
-  return { summary: { new: activeGroups.length - repeat, repeat, total: activeGroups.length }, topCustomers };
+  const valueDistribution = CUSTOMER_VALUE_BANDS.map((band) => {
+    const customers = activeGroups.filter((group) => {
+      const spend = spendByGroup.get(group.id) ?? 0;
+      return spend >= band.minimum && spend <= band.maximum;
+    });
+    return {
+      label: band.label,
+      customers: customers.length,
+      netSpend: customers.reduce((sum, group) => sum + (spendByGroup.get(group.id) ?? 0), 0),
+      share: activeGroups.length ? customers.length / activeGroups.length : 0,
+    };
+  });
+  return { summary: { new: activeGroups.length - repeat, repeat, total: activeGroups.length }, topCustomers, valueDistribution };
 }
 
-function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] }, refunds: KpiRefund[]) {
+function buildDemandByVariant(restock: { today: string; demandLines: KpiRestockDemandLine[] }, refunds: KpiRefund[]) {
   const demandStart = shiftDate(restock.today, -89);
   const demandByVariant = new Map<string, number>();
   const sourceQuantity = new Map<string, number>();
@@ -422,6 +507,11 @@ function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[
     const next = (saleIsInWindow ? line.quantity : 0) - refundUnits;
     demandByVariant.set(line.variantId, (demandByVariant.get(line.variantId) ?? 0) + next * line.quantityPerSale);
   }
+  return { demandStart, demandByVariant };
+}
+
+function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] }, refunds: KpiRefund[]) {
+  const { demandByVariant } = buildDemandByVariant(restock, refunds);
 
   return restock.variants.flatMap((variant) => {
     const demand = demandByVariant.get(variant.id) ?? 0;
@@ -443,6 +533,92 @@ function buildRestockPlan(restock: { today: string; variants: KpiRestockVariant[
       urgency: reorderBy < restock.today ? "overdue" as const : "due-soon" as const,
     }];
   }).sort((left, right) => left.reorderBy.localeCompare(right.reorderBy) || left.productTitle.localeCompare(right.productTitle) || left.variantTitle.localeCompare(right.variantTitle));
+}
+
+function buildStockCoverage(restock: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] }, refunds: KpiRefund[]) {
+  const { demandByVariant } = buildDemandByVariant(restock, refunds);
+  const stateRank = { low: 0, monitor: 1, healthy: 2, "no-demand": 3, "not-counted": 4 } as const;
+  return restock.variants.map((variant): KpiStockCoverage => {
+    const demand = Math.max(0, demandByVariant.get(variant.id) ?? 0);
+    const dailyDemand = demand / 90;
+    const weeksCoverage = variant.countedStock !== null && dailyDemand > 0 ? variant.countedStock / dailyDemand / 7 : null;
+    let state: KpiStockCoverage["state"] = "not-counted";
+    if (variant.countedStock !== null) {
+      if (!demand) state = "no-demand";
+      else {
+        const coverageDays = (weeksCoverage ?? 0) * 7;
+        const leadTimeDays = variant.leadTimeDays ?? 0;
+        state = coverageDays <= leadTimeDays + 7 ? "low" : coverageDays <= leadTimeDays + 28 ? "monitor" : "healthy";
+      }
+    }
+    return {
+      variantId: variant.id,
+      productTitle: variant.productTitle,
+      variantTitle: variant.variantTitle,
+      countedStock: variant.countedStock,
+      dailyDemand,
+      weeksCoverage,
+      leadTimeDays: variant.leadTimeDays,
+      state,
+    };
+  }).sort((left, right) => stateRank[left.state] - stateRank[right.state]
+    || (left.weeksCoverage ?? Number.POSITIVE_INFINITY) - (right.weeksCoverage ?? Number.POSITIVE_INFINITY)
+    || left.productTitle.localeCompare(right.productTitle)
+    || left.variantTitle.localeCompare(right.variantTitle));
+}
+
+function statusBreakdown(statuses: string[], total: number, order: string[]) {
+  const counts = new Map<string, number>();
+  for (const status of statuses) counts.set(status, (counts.get(status) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort(([left], [right]) => {
+      const leftIndex = order.indexOf(left);
+      const rightIndex = order.indexOf(right);
+      return (leftIndex < 0 ? order.length : leftIndex) - (rightIndex < 0 ? order.length : rightIndex) || left.localeCompare(right);
+    })
+    .map(([status, count]) => ({ status, orders: count, share: total ? count / total : 0 }));
+}
+
+function selectedEligibleSales(sales: KpiSale[], range: KpiPeriod) {
+  return sales.filter((sale) => eligibleSale(sale) && contains(range, londonDate(sale.createdAt)));
+}
+
+function buildFulfillmentStatuses(sales: KpiSale[], range: KpiPeriod) {
+  const selected = selectedEligibleSales(sales, range);
+  return statusBreakdown(
+    selected.map((sale) => sale.fulfillmentStatus?.trim().toLowerCase() || "unknown"),
+    selected.length,
+    ["fulfilled", "partial", "unfulfilled", "unknown"],
+  );
+}
+
+function buildShipmentStatuses(sales: KpiSale[], records: KpiShipmentRecord[], range: KpiPeriod) {
+  const selected = selectedEligibleSales(sales, range);
+  const selectedIds = new Set(selected.map((sale) => sale.id));
+  const latestByOrder = new Map<string, string>();
+  for (const record of records) {
+    if (selectedIds.has(record.orderId)) latestByOrder.set(record.orderId, record.status.trim().toLowerCase() || "unknown");
+  }
+  const statuses = selected.map((sale) => latestByOrder.get(sale.id) ?? "not_shipped");
+  return statusBreakdown(statuses, selected.length, ["delivered", "in_transit", "booked", "exception", "not_shipped", "unknown"]);
+}
+
+function londonActivitySlot(iso: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: REPORTING_TIME_ZONE, weekday: "short", hour: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso));
+  const weekday = parts.find((part) => part.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  return { day: Math.max(0, ACTIVITY_DAY_ORDER.indexOf(weekday)), hour: Math.min(23, Math.max(0, hour)) };
+}
+
+function buildOrderActivity(sales: KpiSale[], range: KpiPeriod): KpiOrderActivity {
+  const counts = new Map<string, number>();
+  for (const sale of selectedEligibleSales(sales, range)) {
+    const slot = londonActivitySlot(sale.createdAt);
+    const key = `${slot.day}:${slot.hour}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const cells = Array.from({ length: 7 }, (_, day) => Array.from({ length: 24 }, (_, hour) => ({ day, hour, orders: counts.get(`${day}:${hour}`) ?? 0 }))).flat();
+  return { cells, peak: Math.max(0, ...cells.map((cell) => cell.orders)), totalOrders: cells.reduce((sum, cell) => sum + cell.orders, 0) };
 }
 
 function buildVariantPerformance(input: {
@@ -499,6 +675,8 @@ export function buildKpiDashboard(input: {
   customerOrders?: KpiCustomerOrder[];
   restock?: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
   variantPerformance?: { variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
+  shipmentStatuses?: KpiShipmentRecord[];
+  channelStock?: KpiChannelStock[];
   freshness: string | null;
 }): KpiDashboard {
   const previousRange = input.range.allTime ? null : precedingRange(input.range);
@@ -636,6 +814,11 @@ export function buildKpiDashboard(input: {
     unassigned: selected.unassigned,
     channels,
     customers: buildCustomerPerformance({ range: input.range, sales: input.sales, refunds: input.refunds, customerOrders: input.customerOrders ?? [] }),
+    fulfillmentStatuses: buildFulfillmentStatuses(input.sales, input.range),
+    shipmentStatuses: buildShipmentStatuses(input.sales, input.shipmentStatuses ?? [], input.range),
+    orderActivity: buildOrderActivity(input.sales, input.range),
+    stockCoverage: input.restock ? buildStockCoverage(input.restock, input.refunds) : [],
+    channelStock: input.channelStock ?? [],
     restock: input.restock ? buildRestockPlan(input.restock, input.refunds) : [],
     freshness: input.freshness,
   };

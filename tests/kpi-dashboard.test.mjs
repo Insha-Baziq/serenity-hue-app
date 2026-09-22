@@ -270,6 +270,39 @@ test("KPI dashboard forecasts only complete, urgent physical-variant restock dec
   ]);
 });
 
+test("KPI dashboard derives report status, customer value, activity, and coverage panels from source rows", () => {
+  const sales = [
+    { id: "order-1", createdAt: "2026-08-01T09:00:00.000Z", channel: "shopify", financialStatus: "paid", fulfillmentStatus: "fulfilled", cancelledAt: null, customer: { name: "A", email: "a@example.com", phone: null }, items: [{ id: "line-1", quantity: 1, unitPrice: 1200, product: null }] },
+    { id: "order-2", createdAt: "2026-08-02T13:00:00.000Z", channel: "shopify", financialStatus: "paid", fulfillmentStatus: "partial", cancelledAt: null, customer: { name: "B", email: "b@example.com", phone: null }, items: [{ id: "line-2", quantity: 1, unitPrice: 4500, product: null }] },
+    { id: "order-3", createdAt: "2026-08-03T18:00:00.000Z", channel: "tiktok", financialStatus: "paid", fulfillmentStatus: "unfulfilled", cancelledAt: null, customer: { name: "C", email: "c@example.com", phone: null }, items: [{ id: "line-3", quantity: 1, unitPrice: 25000, product: null }] },
+  ];
+  const dashboard = buildKpiDashboard({
+    range: { start: "2026-08-01", end: "2026-08-03" },
+    sales,
+    customerOrders: sales.map((sale) => ({ id: sale.id, createdAt: sale.createdAt, financialStatus: sale.financialStatus, cancelledAt: null, customer: sale.customer })),
+    refunds: [],
+    shipmentStatuses: [{ orderId: "order-1", status: "delivered" }, { orderId: "order-2", status: "in_transit" }],
+    restock: {
+      today: "2026-08-30",
+      variants: [
+        { id: "counted", productTitle: "Serum", variantTitle: "50ml", countedStock: 3, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+        { id: "uncounted", productTitle: "Serum", variantTitle: "100ml", countedStock: null, leadTimeDays: 7, firstPaidSaleAt: "2026-07-01T10:00:00.000Z" },
+      ],
+      demandLines: [{ orderId: "demand", lineItemId: "demand-line", variantId: "counted", createdAt: "2026-08-20T10:00:00.000Z", financialStatus: "paid", cancelledAt: null, quantity: 35, quantityPerSale: 1 }],
+    },
+    freshness: null,
+  });
+
+  assert.deepEqual(dashboard.fulfillmentStatuses.map((row) => row.status), ["fulfilled", "partial", "unfulfilled"]);
+  assert.deepEqual(dashboard.shipmentStatuses.map((row) => row.status), ["delivered", "in_transit", "not_shipped"]);
+  assert.deepEqual(dashboard.customers.valueDistribution.filter((row) => row.customers > 0).map((row) => [row.label, row.customers]), [["£1 – £25", 1], ["£26 – £50", 1], ["Over £200", 1]]);
+  assert.equal(dashboard.orderActivity.totalOrders, 3);
+  assert.equal(dashboard.orderActivity.cells.length, 168);
+  assert.equal(dashboard.orderActivity.peak, 1);
+  assert.equal(dashboard.stockCoverage.find((row) => row.variantId === "counted")?.state, "low");
+  assert.equal(dashboard.stockCoverage.find((row) => row.variantId === "uncounted")?.state, "not-counted");
+});
+
 test("KPI dashboard reports mapped variant units across Shopify and TikTok independently of restock urgency", () => {
   const dashboard = buildKpiDashboard({
     range: { start: "2026-08-01", end: "2026-08-03" },

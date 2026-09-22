@@ -1,26 +1,20 @@
 import { ReportsWorkspace, type ReportId } from "@/components/reports-workspace";
 import { requirePageSession } from "@/lib/auth-guard";
 import { unstable_cache } from "next/cache";
-import { getKpiDashboard, getTikTokAffiliateDashboard, getTikTokAdsConnectionState } from "@/lib/repository";
+import { getTikTokAffiliateDashboard, getTikTokAdsConnectionState } from "@/lib/repository";
 import { getTikTokAdsReport, getTikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
+import { getCachedKpiDashboard } from "@/lib/kpi-reporting-cache";
 import type { KpiPeriod } from "@/lib/kpi-dashboard";
 import { resolveReportingPeriod } from "@/lib/reporting-period";
 
 export const dynamic = "force-dynamic";
 
-const REPORT_CACHE_SECONDS = 300;
 const REPORT_CACHE_TAG = "serenity-hue:visual-reports";
-
-const getCachedKpiDashboard = unstable_cache(
-  async (range: KpiPeriod) => getKpiDashboard(range),
-  ["visual-report-kpi-dashboard-v2"],
-  { revalidate: REPORT_CACHE_SECONDS, tags: [REPORT_CACHE_TAG] },
-);
 
 const getCachedAffiliateDashboard = unstable_cache(
   async (range: KpiPeriod) => getTikTokAffiliateDashboard(range),
   ["visual-report-affiliate-dashboard-v1"],
-  { revalidate: REPORT_CACHE_SECONDS, tags: [REPORT_CACHE_TAG] },
+  { revalidate: 300, tags: [REPORT_CACHE_TAG] },
 );
 
 const REPORT_IDS: ReportId[] = ["product", "customer", "orders", "ads", "affiliate"];

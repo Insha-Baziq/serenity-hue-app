@@ -43,7 +43,10 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   getKpiDashboard(period) -> server-shaped dashboard with sales/product/channel metrics,
     conservative customer performance, fixed-window physical-variant restock decisions,
     complete current/previous product rows, product demand trends, refund/cancellation
-    evidence, and an explicit all-time period resolved from the earliest recorded order
+    evidence, customer value bands, fulfillment/shipment status breakdowns, London
+    order-activity cells, all-variant stock coverage, current master/channel stock
+    snapshots, and an explicit all-time period resolved from the earliest recorded order;
+    the KPI and visual-report pages share one five-minute tagged cache
   getKpiProductComparison(spec) -> two/three-month or four-week Europe/London
     calendar comparison with refund-aware physical-product periods, deterministic
     unit/revenue winners, partial-period identity, and like-for-like latest change

@@ -2,7 +2,6 @@ import { KpisWorkspace, type KpiView } from "@/components/kpis-workspace";
 import { requirePageSession } from "@/lib/auth-guard";
 import { unstable_cache } from "next/cache";
 import {
-  getKpiDashboard,
   getKpiProductComparison,
   getTikTokAdsConnectionState,
   getTikTokAffiliateComparison,
@@ -10,36 +9,28 @@ import {
 } from "@/lib/repository";
 import { getTikTokAdsReport, getTikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
 import type { KpiPeriod } from "@/lib/kpi-dashboard";
+import { getCachedKpiDashboard } from "@/lib/kpi-reporting-cache";
 import { KPI_REPORTING_TIME_ZONE } from "@/lib/kpi-comparisons";
 import { londonCalendarDate, resolveReportingPeriod } from "@/lib/reporting-period";
 
 export const dynamic = "force-dynamic";
 
-const KPI_CACHE_SECONDS = 300;
-const KPI_CACHE_TAG = "serenity-hue:kpi-reporting";
-
-const getCachedKpiDashboard = unstable_cache(
-  async (range: KpiPeriod) => getKpiDashboard(range),
-  ["kpi-dashboard-v1"],
-  { revalidate: KPI_CACHE_SECONDS, tags: [KPI_CACHE_TAG] },
-);
-
 const getCachedKpiProductComparison = unstable_cache(
   async (spec: Parameters<typeof getKpiProductComparison>[0]) => getKpiProductComparison(spec),
   ["kpi-product-comparison-v1"],
-  { revalidate: KPI_CACHE_SECONDS, tags: [KPI_CACHE_TAG] },
+  { revalidate: 300, tags: ["serenity-hue:kpi-reporting"] },
 );
 
 const getCachedTikTokAffiliateDashboard = unstable_cache(
   async (range: KpiPeriod) => getTikTokAffiliateDashboard(range),
   ["tiktok-affiliate-dashboard-v1"],
-  { revalidate: KPI_CACHE_SECONDS, tags: [KPI_CACHE_TAG] },
+  { revalidate: 300, tags: ["serenity-hue:kpi-reporting"] },
 );
 
 const getCachedTikTokAffiliateComparison = unstable_cache(
   async (spec: Parameters<typeof getTikTokAffiliateComparison>[0]) => getTikTokAffiliateComparison(spec),
   ["tiktok-affiliate-comparison-v1"],
-  { revalidate: KPI_CACHE_SECONDS, tags: [KPI_CACHE_TAG] },
+  { revalidate: 300, tags: ["serenity-hue:kpi-reporting"] },
 );
 
 /** Reporting tabs that may be linked to directly with `?view=`. */

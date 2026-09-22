@@ -8,7 +8,7 @@ import { useState, useTransition, type ElementType, type ReactNode } from "react
 import { Button } from "@/components/ui/button";
 import { ReportAreaChart, ReportBarChart, ReportDonut, type ReportChartPoint } from "@/components/report-charts";
 import { formatMoney } from "@/lib/format";
-import type { KpiDashboard, KpiPeriod, KpiVariantPerformance } from "@/lib/kpi-dashboard";
+import type { KpiDashboard, KpiOrderActivity, KpiPeriod, KpiStockCoverage, KpiVariantPerformance } from "@/lib/kpi-dashboard";
 import type { TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import type { TikTokAdsConnectionState } from "@/lib/repository";
 import type { TikTokAdsReport } from "@/lib/tiktok-ads-reporting";
@@ -126,6 +126,80 @@ function VariantPerformanceChart({ rows }: { rows: KpiVariantPerformance[] }) {
   </div>;
 }
 
+function statusLabel(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function statusColour(status: string) {
+  if (["delivered", "fulfilled", "paid"].includes(status)) return "#437d67";
+  if (["in_transit", "booked", "partial", "processing"].includes(status)) return "#c13a9b";
+  if (["exception", "failed", "cancelled"].includes(status)) return "#c84b52";
+  return "#d88a9e";
+}
+
+function StatusBarList({ rows, emptyMessage }: { rows: Array<{ status: string; orders: number; share: number }>; emptyMessage: string }) {
+  if (!rows.length) return <PanelEmpty message={emptyMessage} />;
+  const maximum = Math.max(...rows.map((row) => row.orders), 1);
+  return <div className={s.statusBars}>
+    {rows.slice(0, 6).map((row) => <div className={s.statusBarRow} key={row.status}>
+      <div className={s.statusBarMeta}><span>{statusLabel(row.status)}</span><strong>{number(row.orders)} · {percent(row.share)}</strong></div>
+      <div className={s.statusBarTrack}><span className={s.statusBarFill} style={{ width: `${Math.max(3, row.orders / maximum * 100)}%`, background: statusColour(row.status) }} /></div>
+    </div>)}
+  </div>;
+}
+
+function OrderActivityHeatmap({ activity }: { activity: KpiOrderActivity }) {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const hours = ["12am", "6am", "12pm", "6pm", "11pm"];
+  const cellByKey = new Map(activity.cells.map((cell) => [`${cell.day}:${cell.hour}`, cell.orders]));
+  return <div className={s.orderHeatmap}>
+    <div className={s.heatmapHourLabels}>{hours.map((hour) => <span key={hour}>{hour}</span>)}</div>
+    <div className={s.heatmapBody}>
+      <div className={s.heatmapDayLabels}>{days.map((day) => <span key={day}>{day}</span>)}</div>
+      <div className={s.heatmapCells} aria-label="Orders by London weekday and hour">
+        {days.flatMap((day, dayIndex) => Array.from({ length: 24 }, (_, hour) => {
+          const orders = cellByKey.get(`${dayIndex}:${hour}`) ?? 0;
+          const intensity = activity.peak ? orders / activity.peak : 0;
+          return <span key={`${day}-${hour}`} className={s.heatmapCell} title={`${day} ${hour}:00 · ${number(orders)} orders`} aria-label={`${day} ${hour}:00, ${number(orders)} orders`} style={{ background: intensity ? `rgba(108, 40, 95, ${0.12 + intensity * 0.8})` : undefined }} />;
+        }))}
+      </div>
+    </div>
+    <div className={s.heatmapLegend}><span><i /> Low</span><span><i /> Peak</span><strong>{number(activity.totalOrders)} orders</strong></div>
+  </div>;
+}
+
+function StockCoverageChart({ rows }: { rows: KpiStockCoverage[] }) {
+  if (!rows.length) return <PanelEmpty message="No physical variants are configured for stock coverage." />;
+  const visibleRows = rows.slice(0, 6);
+  const maximum = Math.max(...visibleRows.map((row) => row.weeksCoverage ?? 0), 8);
+  return <div className={s.coverageList}>
+    {visibleRows.map((row) => {
+      const value = row.weeksCoverage === null ? row.state === "not-counted" ? "Not counted" : "No demand" : `${row.weeksCoverage.toFixed(1)} wk`;
+      return <div className={s.coverageRow} key={row.variantId}>
+        <div className={s.coverageLabel}><span>{row.productTitle}</span><small>{row.variantTitle}</small></div>
+        <div className={s.coverageTrack}><span className={`${s.coverageFill} ${s[`coverageFill--${row.state}`]}`} style={{ width: row.weeksCoverage === null ? "3%" : `${Math.max(4, Math.min(100, row.weeksCoverage / maximum * 100))}%` }} /></div>
+        <strong>{value}</strong>
+      </div>;
+    })}
+    <p className={s.coverageNote}>Trailing 90-day demand · current counted stock</p>
+  </div>;
+}
+
+function ChannelStockChart({ rows }: { rows: KpiDashboard["channelStock"] }) {
+  if (!rows.length) return <PanelEmpty message="No current channel inventory snapshot is available." />;
+  const visibleRows = rows.slice(0, 5);
+  return <div className={s.channelStockList}>
+    <div className={s.channelStockLegend}><span>Variant</span><span>Master</span><span>Shopify</span><span>TikTok</span></div>
+    {visibleRows.map((row) => <div className={s.channelStockRow} key={row.variantId}>
+      <span title={`${row.productTitle} · ${row.variantTitle}`}>{row.productTitle} · {row.variantTitle}</span>
+      <strong>{row.master === null ? "—" : number(row.master)}</strong>
+      <strong>{number(row.shopify)}</strong>
+      <strong>{row.tiktok === null ? row.tiktokProductLevel === null ? "—" : `P${number(row.tiktokProductLevel)}` : number(row.tiktok)}</strong>
+    </div>)}
+    <p className={s.coverageNote}>Master is counted physical stock; P = TikTok product-level snapshot.</p>
+  </div>;
+}
+
 function ReportHeader({ title, eyebrow: _eyebrow, range, freshness: _freshness, note, periodNote }: { title: string; eyebrow: string; range: KpiPeriod; freshness?: string | null; note: string; periodNote: string }) {
   void _eyebrow;
   void _freshness;
@@ -154,7 +228,6 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
   const products = (dashboard.allProducts ?? dashboard.products).filter((product) => product.netUnits !== 0 || product.netRevenue !== 0).slice(0, 7);
   const topProduct = products[0];
   const channelData = dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.netSales }));
-  const coverage = dashboard.restock.slice(0, 6).map((item) => ({ label: `${item.productTitle} · ${item.variantTitle}`, value: item.countedStock, secondary: Math.round(item.dailyDemand * 7) }));
   const trend = topProduct && dashboard.productTrends?.[topProduct.id] ? chartData(dashboard.productTrends[topProduct.id]!.map((point) => ({ date: point.date, value: point.netRevenue }))) : areaData(dashboard, "netSales");
   return <>
     <ReportHeader title="Serenity Hue Product Performance Report" eyebrow="Product performance · product growth" range={dashboard.range} freshness={dashboard.freshness} note="Sales insights · product growth · a more radiant tomorrow" periodNote="Beauty drives a brighter tomorrow" />
@@ -169,8 +242,8 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
       <Panel title="Product Revenue Ranking" subtitle="Top five · by net sales" className={`${s.spanSix} ${s.rankChart}`}><ReportBarChart data={products.slice(0, 5).map((product) => ({ label: product.title, value: product.netRevenue }))} money colour="#c13a9b" /></Panel>
       <Panel title="Product Sales Trend" subtitle="Monthly net sales" className={s.spanSeven}><ReportAreaChart data={trend} money /></Panel>
       <Panel title="Variant Performance" subtitle="Top five · net units sold by variant" className={s.spanFive}><VariantPerformanceChart rows={dashboard.variantPerformance ?? []} /></Panel>
-      <Panel title="Stock Coverage" subtitle="Counted variants · reorder signal" className={s.spanFive}><ReportBarChart data={coverage.map((item) => ({ label: item.label, value: item.value, secondary: item.secondary }))} colour="#437d67" secondaryColour="#d8781b" /></Panel>
-      <Panel title="Physical vs Channel Stock" subtitle="Units" className={s.spanThree}><PanelEmpty message="Physical and allocated channel stock are not available in this report source." /></Panel>
+      <Panel title="Stock Coverage" subtitle="Counted variants · trailing demand" className={s.spanFive}><StockCoverageChart rows={dashboard.stockCoverage} /></Panel>
+      <Panel title="Current Stock by Channel" subtitle="Master · Shopify · TikTok" className={s.spanThree}><ChannelStockChart rows={dashboard.channelStock} /></Panel>
       <Panel title="Channel Contribution" subtitle="By net sales" className={`${s.spanFour} ${s.channelPanel}`}><ReportDonut data={channelData} centre={formatMoney(dashboard.metrics.netSales)} /></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
@@ -178,7 +251,7 @@ function ProductReport({ dashboard }: { dashboard: KpiDashboard }) {
 }
 
 function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
-  const { summary, topCustomers } = dashboard.customers;
+  const { summary, topCustomers, valueDistribution } = dashboard.customers;
   const channelData = dashboard.channels.map((channel) => ({ name: channel.channel === "shopify" ? "Shopify" : "TikTok Shop", value: channel.orders }));
   return <>
     <ReportHeader title="Serenity Hue Customer Performance Report" eyebrow="Customers · lasting relationships" range={dashboard.range} freshness={dashboard.freshness} note="Real customers · lasting relationships · a more radiant tomorrow" periodNote="Beauty builds brighter connections" />
@@ -195,7 +268,7 @@ function CustomerReport({ dashboard }: { dashboard: KpiDashboard }) {
       <Panel title="Shopify vs TikTok Customers" subtitle="Customer-period order share" className={s.spanThree}><ReportDonut data={channelData} centre={number(dashboard.metrics.orders)} /></Panel>
       <Panel title="Customer Activity Trend" subtitle="Monthly active customer proxy" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "orders")} /></Panel>
       <Panel title="Repeat-Customer Contribution" subtitle="Share of identified customers" className={s.spanFive}><ReportDonut data={[{ name: "Repeat customers", value: summary.repeat }, { name: "New customers", value: summary.new }]} centre={percent(summary.total ? summary.repeat / summary.total : 0)} /><p className={s.mutedNote}>Revenue and order contribution by repeat customers is not returned by the current source.</p></Panel>
-      <Panel title="Customer Value Distribution" subtitle="By total spend per customer" className={s.spanFour}><PanelEmpty message="Customer spend bands are not available in this report source." /></Panel>
+      <Panel title="Customer Value Distribution" subtitle="Identified customers by net spend" className={s.spanFour}><ReportBarChart data={valueDistribution.map((item) => ({ label: item.label, value: item.customers }))} /></Panel>
       <Panel title="Channel Preference" subtitle="Preferred shopping channel" className={s.spanFour}><ReportBarChart data={channelData.map((item) => ({ label: item.name.replace(" orders", ""), value: item.value }))} money={false} colour="#c13a9b" /></Panel>
       <Panel title="Customer Health Indicators" subtitle="Derived only where definitions exist" className={s.spanFour}><div className={s.noteList}><p><strong>Identity coverage</strong> {number(summary.total)} customers were identified in the selected period.</p><p><strong>Retention and VIP rates</strong> are not reported without approved definitions.</p></div></Panel>
     </div>
@@ -218,9 +291,9 @@ function OrdersReport({ dashboard }: { dashboard: KpiDashboard }) {
       <Panel title="Monthly Sales Trend" subtitle="Net merchandise sales" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "netSales")} money /></Panel>
       <Panel title="Order Status" subtitle="By number of orders" className={s.spanFour}><div className={s.statusGrid}><div><span>Recorded orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div><div><span>Cancelled orders</span><strong>{number(dashboard.dataQuality?.cancelledOrders ?? 0)}</strong></div><div><span>Unmapped units</span><strong>{number(dashboard.unassigned.netUnits)}</strong></div></div></Panel>
       <Panel title="Refund Impact" subtitle="Net sales impact" className={s.spanFour}><div className={s.comparisonList}><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div></div><p className={s.mutedNote}>Recorded refund events are included where the source exposes them.</p></Panel>
-      <Panel title="Fulfillment Status" subtitle="Of paid orders" className={s.spanFour}><PanelEmpty message="Fulfillment statuses are not returned by the KPI report source." /></Panel>
-      <Panel title="Shipment Status" subtitle="Of fulfilled orders" className={s.spanFour}><PanelEmpty message="Shipment statuses are not returned by the KPI report source." /></Panel>
-      <Panel title="Order Activity Heatmap" subtitle="Orders by day & hour" className={s.spanFive}><PanelEmpty message="Hourly order activity is not available in this report source." /></Panel>
+      <Panel title="Fulfillment Status" subtitle="Of paid orders" className={s.spanFour}><StatusBarList rows={dashboard.fulfillmentStatuses} emptyMessage="No paid orders in this period." /></Panel>
+      <Panel title="Shipment Status" subtitle="Latest shipment state" className={s.spanFour}><StatusBarList rows={dashboard.shipmentStatuses} emptyMessage="No paid orders in this period." /></Panel>
+      <Panel title="Order Activity Heatmap" subtitle="Orders by London day & hour" className={s.spanFive}><OrderActivityHeatmap activity={dashboard.orderActivity} /></Panel>
       <Panel title="Quick Comparison" subtitle="Vs. previous period" className={s.spanThree}><div className={s.comparisonList}><div><span>Orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>AOV</span><strong>{formatMoney(dashboard.metrics.averageOrderValue)}</strong></div><div><span>Units sold</span><strong>{number(dashboard.metrics.netUnits)}</strong></div></div></Panel>
     </div>
     <ReportFooter range={dashboard.range} />

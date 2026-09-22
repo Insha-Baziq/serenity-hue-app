@@ -94,6 +94,7 @@ async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
   const db = await getTursoClient();
   const placeholders = orderIds.map(() => "?").join(", ");
   const shipments = await db.execute({
+  revalidatePath("/analytics/reports");
     sql: `SELECT id, order_id, external_order_line_id, source_references_json, courier, service, status, paid_at, collection_date, estimated_delivery_at, tracking_url, match_method
           FROM shipments WHERE order_id IN (${placeholders}) AND provider = 'parcel2go' ORDER BY last_synced_at DESC`,
     args: orderIds,
@@ -487,7 +488,7 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
   const variantDemandQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
   const refundQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
   const refundQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
-  const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, freshnessResult] = await Promise.all([
+  const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, shipmentStatusResult, channelStockResult, freshnessResult] = await Promise.all([
     db.execute({
       sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
                    o.customer_name, o.customer_email, o.customer_phone,
@@ -573,6 +574,7 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
     }),
     db.execute(`WITH first_paid_sales AS (
                   SELECT component.physical_variant_id, MIN(o.source_created_at) AS first_paid_sale_at
+      fulfillmentStatus: optionalString(row.fulfillment_status) ?? null,
                   FROM physical_listing_components component
                   JOIN physical_channel_listings listing ON listing.id = component.listing_id
                     AND listing.active = 1 AND listing.mapping_status = 'confirmed'
@@ -634,7 +636,7 @@ export async function getKpiProductComparison(spec: ComparisonSpec): Promise<Kpi
   const queryEndExclusive = shiftKpiDate(range.end, 2);
   const [salesResult, shopifyRefunds, tiktokRefunds] = await Promise.all([
     db.execute({
-      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
+      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.fulfillment_status, o.cancelled_at,
                    o.customer_name, o.customer_email, o.customer_phone,
                    oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
                    physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
@@ -786,6 +788,61 @@ export async function getTikTokAffiliateComparison(spec: ComparisonSpec): Promis
       orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
     })),
     videos: videos.rows.map((row) => ({
+    db.execute({
+      sql: `WITH report_orders AS (
+              SELECT id
+              FROM orders
+              WHERE source_created_at >= ? AND source_created_at < ?
+            ), ranked_shipments AS (
+              SELECT s.order_id, LOWER(TRIM(s.status)) AS status,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY s.order_id
+                       ORDER BY s.updated_at DESC, s.last_synced_at DESC, s.id DESC
+                     ) AS row_number
+              FROM shipments s
+              JOIN report_orders o ON o.id = s.order_id
+              WHERE s.order_id IS NOT NULL
+            )
+            SELECT order_id, status
+            FROM ranked_shipments
+            WHERE row_number = 1`,
+      args: [queryStart, queryEndExclusive],
+    }),
+    db.execute(`
+      WITH tiktok_variant AS (
+        SELECT variant_id, SUM(available_quantity) AS qty
+        FROM channel_inventory
+        WHERE channel = 'tiktok' AND variant_id IS NOT NULL
+        GROUP BY variant_id
+      ), mapped_products AS (
+        SELECT cm.external_product_id, MIN(v.product_id) AS product_id
+        FROM channel_mappings cm
+        JOIN variants v ON v.id = cm.variant_id
+        WHERE cm.channel = 'tiktok' AND cm.active = 1 AND cm.external_product_id IS NOT NULL
+        GROUP BY cm.external_product_id
+        HAVING COUNT(DISTINCT v.product_id) = 1
+      ), tiktok_product AS (
+        SELECT mp.product_id, SUM(ci.available_quantity) AS qty
+        FROM channel_inventory ci
+        JOIN mapped_products mp ON mp.external_product_id = ci.external_product_id
+        WHERE ci.channel = 'tiktok' AND ci.variant_id IS NULL
+        GROUP BY mp.product_id
+      )
+      SELECT v.id AS variant_id,
+             p.title AS product_title,
+             v.title AS variant_title,
+             mi.quantity AS master_quantity,
+             v.available_quantity AS shopify_quantity,
+             tv.qty AS tiktok_quantity,
+             CASE WHEN ROW_NUMBER() OVER (PARTITION BY v.product_id ORDER BY v.title, v.id) = 1
+               THEN tp.qty ELSE NULL END AS tiktok_product_quantity
+      FROM variants v
+      JOIN products p ON p.id = v.product_id
+      LEFT JOIN master_inventory mi ON mi.variant_id = v.id
+      LEFT JOIN tiktok_variant tv ON tv.variant_id = v.id
+      LEFT JOIN tiktok_product tp ON tp.product_id = v.product_id
+      ORDER BY p.title, v.title, v.id
+    `),
       id: stringValue(row.id),
       creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
       creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
@@ -810,6 +867,8 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
   const queryEndExclusive = shiftKpiDate(reportingRange.end, 2);
   const [orders, refunds, videos, freshness] = await Promise.all([
     db.execute({
+    shipmentStatuses: groupKpiShipmentRecords(shipmentStatusResult.rows),
+    channelStock: groupKpiChannelStock(channelStockResult.rows),
       sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
                     affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
                     affiliate.creator_open_id, affiliate.creator_username, affiliate.source_product_id,
@@ -983,6 +1042,25 @@ export async function getEmployees(): Promise<Employee[]> {
     id: stringValue(row.id),
     name: stringValue(row.name) || "Unnamed employee",
     email: stringValue(row.email),
+function groupKpiShipmentRecords(rows: QueryRows) {
+  return rows.map((row) => ({
+    orderId: stringValue(row.order_id),
+    status: stringValue(row.status),
+  })).filter((record) => record.orderId && record.status);
+}
+
+function groupKpiChannelStock(rows: QueryRows) {
+  return rows.map((row) => ({
+    variantId: stringValue(row.variant_id),
+    productTitle: stringValue(row.product_title),
+    variantTitle: stringValue(row.variant_title),
+    master: row.master_quantity === null || row.master_quantity === undefined ? null : numberValue(row.master_quantity),
+    shopify: numberValue(row.shopify_quantity),
+    tiktok: row.tiktok_quantity === null || row.tiktok_quantity === undefined ? null : numberValue(row.tiktok_quantity),
+    tiktokProductLevel: row.tiktok_product_quantity === null || row.tiktok_product_quantity === undefined ? null : numberValue(row.tiktok_product_quantity),
+  })).filter((row) => row.variantId);
+}
+
     image: optionalString(row.image),
     createdAt: stringValue(row.createdAt),
     lastSeenAt: optionalString(row.last_seen_at),

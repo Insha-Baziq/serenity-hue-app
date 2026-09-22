@@ -1339,6 +1339,57 @@
 
 .reportNotice { padding: 7px 9px; border-radius: 6px; font-size: 8px; }
 
+.statusBars {
+  display: grid;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.statusBarRow { display: grid; gap: 3px; min-width: 0; }
+.statusBarMeta { display: flex; justify-content: space-between; gap: 6px; color: #756a70; font-size: 8px; }
+.statusBarMeta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusBarMeta strong { color: #49163f; font-family: var(--type-display); font-size: 9px; font-weight: 500; white-space: nowrap; }
+.statusBarTrack { height: 8px; overflow: hidden; border-radius: 0 4px 4px 0; background: #f1e9ed; }
+.statusBarFill { display: block; height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; }
+
+.orderHeatmap { display: grid; gap: 5px; margin-top: 7px; }
+.heatmapHourLabels { display: grid; grid-template-columns: repeat(5, 1fr); margin-left: 23px; color: #a89da2; font-size: 6px; }
+.heatmapHourLabels span:nth-child(n + 2) { text-align: center; }
+.heatmapHourLabels span:last-child { text-align: right; }
+.heatmapBody { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 4px; min-width: 0; }
+.heatmapDayLabels { display: grid; grid-template-rows: repeat(7, 10px); align-items: center; color: #756a70; font-size: 6px; }
+.heatmapCells { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); grid-template-rows: repeat(7, 10px); gap: 2px; min-width: 0; }
+.heatmapCell { display: block; min-width: 0; border-radius: 2px; background: #f3e3eb; }
+.heatmapLegend { display: flex; align-items: center; gap: 8px; color: #756a70; font-size: 6px; }
+.heatmapLegend span { display: inline-flex; align-items: center; gap: 3px; }
+.heatmapLegend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: #f3e3eb; }
+.heatmapLegend span:nth-child(2) i { background: #6c285f; }
+.heatmapLegend strong { margin-left: auto; color: #49163f; font-family: var(--type-display); font-size: 8px; font-weight: 500; }
+
+.coverageList,
+.channelStockList { display: grid; gap: 6px; min-width: 0; margin-top: 6px; }
+.coverageRow { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(45px, 1fr) max-content; align-items: center; gap: 5px; min-width: 0; }
+.coverageLabel { display: grid; min-width: 0; gap: 2px; color: #49163f; font-size: 8px; }
+.coverageLabel span,
+.coverageLabel small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coverageLabel small { color: #756a70; font-size: 6px; }
+.coverageTrack { height: 8px; overflow: hidden; border-radius: 0 4px 4px 0; background: #f1e9ed; }
+.coverageFill { display: block; height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; }
+.coverageFill--low { background: #c84b52; }
+.coverageFill--monitor { background: #d8781b; }
+.coverageFill--healthy { background: #437d67; }
+.coverageFill--no-demand,
+.coverageFill--not-counted { background: #c9bbc3; }
+.coverageRow > strong { color: #49163f; font-family: var(--type-display); font-size: 8px; font-weight: 500; white-space: nowrap; }
+.coverageNote { margin: 1px 0 0; color: #756a70; font-size: 6px; line-height: 1.3; }
+
+.channelStockLegend,
+.channelStockRow { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, max-content); align-items: center; gap: 5px; min-width: 0; }
+.channelStockLegend { padding-bottom: 3px; border-bottom: 1px solid #f0e7ea; color: #756a70; font-size: 6px; letter-spacing: .06em; text-transform: uppercase; }
+.channelStockRow { padding: 3px 0; border-bottom: 1px solid #f0e7ea; color: #756a70; font-size: 7px; }
+.channelStockRow > span { overflow: hidden; color: #49163f; text-overflow: ellipsis; white-space: nowrap; }
+.channelStockRow strong { color: #49163f; font-family: var(--type-display); font-size: 8px; font-weight: 500; text-align: right; }
+
 .reportFooter {
   position: absolute;
   right: 8mm;
