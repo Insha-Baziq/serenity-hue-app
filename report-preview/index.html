@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Serenity Hue — Reports Preview</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="preview-toolbar">
+      <div class="preview-lockup">
+        <span class="preview-mark">SH</span>
+        <span>
+          <strong>Serenity Hue</strong>
+          <small>visual report preview</small>
+        </span>
+      </div>
+      <nav class="report-nav" aria-label="Report previews">
+        <button data-report="product">Product</button>
+        <button data-report="customer">Customer</button>
+        <button data-report="orders">Orders &amp; Sales</button>
+        <button data-report="ads">TikTok Ads</button>
+        <button data-report="affiliate">Affiliate</button>
+      </nav>
+      <button class="print-button" id="print-report">Print / Save PDF</button>
+    </div>
+    <main id="report-root" class="report-stage"></main>
+    <script src="./report.js"></script>
+  </body>
+</html>
