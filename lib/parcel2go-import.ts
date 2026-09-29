@@ -7,6 +7,8 @@ import { changedColumns } from "@/lib/sql-upsert";
 
 export type Parcel2GoImportResult = {
   shipments: number;
+  newShipments: number;
+  materiallyChangedShipments: number;
   events: number;
   autoLinked: number;
 };
@@ -30,7 +32,7 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
   const shipments = await getRecentParcel2GoShipments();
   // The candidate scan below reads every channel order, so it is only worth
   // paying for when there is something to match against.
-  if (shipments.length === 0) return { shipments: 0, events: 0, autoLinked: 0 };
+  if (shipments.length === 0) return { shipments: 0, newShipments: 0, materiallyChangedShipments: 0, events: 0, autoLinked: 0 };
   const db = await getTursoClient();
   // NOTE: this deliberately reads all channel orders rather than a date window.
   // findParcel2GoOrderMatch() resolves an exact Parcel2Go reference before it
@@ -56,10 +58,36 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
   const now = new Date().toISOString();
   let events = 0;
   let autoLinked = 0;
+  let newShipments = 0;
+  let materiallyChangedShipments = 0;
 
   for (const shipment of shipments) {
     const shipmentId = `parcel2go:${shipment.orderLineId}`;
     const match = findParcel2GoOrderMatch(shipment, orders);
+    const existing = await db.execute({
+      sql: `SELECT transaction_id, courier, service, source, status, source_references_json,
+                   paid_at, collection_date, estimated_delivery_at, tracking_url
+            FROM shipments WHERE provider = 'parcel2go' AND external_order_line_id = ? LIMIT 1`,
+      args: [shipment.orderLineId],
+    });
+    const previous = existing.rows[0];
+    if (!previous) {
+      newShipments += 1;
+    } else {
+      const changed = [
+        [previous.transaction_id, shipment.transactionId ?? null],
+        [previous.courier, shipment.courier],
+        [previous.service, shipment.service],
+        [previous.source, shipment.source ?? null],
+        [previous.status, shipment.status],
+        [previous.source_references_json, JSON.stringify(shipment.importedReferences)],
+        [previous.paid_at, shipment.paidAt ?? null],
+        [previous.collection_date, shipment.collectionDate ?? null],
+        [previous.estimated_delivery_at, shipment.estimatedDeliveryAt ?? null],
+        [previous.tracking_url, shipment.trackingUrl ?? null],
+      ].some(([before, after]) => String(before ?? "") !== String(after ?? ""));
+      if (changed) materiallyChangedShipments += 1;
+    }
     await db.execute({
       sql: `INSERT INTO shipments (
               id, provider, external_order_line_id, order_id, match_method, transaction_id, courier, service, source, status,
@@ -126,5 +154,5 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
     }
   }
 
-  return { shipments: shipments.length, events, autoLinked };
+  return { shipments: shipments.length, newShipments, materiallyChangedShipments, events, autoLinked };
 }

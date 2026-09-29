@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { createLabBatch } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     if (typeof body.formulaId !== "string" || typeof body.batchNumber !== "string" || typeof body.targetGrams !== "number") return Response.json({ ok: false, message: "Formula, batch number, and batch size in grams are required" }, { status: 400 });
     if (body.outputQuantity !== undefined && typeof body.outputQuantity !== "number") return Response.json({ ok: false, message: "Bulk output quantity must be a number" }, { status: 400 });
     if (body.outputUnit !== undefined && body.outputUnit !== "g" && body.outputUnit !== "ml") return Response.json({ ok: false, message: "Bulk output unit must be grams or milliliters" }, { status: 400 });
-    const batch = await createLabBatch({ formulaId: body.formulaId, batchNumber: body.batchNumber, targetGrams: body.targetGrams, outputQuantity: body.outputQuantity as number | undefined, outputUnit: body.outputUnit as "g" | "ml" | undefined, actor: session.user.name || session.user.email || "Staff" });
+    const batch = await createLabBatch({ formulaId: body.formulaId, batchNumber: body.batchNumber, targetGrams: body.targetGrams, outputQuantity: body.outputQuantity as number | undefined, outputUnit: body.outputUnit as "g" | "ml" | undefined, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, batch }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to create this batch";

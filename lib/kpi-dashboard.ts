@@ -20,7 +20,6 @@ export type KpiSale = {
   createdAt: string;
   channel: KpiChannel;
   financialStatus: string;
-  fulfillmentStatus?: string | null;
   cancelledAt: string | null;
   customer?: KpiCustomerIdentity | null;
   items: KpiSaleLine[];
@@ -78,23 +77,6 @@ export type KpiCustomerValueBand = {
   label: string;
   customers: number;
   netSpend: number;
-  share: number;
-};
-
-export type KpiFulfillmentStatus = {
-  status: string;
-  orders: number;
-  share: number;
-};
-
-export type KpiShipmentRecord = {
-  orderId: string;
-  status: string;
-};
-
-export type KpiShipmentStatus = {
-  status: string;
-  orders: number;
   share: number;
 };
 
@@ -199,8 +181,6 @@ export type KpiDashboard = {
   unassigned: { netUnits: number; netRevenue: number };
   channels: KpiChannelPerformance[];
   customers: KpiCustomerPerformance;
-  fulfillmentStatuses: KpiFulfillmentStatus[];
-  shipmentStatuses: KpiShipmentStatus[];
   orderActivity: KpiOrderActivity;
   stockCoverage: KpiStockCoverage[];
   channelStock: KpiChannelStock[];
@@ -567,40 +547,8 @@ function buildStockCoverage(restock: { today: string; variants: KpiRestockVarian
     || left.variantTitle.localeCompare(right.variantTitle));
 }
 
-function statusBreakdown(statuses: string[], total: number, order: string[]) {
-  const counts = new Map<string, number>();
-  for (const status of statuses) counts.set(status, (counts.get(status) ?? 0) + 1);
-  return [...counts.entries()]
-    .sort(([left], [right]) => {
-      const leftIndex = order.indexOf(left);
-      const rightIndex = order.indexOf(right);
-      return (leftIndex < 0 ? order.length : leftIndex) - (rightIndex < 0 ? order.length : rightIndex) || left.localeCompare(right);
-    })
-    .map(([status, count]) => ({ status, orders: count, share: total ? count / total : 0 }));
-}
-
 function selectedEligibleSales(sales: KpiSale[], range: KpiPeriod) {
   return sales.filter((sale) => eligibleSale(sale) && contains(range, londonDate(sale.createdAt)));
-}
-
-function buildFulfillmentStatuses(sales: KpiSale[], range: KpiPeriod) {
-  const selected = selectedEligibleSales(sales, range);
-  return statusBreakdown(
-    selected.map((sale) => sale.fulfillmentStatus?.trim().toLowerCase() || "unknown"),
-    selected.length,
-    ["fulfilled", "partial", "unfulfilled", "unknown"],
-  );
-}
-
-function buildShipmentStatuses(sales: KpiSale[], records: KpiShipmentRecord[], range: KpiPeriod) {
-  const selected = selectedEligibleSales(sales, range);
-  const selectedIds = new Set(selected.map((sale) => sale.id));
-  const latestByOrder = new Map<string, string>();
-  for (const record of records) {
-    if (selectedIds.has(record.orderId)) latestByOrder.set(record.orderId, record.status.trim().toLowerCase() || "unknown");
-  }
-  const statuses = selected.map((sale) => latestByOrder.get(sale.id) ?? "not_shipped");
-  return statusBreakdown(statuses, selected.length, ["delivered", "in_transit", "booked", "exception", "not_shipped", "unknown"]);
 }
 
 function londonActivitySlot(iso: string) {
@@ -675,7 +623,6 @@ export function buildKpiDashboard(input: {
   customerOrders?: KpiCustomerOrder[];
   restock?: { today: string; variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
   variantPerformance?: { variants: KpiRestockVariant[]; demandLines: KpiRestockDemandLine[] };
-  shipmentStatuses?: KpiShipmentRecord[];
   channelStock?: KpiChannelStock[];
   freshness: string | null;
 }): KpiDashboard {
@@ -814,8 +761,6 @@ export function buildKpiDashboard(input: {
     unassigned: selected.unassigned,
     channels,
     customers: buildCustomerPerformance({ range: input.range, sales: input.sales, refunds: input.refunds, customerOrders: input.customerOrders ?? [] }),
-    fulfillmentStatuses: buildFulfillmentStatuses(input.sales, input.range),
-    shipmentStatuses: buildShipmentStatuses(input.sales, input.shipmentStatuses ?? [], input.range),
     orderActivity: buildOrderActivity(input.sales, input.range),
     stockCoverage: input.restock ? buildStockCoverage(input.restock, input.refunds) : [],
     channelStock: input.channelStock ?? [],

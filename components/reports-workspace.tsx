@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, BarChart3, CalendarDays, CircleDollarSign, Download, Eye, FileText, Megaphone, Package, Printer, ShoppingBag, ShoppingCart, Sparkles, TrendingUp, Users, Video } from "lucide-react";
-import { useState, useTransition, type ElementType, type ReactNode } from "react";
+import { useState, useTransition, type ElementType, type KeyboardEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ReportAreaChart, ReportBarChart, ReportDonut, type ReportChartPoint } from "@/components/report-charts";
 import { formatMoney } from "@/lib/format";
@@ -13,18 +13,16 @@ import type { TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard"
 import type { TikTokAdsConnectionState } from "@/lib/repository";
 import type { TikTokAdsReport } from "@/lib/tiktok-ads-reporting";
 import type { TikTokAdsReportState } from "@/lib/tiktok-ads-report-store";
+import type { KpiReportScope, VisualReportId } from "@/lib/visual-report-loader";
 import s from "./reports-workspace.module.css";
 
-export type ReportId = "product" | "customer" | "orders" | "ads" | "affiliate";
+export type ReportId = VisualReportId;
 
-type Props = {
-  dashboard: KpiDashboard;
-  affiliate: TikTokAffiliateDashboard;
-  adsConnection: TikTokAdsConnectionState;
-  adsReportState: TikTokAdsReportState;
-  ads: TikTokAdsReport;
-  initialReport?: ReportId;
-};
+type Props = { range: KpiPeriod } & (
+  | { report: KpiReportScope; dashboard: KpiDashboard }
+  | { report: "ads"; ads: TikTokAdsReport; adsConnection: TikTokAdsConnectionState; adsReportState: TikTokAdsReportState }
+  | { report: "affiliate"; affiliate: TikTokAffiliateDashboard }
+);
 
 type PeriodControl = { rangeKey: string; preset: string; start: string; end: string };
 
@@ -126,45 +124,74 @@ function VariantPerformanceChart({ rows }: { rows: KpiVariantPerformance[] }) {
   </div>;
 }
 
-function statusLabel(value: string) {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function statusColour(status: string) {
-  if (["delivered", "fulfilled", "paid"].includes(status)) return "#437d67";
-  if (["in_transit", "booked", "partial", "processing"].includes(status)) return "#c13a9b";
-  if (["exception", "failed", "cancelled"].includes(status)) return "#c84b52";
-  return "#d88a9e";
-}
-
-function StatusBarList({ rows, emptyMessage }: { rows: Array<{ status: string; orders: number; share: number }>; emptyMessage: string }) {
-  if (!rows.length) return <PanelEmpty message={emptyMessage} />;
-  const maximum = Math.max(...rows.map((row) => row.orders), 1);
-  return <div className={s.statusBars}>
-    {rows.slice(0, 6).map((row) => <div className={s.statusBarRow} key={row.status}>
-      <div className={s.statusBarMeta}><span>{statusLabel(row.status)}</span><strong>{number(row.orders)} · {percent(row.share)}</strong></div>
-      <div className={s.statusBarTrack}><span className={s.statusBarFill} style={{ width: `${Math.max(3, row.orders / maximum * 100)}%`, background: statusColour(row.status) }} /></div>
-    </div>)}
-  </div>;
-}
-
 function OrderActivityHeatmap({ activity }: { activity: KpiOrderActivity }) {
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const hours = ["12am", "6am", "12pm", "6pm", "11pm"];
-  const cellByKey = new Map(activity.cells.map((cell) => [`${cell.day}:${cell.hour}`, cell.orders]));
+  const fullDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const hourLabels = [{ hour: 0, label: "12am" }, { hour: 6, label: "6am" }, { hour: 12, label: "12pm" }, { hour: 18, label: "6pm" }, { hour: 23, label: "11pm" }];
+  const cellByKey = new Map(activity.cells.map((cell) => [`${cell.day}:${cell.hour}`, cell]));
+  const [focusedIndex, setFocusedIndex] = useState(0);
+
+  function timeRange(hour: number) {
+    const label = (value: number) => `${value % 12 || 12}:00 ${value < 12 ? "am" : "pm"}`;
+    return `${label(hour)}–${label((hour + 1) % 24)}`;
+  }
+
+  function moveFocus(event: KeyboardEvent<HTMLDivElement>, day: number, hour: number) {
+    let nextDay = day;
+    let nextHour = hour;
+    if (event.key === "ArrowLeft") nextHour -= 1;
+    else if (event.key === "ArrowRight") nextHour += 1;
+    else if (event.key === "ArrowUp") nextDay -= 1;
+    else if (event.key === "ArrowDown") nextDay += 1;
+    else if (event.key === "Home") nextHour = 0;
+    else if (event.key === "End") nextHour = 23;
+    else return;
+
+    if (event.ctrlKey && event.key === "Home") nextDay = 0;
+    if (event.ctrlKey && event.key === "End") nextDay = 6;
+    if (nextDay < 0 || nextDay > 6 || nextHour < 0 || nextHour > 23) return;
+
+    event.preventDefault();
+    const nextIndex = nextDay * 24 + nextHour;
+    setFocusedIndex(nextIndex);
+    document.getElementById(`order-activity-cell-${nextDay}-${nextHour}`)?.focus();
+  }
+
   return <div className={s.orderHeatmap}>
-    <div className={s.heatmapHourLabels}>{hours.map((hour) => <span key={hour}>{hour}</span>)}</div>
+    <div className={s.heatmapHourLabels} aria-hidden="true">{hourLabels.map(({ hour, label }) => <span key={hour} className={hour === 0 ? s.heatmapHourLabelStart : hour === 23 ? s.heatmapHourLabelEnd : undefined} style={{ gridColumn: hour + 1 }}>{label}</span>)}</div>
     <div className={s.heatmapBody}>
-      <div className={s.heatmapDayLabels}>{days.map((day) => <span key={day}>{day}</span>)}</div>
-      <div className={s.heatmapCells} aria-label="Orders by London weekday and hour">
-        {days.flatMap((day, dayIndex) => Array.from({ length: 24 }, (_, hour) => {
-          const orders = cellByKey.get(`${dayIndex}:${hour}`) ?? 0;
-          const intensity = activity.peak ? orders / activity.peak : 0;
-          return <span key={`${day}-${hour}`} className={s.heatmapCell} title={`${day} ${hour}:00 · ${number(orders)} orders`} aria-label={`${day} ${hour}:00, ${number(orders)} orders`} style={{ background: intensity ? `rgba(108, 40, 95, ${0.12 + intensity * 0.8})` : undefined }} />;
-        }))}
+      <div className={s.heatmapDayLabels} aria-hidden="true">{days.map((day) => <span key={day}>{day}</span>)}</div>
+      <div className={s.heatmapCells} role="grid" aria-label="Orders placed by London weekday and one-hour time range" aria-rowcount={7} aria-colcount={24}>
+        {days.map((day, dayIndex) => <div key={day} className={s.heatmapRow} role="row" aria-label={fullDays[dayIndex]}>
+          {Array.from({ length: 24 }, (_, hour) => {
+            const cell = cellByKey.get(`${dayIndex}:${hour}`);
+            const orders = cell?.orders ?? 0;
+            const intensity = activity.peak ? orders / activity.peak : 0;
+            const index = dayIndex * 24 + hour;
+            const time = timeRange(hour);
+            const label = `${fullDays[dayIndex]}, ${time}, ${number(orders)} order${orders === 1 ? "" : "s"}`;
+            return <div
+              key={`${day}-${hour}`}
+              id={`order-activity-cell-${dayIndex}-${hour}`}
+              className={s.heatmapCell}
+              role="gridcell"
+              aria-label={label}
+              aria-rowindex={dayIndex + 1}
+              aria-colindex={hour + 1}
+              tabIndex={focusedIndex === index ? 0 : -1}
+              data-edge={hour < 2 ? "start" : hour > 21 ? "end" : undefined}
+              data-tooltip-side={dayIndex === 0 ? "below" : undefined}
+              onFocus={() => setFocusedIndex(index)}
+              onKeyDown={(event) => moveFocus(event, dayIndex, hour)}
+              style={{ background: intensity ? `rgba(108, 40, 95, ${0.12 + intensity * 0.8})` : undefined }}
+            >
+              <span className={s.heatmapTooltip} aria-hidden="true"><strong>{fullDays[dayIndex]}</strong><span>{time}</span><small>{number(orders)} order{orders === 1 ? "" : "s"}</small></span>
+            </div>;
+          })}
+        </div>)}
       </div>
     </div>
-    <div className={s.heatmapLegend}><span><i /> Low</span><span><i /> Peak</span><strong>{number(activity.totalOrders)} orders</strong></div>
+    <div className={s.heatmapLegend}><span><i /> Fewer orders</span><span><i /> More orders</span><small>Each cell is one hour · London time</small><strong>{number(activity.totalOrders)} orders</strong></div>
   </div>;
 }
 
@@ -286,15 +313,12 @@ function OrdersReport({ dashboard }: { dashboard: KpiDashboard }) {
       <MetricCard icon={TrendingUp} label="Average order value" value={formatMoney(dashboard.metrics.averageOrderValue)} change={changeLabel(changeAgainst(dashboard.metrics.averageOrderValue, dashboard.previous?.metrics.averageOrderValue))} />
       <MetricCard icon={Package} label="Net units sold" value={number(dashboard.metrics.netUnits)} change={changeLabel(changeAgainst(dashboard.metrics.netUnits, dashboard.previous?.metrics.netUnits))} />
     </div>
-    <div className={s.reportGrid}>
+    <div className={`${s.reportGrid} ${s.ordersReportGrid}`}>
       <Panel title="Orders by Channel" subtitle="Total orders & share" className={s.spanFive}><ReportBarChart data={channelData} money={false} /></Panel>
       <Panel title="Monthly Sales Trend" subtitle="Net merchandise sales" className={s.spanSeven}><ReportAreaChart data={areaData(dashboard, "netSales")} money /></Panel>
-      <Panel title="Order Status" subtitle="By number of orders" className={s.spanFour}><div className={s.statusGrid}><div><span>Recorded orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div><div><span>Cancelled orders</span><strong>{number(dashboard.dataQuality?.cancelledOrders ?? 0)}</strong></div><div><span>Unmapped units</span><strong>{number(dashboard.unassigned.netUnits)}</strong></div></div></Panel>
-      <Panel title="Refund Impact" subtitle="Net sales impact" className={s.spanFour}><div className={s.comparisonList}><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>Refund events</span><strong>{number(dashboard.dataQuality?.refundEvents ?? 0)}</strong></div></div><p className={s.mutedNote}>Recorded refund events are included where the source exposes them.</p></Panel>
-      <Panel title="Fulfillment Status" subtitle="Of paid orders" className={s.spanFour}><StatusBarList rows={dashboard.fulfillmentStatuses} emptyMessage="No paid orders in this period." /></Panel>
-      <Panel title="Shipment Status" subtitle="Latest shipment state" className={s.spanFour}><StatusBarList rows={dashboard.shipmentStatuses} emptyMessage="No paid orders in this period." /></Panel>
-      <Panel title="Order Activity Heatmap" subtitle="Orders by London day & hour" className={s.spanFive}><OrderActivityHeatmap activity={dashboard.orderActivity} /></Panel>
-      <Panel title="Quick Comparison" subtitle="Vs. previous period" className={s.spanThree}><div className={s.comparisonList}><div><span>Orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>AOV</span><strong>{formatMoney(dashboard.metrics.averageOrderValue)}</strong></div><div><span>Units sold</span><strong>{number(dashboard.metrics.netUnits)}</strong></div></div></Panel>
+      <Panel title="Order Activity Heatmap" subtitle="Orders placed by weekday and one-hour time range · London time" className={`${s.spanTwelve} ${s.orderActivityPanel}`}><OrderActivityHeatmap activity={dashboard.orderActivity} /></Panel>
+      <Panel title="Order Summary" subtitle="Counts for the selected period" className={s.spanSix}><div className={s.statusGrid}><div><span>Recorded orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Units refunded</span><strong>{number(dashboard.dataQuality?.refundedUnits ?? 0)}</strong></div><div><span>Cancelled orders</span><strong>{number(dashboard.dataQuality?.cancelledOrders ?? 0)}</strong></div><div><span>Unmapped units</span><strong>{number(dashboard.unassigned.netUnits)}</strong></div></div></Panel>
+      <Panel title="Quick Comparison" subtitle="Vs. previous period" className={s.spanSix}><div className={s.comparisonList}><div><span>Orders</span><strong>{number(dashboard.metrics.orders)}</strong></div><div><span>Net sales</span><strong>{formatMoney(dashboard.metrics.netSales)}</strong></div><div><span>AOV</span><strong>{formatMoney(dashboard.metrics.averageOrderValue)}</strong></div><div><span>Units sold</span><strong>{number(dashboard.metrics.netUnits)}</strong></div></div></Panel>
     </div>
     <ReportFooter range={dashboard.range} />
   </>;
@@ -359,17 +383,16 @@ function AffiliateReport({ affiliate }: { affiliate: TikTokAffiliateDashboard })
   </>;
 }
 
-export function ReportsWorkspace({ dashboard, affiliate, adsConnection, adsReportState, ads, initialReport = "product" }: Props) {
+export function ReportsWorkspace(props: Props) {
   const router = useRouter();
-  const [report, setReport] = useState<ReportId>(initialReport);
+  const { range, report } = props;
   const [isPending, startTransition] = useTransition();
-  const range = dashboard.range;
   const rangeKey = `${range.start}:${range.end}:${range.allTime ? "all" : "range"}`;
   const [periodControl, setPeriodControl] = useState<PeriodControl>({ rangeKey, preset: presetFor(range), start: range.start, end: range.end });
   const controls = periodControl.rangeKey === rangeKey ? periodControl : { rangeKey, preset: presetFor(range), start: range.start, end: range.end };
   const invalidRange = !controls.start || !controls.end || controls.start > controls.end;
 
-  function rangeHref(nextRange: KpiPeriod, nextReport = report) {
+  function rangeHref(nextRange: KpiPeriod, nextReport: ReportId = report) {
     const period = nextRange.allTime ? "period=all" : `start=${nextRange.start}&end=${nextRange.end}`;
     return `/analytics/reports?report=${nextReport}&${period}`;
   }
@@ -379,8 +402,8 @@ export function ReportsWorkspace({ dashboard, affiliate, adsConnection, adsRepor
   }
 
   function chooseReport(nextReport: ReportId) {
-    setReport(nextReport);
-    try { window.history.replaceState(null, "", rangeHref(range, nextReport)); } catch { /* embedded browser */ }
+    if (nextReport === report) return;
+    startTransition(() => router.replace(rangeHref(range, nextReport), { scroll: false }));
   }
 
   function choosePreset(preset: string) {
@@ -404,17 +427,18 @@ export function ReportsWorkspace({ dashboard, affiliate, adsConnection, adsRepor
   return <section className={`workspace ${s.workspace}`} aria-busy={isPending || undefined}>
     <div className={s.toolbar}>
       <div><Link href="/analytics" className={s.backLink}><ArrowLeft size={15} aria-hidden="true" /> Back to Analytics</Link><span className={s.toolbarKicker}>Serenity Hue visual reporting</span></div>
-      <div className={s.toolbarActions}><button type="button" className={s.secondaryButton} onClick={printReport}><Printer size={15} aria-hidden="true" /> Print report</button><button type="button" className={s.primaryButton} title="Opens the browser print dialog; choose Save as PDF" onClick={printReport}><Download size={15} aria-hidden="true" /> Download PDF</button></div>
+      <div className={s.toolbarActions}><button type="button" className={s.secondaryButton} onClick={printReport} disabled={isPending}><Printer size={15} aria-hidden="true" /> Print report</button><button type="button" className={s.primaryButton} title="Opens the browser print dialog; choose Save as PDF" onClick={printReport} disabled={isPending}><Download size={15} aria-hidden="true" /> Download PDF</button></div>
     </div>
     <header className={s.workspaceHeader}><div><h1>Reporting</h1><p>Print-ready visual reports generated from the selected period.</p></div><div className={s.controls}><div className={s.rangeGroup} role="group" aria-label="Reporting period"><button type="button" className={s.rangeButton} aria-pressed={controls.preset === "30"} onClick={() => choosePreset("30")}>Last 30 days</button><button type="button" className={s.rangeButton} aria-pressed={controls.preset === "90"} onClick={() => choosePreset("90")}>Last 90 days</button><button type="button" className={s.rangeButton} aria-pressed={controls.preset === "all"} onClick={() => choosePreset("all")}>All time</button></div><button type="button" className={s.customButton} aria-expanded={controls.preset === "custom"} onClick={() => choosePreset(controls.preset === "custom" ? presetFor(range) : "custom")}><CalendarDays size={15} aria-hidden="true" /> Custom dates</button></div></header>
     {controls.preset === "custom" && <div className={s.customRange}><label>From<input type="date" value={controls.start} max={controls.end} onChange={(event) => setPeriodControl({ ...controls, start: event.target.value })} /></label><label>To<input type="date" value={controls.end} min={controls.start} onChange={(event) => setPeriodControl({ ...controls, end: event.target.value })} /></label><Button size="compact" onClick={applyCustomRange} disabled={invalidRange || isPending}>Apply dates</Button>{invalidRange && <span className={s.customRangeError}>Choose a start date on or before the end date.</span>}</div>}
     <nav className={s.reportTabs} aria-label="Report type">{reports.map((item) => <button key={item.id} type="button" className={s.reportTab} aria-pressed={report === item.id} onClick={() => chooseReport(item.id)}><FileText size={15} aria-hidden="true" />{item.shortLabel}</button>)}</nav>
     <main className={s.reportPage} aria-label={`${reports.find((item) => item.id === report)?.label ?? "Report"} report`}>
-      {report === "product" && <ProductReport dashboard={dashboard} />}
-      {report === "customer" && <CustomerReport dashboard={dashboard} />}
-      {report === "orders" && <OrdersReport dashboard={dashboard} />}
-      {report === "ads" && <AdsReport ads={ads} connection={adsConnection} state={adsReportState} />}
-      {report === "affiliate" && <AffiliateReport affiliate={affiliate} />}
+      {isPending ? <div className={s.reportUpdating} role="status" aria-live="polite"><Sparkles size={23} aria-hidden="true" /><strong>Updating visual report</strong><span>Refreshing figures for the selected dates…</span></div> : null}
+      {!isPending && report === "product" && <ProductReport dashboard={props.dashboard} />}
+      {!isPending && report === "customer" && <CustomerReport dashboard={props.dashboard} />}
+      {!isPending && report === "orders" && <OrdersReport dashboard={props.dashboard} />}
+      {!isPending && report === "ads" && <AdsReport ads={props.ads} connection={props.adsConnection} state={props.adsReportState} />}
+      {!isPending && report === "affiliate" && <AffiliateReport affiliate={props.affiliate} />}
     </main>
   </section>;
 }

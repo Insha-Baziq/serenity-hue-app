@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { updateLabBatchPackaging } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -10,9 +10,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ ba
   if (!session?.user) return Response.json({ ok: false, message: "Authentication required" }, { status: 401 });
   try {
     const { batchId } = await params;
-    const body = await request.json() as { addedQuantity?: unknown };
+    const body = await request.json() as { addedQuantity?: unknown; updateInventory?: unknown };
     if (typeof body.addedQuantity !== "number") return Response.json({ ok: false, message: "Enter the amount packaged now" }, { status: 400 });
-    const batch = await updateLabBatchPackaging({ batchId, addedQuantity: body.addedQuantity, actor: session.user.name || session.user.email || "Staff" });
+    if (body.updateInventory !== undefined && typeof body.updateInventory !== "boolean") return Response.json({ ok: false, message: "Choose whether to update inventory" }, { status: 400 });
+    const batch = await updateLabBatchPackaging({ batchId, addedQuantity: body.addedQuantity, updateInventory: body.updateInventory !== false, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, batch });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update this batch";

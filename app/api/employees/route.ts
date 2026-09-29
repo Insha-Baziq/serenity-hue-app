@@ -1,5 +1,5 @@
 import { createEmployee } from "@/lib/repository";
-import { requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -7,6 +7,8 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
+  const session = await getCurrentSession({ requestHeaders: request.headers, disableCookieCache: true });
+  if (!session?.user) return Response.json({ message: "Authentication required" }, { status: 401 });
   const limit = takeRateLimit(request, { name: "employee-create", limit: 10, windowMs: 60 * 60 * 1000 });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterSeconds);
 
@@ -25,7 +27,7 @@ export async function POST(request: Request) {
   if (password.length < 8) return Response.json({ message: "Password must be at least 8 characters" }, { status: 400 });
 
   try {
-    const employee = await createEmployee({ name, email, password });
+    const employee = await createEmployee({ name, email, password, actor: activityActorForSession(session)! });
     return Response.json({ employee }, { status: 201 });
   } catch (error) {
     if (error instanceof Error && error.message === "EMPLOYEE_ALREADY_EXISTS") {

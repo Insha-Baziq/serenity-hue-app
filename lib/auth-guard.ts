@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { assertBetterAuthConfiguration, auth, ensureAuthDatabase, getTrustedOrigins } from "@/lib/auth";
 import { getTursoClient } from "@/lib/turso";
+import type { ActivityActor } from "@/lib/types";
 
 async function touchPresence(userId: string) {
   const db = await getTursoClient();
@@ -53,4 +54,13 @@ export async function requireApiSession(request: Request) {
   if (!isTrustedMutationRequest(request)) return false;
   const session = await getCurrentSession({ requestHeaders: request.headers, disableCookieCache: true });
   return Boolean(session?.user);
+}
+
+export function activityActorForSession(session: Awaited<ReturnType<typeof getCurrentSession>>): ActivityActor | null {
+  if (!session?.user?.id) return null;
+  return {
+    type: "staff",
+    id: session.user.id,
+    label: session.user.name || session.user.email || "Staff",
+  };
 }

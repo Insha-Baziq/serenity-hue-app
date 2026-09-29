@@ -39,6 +39,8 @@ export type TikTokImportResult = {
   orders: number;
   shops: number;
   baselineOrders: number;
+  newOrders: number;
+  materiallyChangedOrders: number;
   redactedSample?: TikTokRedactedSample;
   afterSales: number;
   afterSalesWarning?: string;
@@ -510,8 +512,12 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
 
   const importedOrderIds = new Set<string>();
   const db = await getTursoClient();
+  const existingOrders = await db.execute("SELECT source_order_id, source_updated_at FROM orders WHERE source = 'tiktok'");
+  const existingOrderUpdatedAt = new Map(existingOrders.rows.map((row) => [text(row.source_order_id), text(row.source_updated_at)]));
   let shopsImported = 0;
   let baselineOrders = 0;
+  let newOrders = 0;
+  let materiallyChangedOrders = 0;
   let afterSales = 0;
   const afterSalesWarnings: string[] = [];
   const importedShopIds = new Set<string>();
@@ -542,6 +548,11 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
         const completeOrders = details.length > 0 ? details : searchResults;
         let pendingStatements: SqlStatement[] = [];
         for (const order of completeOrders) {
+          const sourceOrderId = orderId(order);
+          const previousUpdatedAt = existingOrderUpdatedAt.get(sourceOrderId);
+          const currentUpdatedAt = timestamp(order.update_time ?? order.updated_at);
+          if (!previousUpdatedAt) newOrders += 1;
+          else if (previousUpdatedAt !== currentUpdatedAt) materiallyChangedOrders += 1;
           const statements = buildOrderStatements(order, initialBackfill, shop.id);
           if (!statements) continue;
           if (!redactedSample) {
@@ -590,6 +601,8 @@ export async function importTikTokOrders(): Promise<TikTokImportResult> {
     orders: importedOrderIds.size,
     shops: shopsImported,
     baselineOrders,
+    newOrders,
+    materiallyChangedOrders,
     redactedSample,
     afterSales,
     afterSalesWarning: afterSalesWarnings.length ? [...new Set(afterSalesWarnings)].join("; ") : undefined,

@@ -3,6 +3,42 @@ export type MappingStatus = "confirmed" | "review" | "unmapped";
 export type PaymentStatus = "paid" | "pending" | "refunded";
 export type FulfillmentStatus = "fulfilled" | "unfulfilled" | "partial" | "cancelled";
 
+export type ActivityActorType = "staff" | "system" | "provider";
+export type ActivitySource = "manual" | "scheduled" | "webhook" | "provider";
+export type ActivityOutcome = "succeeded" | "failed" | "skipped";
+
+export type ActivityActor = {
+  type: ActivityActorType;
+  id: string;
+  label: string;
+};
+
+export type ActivityDetailValue = string | number | boolean | null | Array<string | number>;
+export type ActivityDetails = Record<string, ActivityDetailValue>;
+
+export type ActivityLogRow = {
+  id: string;
+  occurredAt: string;
+  expiresAt: string;
+  actor: ActivityActor;
+  source: ActivitySource;
+  provider: string | null;
+  eventName: string;
+  entityType: string | null;
+  entityId: string | null;
+  summary: string;
+  details: ActivityDetails;
+  outcome: ActivityOutcome;
+};
+
+export type ActivityLogPage = {
+  rows: ActivityLogRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+};
+
 export type ProductInventory = {
   id: string;
   productId: string;

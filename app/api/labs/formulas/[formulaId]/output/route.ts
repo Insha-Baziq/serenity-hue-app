@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { updateLabFormulaOutput } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -14,7 +14,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ form
     if (typeof body.physicalVariantId !== "string" || typeof body.fillQuantity !== "number" || (body.fillUnit !== "g" && body.fillUnit !== "ml")) {
       return Response.json({ ok: false, message: "Choose a master-inventory variant, fill amount, and unit" }, { status: 400 });
     }
-    const formula = await updateLabFormulaOutput({ formulaId, physicalVariantId: body.physicalVariantId, fillQuantity: body.fillQuantity, fillUnit: body.fillUnit });
+    const formula = await updateLabFormulaOutput({ formulaId, physicalVariantId: body.physicalVariantId, fillQuantity: body.fillQuantity, fillUnit: body.fillUnit, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, formula });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save packaging setup";

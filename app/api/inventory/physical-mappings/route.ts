@@ -1,4 +1,4 @@
-import { requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { savePhysicalListingMappings } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -14,6 +14,8 @@ type MappingPayload = {
 /** Replaces one channel listing's physical-component map in a single transaction. */
 export async function PATCH(request: Request) {
   if (!(await requireApiSession(request))) return Response.json({ ok: false, message: "Authentication required" }, { status: 401 });
+  const session = await getCurrentSession({ requestHeaders: request.headers, disableCookieCache: true });
+  if (!session?.user) return Response.json({ ok: false, message: "Authentication required" }, { status: 401 });
 
   let body: MappingPayload;
   try {
@@ -45,7 +47,7 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const listings = await savePhysicalListingMappings({ mappings, listingKind });
+    const listings = await savePhysicalListingMappings({ mappings, listingKind, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, listings });
   } catch (error) {
     return Response.json({ ok: false, message: error instanceof Error ? error.message : "Unable to save the mapping" }, { status: 400 });

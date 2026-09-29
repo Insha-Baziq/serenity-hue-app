@@ -378,6 +378,7 @@ CREATE TABLE IF NOT EXISTS lab_batch_packaging_ledger (
   packaged_after REAL NOT NULL,
   packaged_delta REAL NOT NULL,
   finished_units INTEGER NOT NULL CHECK (finished_units > 0),
+  inventory_updated INTEGER NOT NULL DEFAULT 1 CHECK (inventory_updated IN (0, 1)),
   reference TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -608,6 +609,39 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 
 CREATE INDEX IF NOT EXISTS sync_runs_started_at_idx ON sync_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS sync_runs_status_finished_at_idx ON sync_runs(status, finished_at DESC);
+
+-- Short-lived application activity for the protected operational feed. Detailed
+-- inventory and Labs ledgers remain the permanent audit records.
+CREATE TABLE IF NOT EXISTS application_activity_log (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('staff', 'system', 'provider')),
+  actor_id TEXT NOT NULL,
+  actor_label TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('manual', 'scheduled', 'webhook', 'provider')),
+  provider TEXT,
+  event_name TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id TEXT,
+  summary TEXT NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'skipped')),
+  dedupe_key TEXT UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS application_activity_log_occurred_at_idx
+  ON application_activity_log(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS application_activity_log_expires_at_idx
+  ON application_activity_log(expires_at);
+CREATE INDEX IF NOT EXISTS application_activity_log_event_name_idx
+  ON application_activity_log(event_name, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS application_activity_log_actor_idx
+  ON application_activity_log(actor_type, actor_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS application_activity_log_entity_idx
+  ON application_activity_log(entity_type, entity_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS application_activity_log_provider_idx
+  ON application_activity_log(provider, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS sync_leases (
   name TEXT PRIMARY KEY,

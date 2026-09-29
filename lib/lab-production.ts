@@ -74,6 +74,16 @@ export function packagedUnits(
   return Math.round(units);
 }
 
+export function packagingInventoryEffect(finishedUnits: number, updateInventory: boolean) {
+  if (!Number.isSafeInteger(finishedUnits) || finishedUnits < 0) {
+    throw new Error("FINISHED_UNITS_INVALID");
+  }
+  return {
+    shouldUpdate: updateInventory,
+    quantityDelta: updateInventory ? finishedUnits : 0,
+  };
+}
+
 export type IngredientDeductionStatus = "deducted" | "not_recorded";
 
 export type IngredientDeduction = {

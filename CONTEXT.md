@@ -127,6 +127,14 @@ status, counts, and message, protected by a short database lease.
 - **Is not**: a webhook event or a channel snapshot
 - **Lives in**: `sync_runs` and `sync_leases`
 
+### Application activity event
+A short-lived, human-readable record of one meaningful application operation or one
+provider sync outcome. It identifies the actor, source, affected domain, result, and
+safe structured details for the staff activity feed.
+- **Is not**: a SQL log, a provider payload archive, a session touch, or a replacement
+  for a permanent inventory, ingredient, batch, shipment, or reconciliation ledger
+- **Lives in**: `application_activity_log` and the protected `/logs` workspace
+
 ### Restock plan
 An action queue for mapped physical variants that have counted stock, a stored supplier
 lead time, at least 30 days since their first paid sale, and positive trailing-90-day

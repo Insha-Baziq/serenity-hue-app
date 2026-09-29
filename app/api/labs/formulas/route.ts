@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { createLabFormula } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       output: body.output && typeof body.output.physicalVariantId === "string" && typeof body.output.fillQuantity === "number" && (body.output.fillUnit === "g" || body.output.fillUnit === "ml")
         ? { physicalVariantId: body.output.physicalVariantId, fillQuantity: body.output.fillQuantity, fillUnit: body.output.fillUnit }
         : undefined,
+      actor: activityActorForSession(session)!,
     });
     return Response.json({ ok: true, formula }, { status: 201 });
   } catch (error) {

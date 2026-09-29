@@ -212,6 +212,15 @@ export async function importShopifySnapshot() {
     fetchAllVariants(typeof latestVariant.rows[0]?.latest === "string" ? latestVariant.rows[0].latest : null),
   ]);
   const orders = [...new Map([...incrementalOrders, ...repairedOrders].map((order) => [order.id, order])).values()];
+  const existingOrders = await db.execute("SELECT source_order_id, source_updated_at FROM orders WHERE source = 'shopify'");
+  const existingOrderUpdatedAt = new Map(existingOrders.rows.map((row) => [String(row.source_order_id ?? ""), String(row.source_updated_at ?? "")]));
+  let newOrders = 0;
+  let materiallyChangedOrders = 0;
+  for (const order of orders) {
+    const previous = existingOrderUpdatedAt.get(order.id);
+    if (!previous) newOrders += 1;
+    else if (previous !== order.updatedAt) materiallyChangedOrders += 1;
+  }
 
   const variantStatements = variants.flatMap((variant) => {
     const imageUrl = variant.image?.url ?? variant.product.featuredMedia?.preview?.image?.url ?? null;
@@ -283,5 +292,5 @@ export async function importShopifySnapshot() {
     await db.batch(statements, "write");
   }
 
-  return { orders: orders.length, variants: variants.length };
+  return { orders: orders.length, variants: variants.length, newOrders, materiallyChangedOrders };
 }

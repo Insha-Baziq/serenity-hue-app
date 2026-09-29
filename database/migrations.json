@@ -1,5 +1,5 @@
 {
-  "version": "2026-09-18-labs-bulk-allocation",
+  "version": "2026-09-21-application-activity-log",
   "columns": [
     ["variants", "packaging_type", "TEXT"],
     ["variants", "units_per_box", "INTEGER NOT NULL DEFAULT 1"],
@@ -20,6 +20,7 @@
     ["orders", "source_shop_id", "TEXT"],
     ["order_items", "source_product_id", "TEXT"],
     ["order_items", "source_variant_id", "TEXT"],
-    ["tiktok_affiliate_sync_status", "cursor_at", "TEXT"]
+    ["tiktok_affiliate_sync_status", "cursor_at", "TEXT"],
+    ["lab_batch_packaging_ledger", "inventory_updated", "INTEGER NOT NULL DEFAULT 1"]
   ]
 }

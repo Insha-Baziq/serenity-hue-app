@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { applyPhysicalInventoryAdjustments } from "@/lib/repository";
 import type { PhysicalInventoryAdjustment } from "@/lib/types";
 
@@ -29,7 +29,7 @@ export async function PATCH(request: Request) {
   const note = typeof body?.note === "string" ? body.note.trim().slice(0, 240) : "";
 
   try {
-    const result = await applyPhysicalInventoryAdjustments({ adjustments, note, actor: session.user.name || session.user.email || "Staff" });
+    const result = await applyPhysicalInventoryAdjustments({ adjustments, note, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, ...result });
   } catch (error) {
     return Response.json({ ok: false, message: error instanceof Error ? error.message : "Unable to save inventory" }, { status: 400 });

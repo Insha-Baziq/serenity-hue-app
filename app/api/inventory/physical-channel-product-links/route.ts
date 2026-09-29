@@ -1,4 +1,4 @@
-import { requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { savePhysicalChannelProductLink } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -13,6 +13,8 @@ type ProductLinkPayload = {
 /** Stores a product-family association without changing exact variant deductions. */
 export async function PATCH(request: Request) {
   if (!(await requireApiSession(request))) return Response.json({ ok: false, message: "Authentication required" }, { status: 401 });
+  const session = await getCurrentSession({ requestHeaders: request.headers, disableCookieCache: true });
+  if (!session?.user) return Response.json({ ok: false, message: "Authentication required" }, { status: 401 });
 
   let body: ProductLinkPayload;
   try {
@@ -26,7 +28,7 @@ export async function PATCH(request: Request) {
   if (!channel || !externalProductId) return Response.json({ ok: false, message: "Channel and product details are required" }, { status: 400 });
 
   try {
-    const listings = await savePhysicalChannelProductLink({ channel, externalProductId, physicalItemId });
+    const listings = await savePhysicalChannelProductLink({ channel, externalProductId, physicalItemId, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, listings });
   } catch (error) {
     return Response.json({ ok: false, message: error instanceof Error ? error.message : "Unable to save the product association" }, { status: 400 });

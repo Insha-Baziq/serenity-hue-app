@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { createPackagingMaterial, deletePackagingMaterial, updatePackagingMaterial } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
   }
   const { title, quantity } = parsePayload(body);
   try {
-    const item = await createPackagingMaterial({ title, quantity });
+    const item = await createPackagingMaterial({ title, quantity, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, item }, { status: 201 });
   } catch (error) {
     return errorResponse(error);
@@ -62,7 +62,7 @@ export async function PATCH(request: Request) {
   }
   const { id, title, quantity } = parsePayload(body);
   if (!id) return Response.json({ ok: false, message: "Packaging id is required" }, { status: 400 });
-  const actor = session.user.name || session.user.email || "Staff";
+  const actor = activityActorForSession(session)!;
   try {
     const result = await updatePackagingMaterial({ id, title, quantity, actor });
     return Response.json({ ok: true, ...result });
@@ -84,7 +84,7 @@ export async function DELETE(request: Request) {
   const { id } = parsePayload(body);
   if (!id) return Response.json({ ok: false, message: "Packaging id is required" }, { status: 400 });
   try {
-    const result = await deletePackagingMaterial({ id, actor: session.user.name || session.user.email || "Staff" });
+    const result = await deletePackagingMaterial({ id, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, ...result });
   } catch (error) {
     return errorResponse(error);

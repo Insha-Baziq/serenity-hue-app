@@ -1,4 +1,4 @@
-import { getCurrentSession, requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 import { updateLabIngredient } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json() as { id?: unknown; quantityGrams?: unknown; reorderPointGrams?: unknown };
     if (typeof body.id !== "string" || typeof body.quantityGrams !== "number") return Response.json({ ok: false, message: "Ingredient and quantity in grams are required" }, { status: 400 });
-    const items = await updateLabIngredient({ id: body.id, quantityGrams: body.quantityGrams, reorderPointGrams: typeof body.reorderPointGrams === "number" ? body.reorderPointGrams : undefined, actor: session.user.name || session.user.email || "Staff" });
+    const items = await updateLabIngredient({ id: body.id, quantityGrams: body.quantityGrams, reorderPointGrams: typeof body.reorderPointGrams === "number" ? body.reorderPointGrams : undefined, actor: activityActorForSession(session)! });
     return Response.json({ ok: true, items });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update ingredient inventory";

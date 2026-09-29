@@ -25,6 +25,8 @@ import {
   refreshTikTokAdsAccessToken,
   tiktokAdsAdvertiserId,
 } from "@/lib/tiktok-ads";
+import { recordActivityEvent } from "@/lib/repository";
+import type { ActivityActor } from "@/lib/types";
 
 export type TikTokAdsRefreshResult = {
   ok: boolean;
@@ -41,6 +43,40 @@ export type TikTokAdsRefreshResult = {
 };
 
 const SAFE_FAILURE_MESSAGE = "TikTok Ads reporting refresh failed; the last successful report was retained.";
+const SYSTEM_ADS_ACTOR: ActivityActor = { type: "system", id: "sync-scheduler", label: "Sync scheduler" };
+
+async function recordAdsActivity(input: {
+  id: string;
+  trigger: "manual" | "scheduled";
+  actor: ActivityActor;
+  outcome: "succeeded" | "failed" | "skipped";
+  summary: string;
+  recordsInspected?: number;
+  recordsChanged?: number;
+  details?: Record<string, string | number | boolean | null>;
+}) {
+  try {
+    await recordActivityEvent({
+      actor: input.actor,
+      source: input.trigger,
+      provider: "tiktok-ads",
+      eventName: "sync.tiktok-ads",
+      entityType: "sync",
+      entityId: input.id,
+      summary: input.summary,
+      details: {
+        trigger: input.trigger,
+        recordsInspected: input.recordsInspected ?? 0,
+        recordsChanged: input.recordsChanged ?? 0,
+        ...input.details,
+      },
+      outcome: input.outcome,
+      dedupeKey: `${input.id}:sync.tiktok-ads`,
+    });
+  } catch {
+    // Keep the provider result authoritative if activity visibility is unavailable.
+  }
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error && error.message ? error.message : "Unknown TikTok Ads refresh failure";
@@ -55,19 +91,29 @@ function skipped(message: string): TikTokAdsRefreshResult {
   return { ok: true, status: "skipped", message };
 }
 
-export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled"): Promise<TikTokAdsRefreshResult> {
+export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled", actor: ActivityActor = SYSTEM_ADS_ACTOR): Promise<TikTokAdsRefreshResult> {
   if (!adsReportingConfigured()) {
-    return skipped("TikTok Ads reporting is not configured.");
+    const result = skipped("TikTok Ads reporting is not configured.");
+    await recordAdsActivity({ id: `tiktok-ads:${trigger}:${randomUUID()}`, trigger, actor, outcome: "skipped", summary: "Skipped TikTok Ads refresh because the provider is not configured", details: { reason: "not_configured" } });
+    return result;
   }
 
   const advertiserId = tiktokAdsAdvertiserId();
   const ownerId = `tiktok-ads-report:${trigger}:${randomUUID()}`;
   const canRun = await takeTikTokAdsReportLease(ownerId);
-  if (!canRun) return skipped("TikTok Ads reporting is already refreshing.");
+  if (!canRun) {
+    const result = skipped("TikTok Ads reporting is already refreshing.");
+    await recordAdsActivity({ id: ownerId, trigger, actor, outcome: "skipped", summary: "Skipped TikTok Ads refresh because another refresh is already running", details: { reason: "busy" } });
+    return result;
+  }
 
   try {
     const connection = await activeTikTokAdsConnection(advertiserId);
-    if (!connection) return skipped("TikTok Ads is not connected to the configured advertiser.");
+    if (!connection) {
+      const result = skipped("TikTok Ads is not connected to the configured advertiser.");
+      await recordAdsActivity({ id: ownerId, trigger, actor, outcome: "skipped", summary: "Skipped TikTok Ads refresh because the provider is not connected", details: { reason: "not_connected" } });
+      return result;
+    }
 
     const previous = await getTikTokAdsSyncStatus(advertiserId);
     const historyStartDate = tiktokAdsHistoryStartDate();
@@ -131,7 +177,7 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
       rowsSkipped: rowsSkipped + failedBreakdownReports,
     });
 
-    return {
+    const result: TikTokAdsRefreshResult = {
       ok: true,
       status: "succeeded",
       reportStatus: rowsSkipped > 0 || failedBreakdownReports > 0 ? "partial" : "fresh",
@@ -146,6 +192,17 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
         ? "TikTok Ads report refreshed with some provider rows or breakdowns unavailable."
         : "TikTok Ads report refreshed.",
     };
+    await recordAdsActivity({
+      id: ownerId,
+      trigger,
+      actor,
+      outcome: "succeeded",
+      summary: result.message,
+      recordsInspected: rowsFetched,
+      recordsChanged: rowsWritten,
+      details: { rowsFetched, rowsWritten, rowsSkipped: rowsSkipped + failedBreakdownReports, reportStatus: result.reportStatus ?? null, fetchMode: result.fetchMode ?? null },
+    });
+    return result;
   } catch (error) {
     console.error("[tiktok-ads-refresh-failed]", {
       advertiserId,
@@ -156,6 +213,7 @@ export async function refreshTikTokAdsReporting(trigger: "manual" | "scheduled")
     } catch {
       // Preserve the original safe result if the status write itself fails.
     }
+    await recordAdsActivity({ id: ownerId, trigger, actor, outcome: "failed", summary: SAFE_FAILURE_MESSAGE, details: { reason: "provider_error" } });
     return { ok: false, status: "failed", message: SAFE_FAILURE_MESSAGE };
   } finally {
     await releaseTikTokAdsReportLease(ownerId);

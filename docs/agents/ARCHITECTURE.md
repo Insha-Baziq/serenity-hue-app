@@ -19,7 +19,7 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 ### App Router entrypoints
 
 - **Owns**: page composition, route parameters, HTTP status/body adaptation, and the authenticated operations shell.
-- **Public interface**: page components; `GET/POST/PATCH/PUT/DELETE(request, context) -> Response`.
+- **Public interface**: page components; `GET/POST/PATCH/PUT/DELETE(request, context) -> Response`; `loadVisualReport(report, range, loaders)` selects only one reporting family for a request.
 - **Hides**: Next.js routing/runtime details and request parsing from domain code.
 - **Depends on**: auth guard, repository/domain services, integration orchestration, shared types.
 - **Tested at**: `npm run build`; route behavior has no automated coverage.
@@ -40,13 +40,14 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - **Public interface**:
   ```text
   getOrders / getOrdersPage / getOrdersForExport
-  getKpiDashboard(period) -> server-shaped dashboard with sales/product/channel metrics,
+  getKpiDashboard(period, { scope }) -> server-shaped dashboard with sales/product/channel metrics,
     conservative customer performance, fixed-window physical-variant restock decisions,
     complete current/previous product rows, product demand trends, refund/cancellation
-    evidence, customer value bands, fulfillment/shipment status breakdowns, London
-    order-activity cells, all-variant stock coverage, current master/channel stock
+    evidence, customer value bands, interactive London day/hour order-activity
+    cells, all-variant stock coverage, current master/channel stock
     snapshots, and an explicit all-time period resolved from the earliest recorded order;
-    the KPI and visual-report pages share one five-minute tagged cache
+    visual-report scopes omit unrelated customer-history or product-inventory source groups;
+    the KPI and visual-report pages use the same five-minute tagged cache with scope-aware keys
   getKpiProductComparison(spec) -> two/three-month or four-week Europe/London
     calendar comparison with refund-aware physical-product periods, deterministic
     unit/revenue winners, partial-period identity, and like-for-like latest change
@@ -69,12 +70,14 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   getPhysicalChannelListings / savePhysicalListingMappings / savePhysicalChannelProductLink
   getLabIngredients / getLabFormulas / getLabFormula / getLabBatches / getLabBatchDetail
   createLabFormula / updateLabFormulaOutput / updateLabIngredient / createLabBatch /
-  updateLabBatchPackaging
+  updateLabBatchPackaging({ batchId, addedQuantity, actor, updateInventory? })
+  recordActivityEvent / recordActivityEvents / getActivityLogPage / pruneExpiredActivityLog
+  ActivityEventInput / ActivityLogQuery / ActivityLogPage
   recordSyncRun / takeSyncLease / releaseSyncLease / reconcileInventoryAlerts
   ```
-- **Hides**: SQL, row hydration, transactions, idempotency, migrations' data-shape assumptions, and audit writes.
+- **Hides**: SQL, row hydration, transactions, idempotency, migrations' data-shape assumptions, and audit writes. Activity events are written in the same transaction as staff mutations and sanitized before persistence; their seven-day cache is invalidated by the activity writer.
 - **Depends on**: `lib/turso.ts`, `lib/types.ts`, integration parsers, auth-derived actor identity.
-- **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; `tests/kpi-comparisons.test.mjs` protects the pure calendar-comparison contracts below the repository read; repository SQL behavior is otherwise untested.
+- **Tested at**: `tests/schema.test.mjs` and `tests/tiktok-ads-schema.test.mjs` cover schema constraints and Ads row correction; `tests/kpi-comparisons.test.mjs` protects the pure calendar-comparison contracts below the repository read; `tests/kpi-report-query-plan.test.mjs` protects report-to-source selection.
 - **Depth**: shallow-but-known; `lib/repository.ts` is a large mixed-context module with a broad surface and is the primary deepening candidate.
 
 

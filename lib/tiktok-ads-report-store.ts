@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getActiveTikTokAdsConnection, getTikTokAdsConnectionState } from "@/lib/repository";
+import { getActiveTikTokAdsConnection, getTikTokAdsConnectionState, type TikTokAdsConnectionState } from "@/lib/repository";
 import { hasTikTokAdsAppCredentials } from "@/lib/tiktok-ads";
 import { encryptTikTokToken } from "@/lib/tiktok-token-crypto";
 import {
@@ -187,8 +187,8 @@ export type TikTokAdsReportState = {
   lastRowsSkipped?: number;
 };
 
-export async function getTikTokAdsReportState(): Promise<TikTokAdsReportState> {
-  const connection = await getTikTokAdsConnectionState();
+export async function getTikTokAdsReportState(connectionState?: TikTokAdsConnectionState): Promise<TikTokAdsReportState> {
+  const connection = connectionState ?? await getTikTokAdsConnectionState();
   if (connection.status === "not_configured" || connection.status === "not_connected" || connection.status === "reconnect_required") {
     return { status: connection.status, advertiserId: connection.advertiserId };
   }

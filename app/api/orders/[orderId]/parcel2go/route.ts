@@ -1,11 +1,13 @@
 import { linkParcel2GoShipment } from "@/lib/repository";
-import { requireApiSession } from "@/lib/auth-guard";
+import { activityActorForSession, getCurrentSession, requireApiSession } from "@/lib/auth-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, context: RouteContext<"/api/orders/[orderId]/parcel2go">) {
   if (!(await requireApiSession(request))) return Response.json({ message: "Authentication required" }, { status: 401 });
+  const session = await getCurrentSession({ requestHeaders: request.headers, disableCookieCache: true });
+  if (!session?.user) return Response.json({ message: "Authentication required" }, { status: 401 });
   const { orderId } = await context.params;
   let body: unknown;
   try {
@@ -17,7 +19,7 @@ export async function POST(request: Request, context: RouteContext<"/api/orders/
   if (!shipmentId) return Response.json({ message: "Choose a Parcel2Go delivery first" }, { status: 400 });
 
   try {
-    await linkParcel2GoShipment(orderId, shipmentId);
+    await linkParcel2GoShipment(orderId, shipmentId, activityActorForSession(session)!);
     return Response.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to link Parcel2Go delivery";

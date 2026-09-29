@@ -7,10 +7,13 @@ import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypt
 import { hasTikTokAdsAppCredentials, type TikTokAdsTokenBundle } from "@/lib/tiktok-ads";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import { hashPassword } from "better-auth/crypto";
-import type { Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaOutput, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { ActivityActor, ActivityDetails, ActivityLogPage, ActivityLogRow, ActivityOutcome, ActivitySource, Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaOutput, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { ActivityLogQuery } from "@/lib/activity-log-query";
+import { sanitizeActivityDetails } from "@/lib/activity-log-safety";
 import type { OrdersQuery } from "@/lib/orders-query";
 import { LAB_FORMULAS } from "@/lib/labs-formulas";
 import { buildKpiDashboard, type KpiCustomerOrder, type KpiDashboard, type KpiPeriod, type KpiRestockDemandLine, type KpiRestockVariant, type KpiSale } from "@/lib/kpi-dashboard";
+import { getKpiReportQueryPlan, type KpiDashboardScope } from "@/lib/kpi-report-query-plan";
 import { buildTikTokAffiliateDashboard, type TikTokAffiliateDashboard } from "@/lib/tiktok-affiliate-dashboard";
 import {
   buildKpiProductComparison,
@@ -21,20 +24,79 @@ import {
   type TikTokAffiliateComparison,
 } from "@/lib/kpi-comparisons";
 import { changedColumns } from "@/lib/sql-upsert";
-import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, planIngredientDeduction } from "@/lib/lab-production";
+import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, packagingInventoryEffect, planIngredientDeduction } from "@/lib/lab-production";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
+type KpiDashboardOptions = { scope?: KpiDashboardScope };
 
 const changed = changedColumns;
 
 /** How much scheduled-sync bookkeeping to keep. Nothing reads beyond this. */
 const SYNC_RUN_RETENTION_DAYS = 30;
 const KPI_REPORTING_CACHE_TAG = "serenity-hue:kpi-reporting";
+const ACTIVITY_LOG_RETENTION_DAYS = 7;
+export const ACTIVITY_LOG_CACHE_TAG = "serenity-hue:activity-log";
+
+export type ActivityEventInput = {
+  actor: ActivityActor;
+  source: ActivitySource;
+  provider?: string | null;
+  eventName: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  summary: string;
+  details?: ActivityDetails;
+  outcome: ActivityOutcome;
+  dedupeKey?: string | null;
+  occurredAt?: string;
+};
+
+type SqlExecutor = Pick<DatabaseClient, "execute">;
+
+function activityExpiry(occurredAt: string) {
+  const parsed = Date.parse(occurredAt);
+  return new Date((Number.isFinite(parsed) ? parsed : Date.now()) + ACTIVITY_LOG_RETENTION_DAYS * 86_400_000).toISOString();
+}
+
+async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventInput) {
+  const occurredAt = input.occurredAt ?? new Date().toISOString();
+  const result = await executor.execute({
+    sql: `INSERT INTO application_activity_log
+            (id, occurred_at, expires_at, actor_type, actor_id, actor_label, source, provider,
+             event_name, entity_type, entity_id, summary, details_json, outcome, dedupe_key)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(dedupe_key) DO NOTHING`,
+    args: [
+      randomUUID(),
+      occurredAt,
+      activityExpiry(occurredAt),
+      input.actor.type,
+      input.actor.id,
+      input.actor.label,
+      input.source,
+      input.provider ?? null,
+      input.eventName,
+      input.entityType ?? null,
+      input.entityId ?? null,
+      input.summary.slice(0, 500),
+      JSON.stringify(sanitizeActivityDetails(input.details)),
+      input.outcome,
+      input.dedupeKey ?? null,
+    ],
+  });
+  return Number(result.rowsAffected ?? 0) > 0;
+}
+
+function invalidateActivityLogCache() {
+  revalidateTag(ACTIVITY_LOG_CACHE_TAG, "max");
+  revalidatePath("/logs");
+}
 
 function invalidateKpiReportingCache() {
   revalidateTag(KPI_REPORTING_CACHE_TAG, "max");
   revalidatePath("/kpis");
+  revalidatePath("/analytics/reports");
 }
 
 function stringValue(value: unknown) {
@@ -81,6 +143,135 @@ function optionalString(value: unknown) {
   return text || undefined;
 }
 
+export async function recordActivityEvent(input: ActivityEventInput): Promise<boolean> {
+  const inserted = await recordActivityEvents([input]);
+  return inserted > 0;
+}
+
+export async function recordActivityEvents(inputs: ActivityEventInput[]): Promise<number> {
+  if (!inputs.length) return 0;
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  let inserted = 0;
+  try {
+    for (const input of inputs) {
+      if (await insertActivityEvent(transaction, input)) inserted += 1;
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  if (inserted > 0) invalidateActivityLogCache();
+  return inserted;
+}
+
+/** Used by domain mutations so the activity row shares their write transaction. */
+export async function recordActivityEventInTransaction(transaction: SqlExecutor, input: ActivityEventInput) {
+  const inserted = await insertActivityEvent(transaction, input);
+  if (inserted) invalidateActivityLogCache();
+  return inserted;
+}
+
+export async function pruneExpiredActivityLog(): Promise<number> {
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: "DELETE FROM application_activity_log WHERE expires_at <= ?",
+    args: [new Date().toISOString()],
+  });
+  const pruned = Number(result.rowsAffected ?? 0);
+  if (pruned > 0) invalidateActivityLogCache();
+  return pruned;
+}
+
+function activityDetails(value: unknown): ActivityDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return sanitizeActivityDetails(value as ActivityDetails);
+}
+
+function parseActivityDetails(value: unknown): ActivityDetails {
+  if (typeof value !== "string" || !value) return {};
+  try {
+    return activityDetails(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+export async function getActivityLogPage(query: ActivityLogQuery): Promise<ActivityLogPage> {
+  const db = await getTursoClient();
+  const now = new Date().toISOString();
+  const conditions = ["expires_at > ?"];
+  const args: SqlValue[] = [now];
+  const search = query.q.trim();
+  if (search) {
+    const pattern = `%${search}%`;
+    conditions.push("(summary LIKE ? OR event_name LIKE ? OR actor_label LIKE ? OR entity_id LIKE ?)");
+    args.push(pattern, pattern, pattern, pattern);
+  }
+  if (query.domain !== "all") {
+    conditions.push("event_name LIKE ?");
+    args.push(`${query.domain}.%`);
+  }
+  if (query.source !== "all") {
+    conditions.push("source = ?");
+    args.push(query.source);
+  }
+  if (query.provider.trim()) {
+    conditions.push("provider = ?");
+    args.push(query.provider.trim());
+  }
+  if (query.actor.trim()) {
+    conditions.push("(actor_type = ? OR actor_id LIKE ? OR actor_label LIKE ?)");
+    const actor = query.actor.trim();
+    args.push(actor, `%${actor}%`, `%${actor}%`);
+  }
+  if (query.outcome !== "all") {
+    conditions.push("outcome = ?");
+    args.push(query.outcome);
+  }
+  if (query.dateRange === "7") {
+    conditions.push("occurred_at >= ?");
+    args.push(new Date(Date.now() - 7 * 86_400_000).toISOString());
+  }
+  const where = conditions.join(" AND ");
+  const countResult = await db.execute({ sql: `SELECT COUNT(*) AS total FROM application_activity_log WHERE ${where}`, args });
+  const total = numberValue(countResult.rows[0]?.total);
+  const pageSize = [25, 50, 100].includes(query.pageSize) ? query.pageSize : 50;
+  const pageCount = Math.ceil(total / pageSize);
+  const page = pageCount ? Math.min(Math.max(1, query.page), pageCount) : 1;
+  const result = await db.execute({
+    sql: `SELECT id, occurred_at, expires_at, actor_type, actor_id, actor_label, source, provider,
+                 event_name, entity_type, entity_id, summary, details_json, outcome
+          FROM application_activity_log
+          WHERE ${where}
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ? OFFSET ?`,
+    args: [...args, pageSize, (page - 1) * pageSize],
+  });
+  const rows: ActivityLogRow[] = result.rows.map((row) => ({
+    id: stringValue(row.id),
+    occurredAt: stringValue(row.occurred_at),
+    expiresAt: stringValue(row.expires_at),
+    actor: {
+      type: stringValue(row.actor_type) as ActivityActor["type"],
+      id: stringValue(row.actor_id),
+      label: stringValue(row.actor_label),
+    },
+    source: stringValue(row.source) as ActivitySource,
+    provider: optionalString(row.provider) ?? null,
+    eventName: stringValue(row.event_name),
+    entityType: optionalString(row.entity_type) ?? null,
+    entityId: optionalString(row.entity_id) ?? null,
+    summary: stringValue(row.summary),
+    details: parseActivityDetails(row.details_json),
+    outcome: stringValue(row.outcome) as ActivityOutcome,
+  }));
+  return { rows, total, page, pageSize, pageCount };
+}
+
 function toParcel2GoMatchMethod(value: unknown): Parcel2GoMatchMethod | undefined {
   const method = stringValue(value);
   return method === "order_reference" || method === "customer_email" || method === "customer_phone" || method === "delivery_address"
@@ -94,7 +285,6 @@ async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
   const db = await getTursoClient();
   const placeholders = orderIds.map(() => "?").join(", ");
   const shipments = await db.execute({
-  revalidatePath("/analytics/reports");
     sql: `SELECT id, order_id, external_order_line_id, source_references_json, courier, service, status, paid_at, collection_date, estimated_delivery_at, tracking_url, match_method
           FROM shipments WHERE order_id IN (${placeholders}) AND provider = 'parcel2go' ORDER BY last_synced_at DESC`,
     args: orderIds,
@@ -459,9 +649,10 @@ function londonKpiToday() {
  * mode resolves to the complete recorded order history; no tax, delivery, client
  * tracking, or separate analytics store is involved.
  */
-export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClient): Promise<KpiDashboard> {
+export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClient, options: KpiDashboardOptions = {}): Promise<KpiDashboard> {
   if (!isKpiPeriod(range)) throw new Error("Choose a valid inclusive reporting period.");
   const db = database ?? await getTursoClient();
+  const queryPlan = getKpiReportQueryPlan(options.scope ?? "full");
   let reportingRange = range;
   if (range.allTime) {
     const earliestOrderResult = await db.execute("SELECT MIN(source_created_at) AS first_order_at FROM orders");
@@ -486,16 +677,15 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
   // ranges do not silently render an empty variant chart.
   const variantDemandQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
   const variantDemandQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
-  const refundQueryStart = queryStart < restockQueryStart ? queryStart : restockQueryStart;
-  const refundQueryEndExclusive = queryEndExclusive > restockQueryEndExclusive ? queryEndExclusive : restockQueryEndExclusive;
-  const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, shipmentStatusResult, channelStockResult, freshnessResult] = await Promise.all([
-    db.execute({
-      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
-                   o.customer_name, o.customer_email, o.customer_phone,
-                   oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
-                   physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
-            FROM orders o
-            JOIN order_items oi ON oi.order_id = o.id
+  const refundQueryStart = queryPlan.productInventory && queryStart > restockQueryStart ? restockQueryStart : queryStart;
+  const refundQueryEndExclusive = queryPlan.productInventory && queryEndExclusive < restockQueryEndExclusive ? restockQueryEndExclusive : queryEndExclusive;
+  const productMappingColumns = queryPlan.productMapping
+    ? "physical_item.id AS physical_item_id, physical_item.title AS physical_item_title"
+    : "NULL AS physical_item_id, NULL AS physical_item_title";
+  const customerIdentityColumns = queryPlan.customerSaleIdentity
+    ? "o.customer_name, o.customer_email, o.customer_phone"
+    : "NULL AS customer_name, NULL AS customer_email, NULL AS customer_phone";
+  const productMappingJoins = queryPlan.productMapping ? `
             LEFT JOIN physical_channel_listings listing
               ON listing.active = 1 AND listing.mapping_status = 'confirmed' AND listing.channel = o.source
              AND ((o.source = 'shopify' AND listing.external_variant_id = oi.source_variant_id)
@@ -510,7 +700,17 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
             LEFT JOIN physical_channel_product_links product_link
               ON product_link.channel = listing.channel AND product_link.external_product_id = listing.external_product_id
             LEFT JOIN physical_inventory_items physical_item
-              ON physical_item.id = product_link.physical_item_id AND physical_item.active = 1
+              ON physical_item.id = product_link.physical_item_id AND physical_item.active = 1` : "";
+  const emptyResult = Promise.resolve({ rows: [] });
+  const [salesResult, shopifyRefunds, tiktokRefunds, customerOrdersResult, restockDemandResult, restockVariantsResult, channelStockResult, freshnessResult] = await Promise.all([
+    db.execute({
+      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
+                   ${customerIdentityColumns},
+                   oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
+                   ${productMappingColumns}
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            ${productMappingJoins}
             WHERE (o.source_created_at >= ? AND o.source_created_at < ?)
                OR EXISTS (SELECT 1 FROM shopify_refund_line_items refund
                           WHERE refund.order_id = o.id AND refund.processed_at >= ? AND refund.processed_at < ?)
@@ -533,10 +733,14 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
               AND source_updated_at >= ? AND source_updated_at < ?`,
       args: [refundQueryStart, refundQueryEndExclusive],
     }),
-    db.execute(`SELECT id, source_created_at, financial_status, cancelled_at, customer_name, customer_email, customer_phone
-                FROM orders
-                ORDER BY source_created_at ASC, id ASC`),
-    db.execute({
+    queryPlan.customerHistory ? db.execute({
+      sql: `SELECT id, source_created_at, financial_status, cancelled_at, customer_name, customer_email, customer_phone
+            FROM orders
+            WHERE COALESCE(cancelled_at, '') = '' AND COALESCE(financial_status, '') <> 'pending'
+              AND COALESCE(source_created_at, '') <> ''
+            ORDER BY source_created_at ASC, id ASC`,
+    }) : emptyResult,
+    queryPlan.productInventory ? db.execute({
       sql: `WITH relevant_order_ids AS (
               SELECT o.id
               FROM orders o
@@ -571,10 +775,9 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
              JOIN physical_inventory_variants physical_variant ON physical_variant.id = component.physical_variant_id AND physical_variant.active = 1
              ORDER BY o.source_created_at ASC, o.id, oi.rowid, component.physical_variant_id`,
       args: [variantDemandQueryStart, variantDemandQueryEndExclusive, variantDemandQueryStart, variantDemandQueryEndExclusive, variantDemandQueryStart, variantDemandQueryEndExclusive],
-    }),
-    db.execute(`WITH first_paid_sales AS (
+    }) : emptyResult,
+    queryPlan.productInventory ? db.execute(`WITH first_paid_sales AS (
                   SELECT component.physical_variant_id, MIN(o.source_created_at) AS first_paid_sale_at
-      fulfillmentStatus: optionalString(row.fulfillment_status) ?? null,
                   FROM physical_listing_components component
                   JOIN physical_channel_listings listing ON listing.id = component.listing_id
                     AND listing.active = 1 AND listing.mapping_status = 'confirmed'
@@ -599,7 +802,42 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
                 JOIN physical_inventory_items physical_item ON physical_item.id = physical_variant.physical_item_id
                 LEFT JOIN first_paid_sales ON first_paid_sales.physical_variant_id = physical_variant.id
                 WHERE physical_variant.active = 1 AND physical_item.active = 1
-                ORDER BY physical_item.title ASC, physical_variant.sort_order ASC, physical_variant.title ASC`),
+                ORDER BY physical_item.title ASC, physical_variant.sort_order ASC, physical_variant.title ASC`) : emptyResult,
+    queryPlan.productInventory ? db.execute(`
+      WITH tiktok_variant AS (
+        SELECT variant_id, SUM(available_quantity) AS qty
+        FROM channel_inventory
+        WHERE channel = 'tiktok' AND variant_id IS NOT NULL
+        GROUP BY variant_id
+      ), mapped_products AS (
+        SELECT cm.external_product_id, MIN(v.product_id) AS product_id
+        FROM channel_mappings cm
+        JOIN variants v ON v.id = cm.variant_id
+        WHERE cm.channel = 'tiktok' AND cm.active = 1 AND cm.external_product_id IS NOT NULL
+        GROUP BY cm.external_product_id
+        HAVING COUNT(DISTINCT v.product_id) = 1
+      ), tiktok_product AS (
+        SELECT mp.product_id, SUM(ci.available_quantity) AS qty
+        FROM channel_inventory ci
+        JOIN mapped_products mp ON mp.external_product_id = ci.external_product_id
+        WHERE ci.channel = 'tiktok' AND ci.variant_id IS NULL
+        GROUP BY mp.product_id
+      )
+      SELECT v.id AS variant_id,
+             p.title AS product_title,
+             v.title AS variant_title,
+             mi.quantity AS master_quantity,
+             v.available_quantity AS shopify_quantity,
+             tv.qty AS tiktok_quantity,
+             CASE WHEN ROW_NUMBER() OVER (PARTITION BY v.product_id ORDER BY v.title, v.id) = 1
+               THEN tp.qty ELSE NULL END AS tiktok_product_quantity
+      FROM variants v
+      JOIN products p ON p.id = v.product_id
+      LEFT JOIN master_inventory mi ON mi.variant_id = v.id
+      LEFT JOIN tiktok_variant tv ON tv.variant_id = v.id
+      LEFT JOIN tiktok_product tp ON tp.product_id = v.product_id
+      ORDER BY p.title, v.title, v.id
+    `) : emptyResult,
     db.execute("SELECT finished_at FROM sync_runs WHERE status = 'succeeded' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1"),
   ]);
 
@@ -615,15 +853,18 @@ export async function getKpiDashboard(range: KpiPeriod, database?: DatabaseClien
         orderId: stringValue(row.order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
       })),
     ],
-    restock: {
-      today: restockToday,
-      variants: groupKpiRestockVariants(restockVariantsResult.rows),
-      demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
-    },
-    variantPerformance: {
-      variants: groupKpiRestockVariants(restockVariantsResult.rows),
-      demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
-    },
+    ...(queryPlan.productInventory ? {
+      restock: {
+        today: restockToday,
+        variants: groupKpiRestockVariants(restockVariantsResult.rows),
+        demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
+      },
+      variantPerformance: {
+        variants: groupKpiRestockVariants(restockVariantsResult.rows),
+        demandLines: groupKpiRestockDemandLines(restockDemandResult.rows),
+      },
+      channelStock: groupKpiChannelStock(channelStockResult.rows),
+    } : {}),
     freshness: optionalString(freshnessResult.rows[0]?.finished_at) ?? null,
   });
 }
@@ -636,7 +877,7 @@ export async function getKpiProductComparison(spec: ComparisonSpec): Promise<Kpi
   const queryEndExclusive = shiftKpiDate(range.end, 2);
   const [salesResult, shopifyRefunds, tiktokRefunds] = await Promise.all([
     db.execute({
-      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.fulfillment_status, o.cancelled_at,
+      sql: `SELECT o.id AS order_id, o.source, o.source_created_at, o.financial_status, o.cancelled_at,
                    o.customer_name, o.customer_email, o.customer_phone,
                    oi.id AS order_item_id, oi.source_line_item_id, oi.quantity, oi.unit_price_amount,
                    physical_item.id AS physical_item_id, physical_item.title AS physical_item_title
@@ -788,61 +1029,6 @@ export async function getTikTokAffiliateComparison(spec: ComparisonSpec): Promis
       orderId: stringValue(row.source_order_id), lineItemId: stringValue(row.source_line_item_id), quantity: numberValue(row.quantity), processedAt: stringValue(row.source_updated_at),
     })),
     videos: videos.rows.map((row) => ({
-    db.execute({
-      sql: `WITH report_orders AS (
-              SELECT id
-              FROM orders
-              WHERE source_created_at >= ? AND source_created_at < ?
-            ), ranked_shipments AS (
-              SELECT s.order_id, LOWER(TRIM(s.status)) AS status,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY s.order_id
-                       ORDER BY s.updated_at DESC, s.last_synced_at DESC, s.id DESC
-                     ) AS row_number
-              FROM shipments s
-              JOIN report_orders o ON o.id = s.order_id
-              WHERE s.order_id IS NOT NULL
-            )
-            SELECT order_id, status
-            FROM ranked_shipments
-            WHERE row_number = 1`,
-      args: [queryStart, queryEndExclusive],
-    }),
-    db.execute(`
-      WITH tiktok_variant AS (
-        SELECT variant_id, SUM(available_quantity) AS qty
-        FROM channel_inventory
-        WHERE channel = 'tiktok' AND variant_id IS NOT NULL
-        GROUP BY variant_id
-      ), mapped_products AS (
-        SELECT cm.external_product_id, MIN(v.product_id) AS product_id
-        FROM channel_mappings cm
-        JOIN variants v ON v.id = cm.variant_id
-        WHERE cm.channel = 'tiktok' AND cm.active = 1 AND cm.external_product_id IS NOT NULL
-        GROUP BY cm.external_product_id
-        HAVING COUNT(DISTINCT v.product_id) = 1
-      ), tiktok_product AS (
-        SELECT mp.product_id, SUM(ci.available_quantity) AS qty
-        FROM channel_inventory ci
-        JOIN mapped_products mp ON mp.external_product_id = ci.external_product_id
-        WHERE ci.channel = 'tiktok' AND ci.variant_id IS NULL
-        GROUP BY mp.product_id
-      )
-      SELECT v.id AS variant_id,
-             p.title AS product_title,
-             v.title AS variant_title,
-             mi.quantity AS master_quantity,
-             v.available_quantity AS shopify_quantity,
-             tv.qty AS tiktok_quantity,
-             CASE WHEN ROW_NUMBER() OVER (PARTITION BY v.product_id ORDER BY v.title, v.id) = 1
-               THEN tp.qty ELSE NULL END AS tiktok_product_quantity
-      FROM variants v
-      JOIN products p ON p.id = v.product_id
-      LEFT JOIN master_inventory mi ON mi.variant_id = v.id
-      LEFT JOIN tiktok_variant tv ON tv.variant_id = v.id
-      LEFT JOIN tiktok_product tp ON tp.product_id = v.product_id
-      ORDER BY p.title, v.title, v.id
-    `),
       id: stringValue(row.id),
       creator: optionalString(row.creator_username) ?? optionalString(row.creator_open_id) ?? null,
       creatorId: optionalString(row.creator_open_id) ?? optionalString(row.creator_username) ?? null,
@@ -850,6 +1036,18 @@ export async function getTikTokAffiliateComparison(spec: ComparisonSpec): Promis
       publishedAt: optionalString(row.published_at) ?? null,
     })),
   });
+}
+
+function groupKpiChannelStock(rows: QueryRows) {
+  return rows.map((row) => ({
+    variantId: stringValue(row.variant_id),
+    productTitle: stringValue(row.product_title),
+    variantTitle: stringValue(row.variant_title),
+    master: row.master_quantity === null || row.master_quantity === undefined ? null : numberValue(row.master_quantity),
+    shopify: numberValue(row.shopify_quantity),
+    tiktok: row.tiktok_quantity === null || row.tiktok_quantity === undefined ? null : numberValue(row.tiktok_quantity),
+    tiktokProductLevel: row.tiktok_product_quantity === null || row.tiktok_product_quantity === undefined ? null : numberValue(row.tiktok_product_quantity),
+  })).filter((row) => row.variantId);
 }
 
 /** Server-shaped affiliate reporting read. TikTok affiliate records remain distinct from ordinary orders until a stable ID join succeeds. */
@@ -867,8 +1065,6 @@ export async function getTikTokAffiliateDashboard(range: KpiPeriod): Promise<Tik
   const queryEndExclusive = shiftKpiDate(reportingRange.end, 2);
   const [orders, refunds, videos, freshness] = await Promise.all([
     db.execute({
-    shipmentStatuses: groupKpiShipmentRecords(shipmentStatusResult.rows),
-    channelStock: groupKpiChannelStock(channelStockResult.rows),
       sql: `SELECT affiliate.id, affiliate.source_order_id, affiliate.source_line_item_id, affiliate.source_created_at,
                     affiliate.quantity, affiliate.gross_amount_minor, affiliate.estimated_commission_minor,
                     affiliate.creator_open_id, affiliate.creator_username, affiliate.source_product_id,
@@ -1042,25 +1238,6 @@ export async function getEmployees(): Promise<Employee[]> {
     id: stringValue(row.id),
     name: stringValue(row.name) || "Unnamed employee",
     email: stringValue(row.email),
-function groupKpiShipmentRecords(rows: QueryRows) {
-  return rows.map((row) => ({
-    orderId: stringValue(row.order_id),
-    status: stringValue(row.status),
-  })).filter((record) => record.orderId && record.status);
-}
-
-function groupKpiChannelStock(rows: QueryRows) {
-  return rows.map((row) => ({
-    variantId: stringValue(row.variant_id),
-    productTitle: stringValue(row.product_title),
-    variantTitle: stringValue(row.variant_title),
-    master: row.master_quantity === null || row.master_quantity === undefined ? null : numberValue(row.master_quantity),
-    shopify: numberValue(row.shopify_quantity),
-    tiktok: row.tiktok_quantity === null || row.tiktok_quantity === undefined ? null : numberValue(row.tiktok_quantity),
-    tiktokProductLevel: row.tiktok_product_quantity === null || row.tiktok_product_quantity === undefined ? null : numberValue(row.tiktok_product_quantity),
-  })).filter((row) => row.variantId);
-}
-
     image: optionalString(row.image),
     createdAt: stringValue(row.createdAt),
     lastSeenAt: optionalString(row.last_seen_at),
@@ -1068,7 +1245,7 @@ function groupKpiChannelStock(rows: QueryRows) {
   }));
 }
 
-export async function createEmployee(input: { name: string; email: string; password: string }): Promise<Employee> {
+export async function createEmployee(input: { name: string; email: string; password: string; actor: ActivityActor }): Promise<Employee> {
   const db = await getTursoClient();
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
@@ -1091,6 +1268,16 @@ export async function createEmployee(input: { name: string; email: string; passw
                accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
             VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
       args: [accountId, userId, userId, passwordHash, now, now],
+    });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "employee.created",
+      entityType: "employee",
+      entityId: userId,
+      summary: `Created employee ${name}`,
+      details: { name },
+      outcome: "succeeded",
     });
     await transaction.commit();
   } catch (error) {
@@ -1124,7 +1311,7 @@ export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipment
   }));
 }
 
-export async function linkParcel2GoShipment(orderId: string, shipmentId: string) {
+export async function linkParcel2GoShipment(orderId: string, shipmentId: string, actor: ActivityActor) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   try {
@@ -1136,6 +1323,16 @@ export async function linkParcel2GoShipment(orderId: string, shipmentId: string)
     const linkedOrderId = optionalString(shipment.order_id);
     if (linkedOrderId && linkedOrderId !== orderId) throw new Error("This Parcel2Go delivery is already linked to another order");
     await transaction.execute({ sql: "UPDATE shipments SET order_id = ?, updated_at = ? WHERE id = ?", args: [orderId, new Date().toISOString(), shipmentId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor,
+      source: "manual",
+      eventName: "shipment.linked",
+      entityType: "shipment",
+      entityId: shipmentId,
+      summary: "Linked a Parcel2Go delivery to an order",
+      details: { orderId },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -1147,13 +1344,36 @@ export async function linkParcel2GoShipment(orderId: string, shipmentId: string)
 
 export async function recordParcel2GoWebhook(input: { externalEventId: string; topic: string }) {
   const db = await getTursoClient();
-  const result = await db.execute({
-    sql: `INSERT INTO webhook_events (id, provider, external_event_id, topic, received_at, processed_at, status)
-          VALUES (?, 'parcel2go', ?, ?, ?, NULL, 'received')
-          ON CONFLICT(provider, external_event_id) DO NOTHING`,
-    args: [`parcel2go:${input.externalEventId}`, input.externalEventId, input.topic, new Date().toISOString()],
-  });
-  return result.rowsAffected > 0;
+  const transaction = await db.transaction("write");
+  try {
+    const result = await transaction.execute({
+      sql: `INSERT INTO webhook_events (id, provider, external_event_id, topic, received_at, processed_at, status)
+            VALUES (?, 'parcel2go', ?, ?, ?, NULL, 'received')
+            ON CONFLICT(provider, external_event_id) DO NOTHING`,
+      args: [`parcel2go:${input.externalEventId}`, input.externalEventId, input.topic, new Date().toISOString()],
+    });
+    if (Number(result.rowsAffected ?? 0) > 0) {
+      await recordActivityEventInTransaction(transaction, {
+        actor: { type: "provider", id: "parcel2go", label: "Parcel2Go" },
+        source: "webhook",
+        provider: "parcel2go",
+        eventName: "sync.parcel2go.webhook",
+        entityType: "webhook",
+        entityId: input.externalEventId,
+        summary: "Received a Parcel2Go shipment webhook",
+        details: { topic: input.topic },
+        outcome: "succeeded",
+        dedupeKey: `parcel2go:webhook:${input.externalEventId}`,
+      });
+    }
+    await transaction.commit();
+    return Number(result.rowsAffected ?? 0) > 0;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
 }
 
 export async function createTikTokOAuthState(input: { id: string; stateHash: string; expiresAt: string }) {
@@ -1818,23 +2038,42 @@ function packagingTitle(value: string) {
   return title;
 }
 
-export async function createPackagingMaterial(input: { title: string; quantity: number }) {
+export async function createPackagingMaterial(input: { title: string; quantity: number; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = packagingTitle(input.title);
   const quantity = packagingQuantity(input.quantity);
-  const existing = await db.execute({ sql: "SELECT id FROM packaging_materials WHERE lower(title) = lower(?) AND active = 1 LIMIT 1", args: [title] });
-  if (existing.rows[0]) throw new Error("PACKAGING_ALREADY_EXISTS");
   const id = `packaging_${randomUUID()}`;
   const now = new Date().toISOString();
-  await db.execute({
-    sql: `INSERT INTO packaging_materials (id, title, quantity, reorder_point, lead_time_days, active, updated_at)
-          VALUES (?, ?, ?, 0, NULL, 1, ?)`,
-    args: [id, title, quantity, now],
-  });
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({ sql: "SELECT id FROM packaging_materials WHERE lower(title) = lower(?) AND active = 1 LIMIT 1", args: [title] });
+    if (existing.rows[0]) throw new Error("PACKAGING_ALREADY_EXISTS");
+    await transaction.execute({
+      sql: `INSERT INTO packaging_materials (id, title, quantity, reorder_point, lead_time_days, active, updated_at)
+            VALUES (?, ?, ?, 0, NULL, 1, ?)`,
+      args: [id, title, quantity, now],
+    });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "packaging.created",
+      entityType: "packaging",
+      entityId: id,
+      summary: `Created packaging material ${title}`,
+      details: { title, quantity },
+      outcome: "succeeded",
+    });
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
   return { id, title, quantity };
 }
 
-export async function updatePackagingMaterial(input: { id: string; title: string; quantity: number; actor: string }) {
+export async function updatePackagingMaterial(input: { id: string; title: string; quantity: number; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = packagingTitle(input.title);
   const quantity = packagingQuantity(input.quantity);
@@ -1858,9 +2097,19 @@ export async function updatePackagingMaterial(input: { id: string; title: string
       await transaction.execute({
         sql: `INSERT INTO stock_movements (id, packaging_material_id, quantity_delta, reason, actor_name, source, reference_id, created_at)
               VALUES (?, ?, ?, 'manual_edit', ?, 'manual', ?, ?)`,
-        args: [randomUUID(), input.id, quantity - previousQuantity, input.actor, `packaging:${input.id}`, now],
+              args: [randomUUID(), input.id, quantity - previousQuantity, input.actor.label, `packaging:${input.id}`, now],
       });
     }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "packaging.updated",
+      entityType: "packaging",
+      entityId: input.id,
+      summary: `Updated packaging material ${title}`,
+      details: { title, beforeQuantity: previousQuantity, afterQuantity: quantity },
+      outcome: "succeeded",
+    });
     await transaction.commit();
     return { before: previousQuantity, after: quantity };
   } catch (error) {
@@ -1871,7 +2120,7 @@ export async function updatePackagingMaterial(input: { id: string; title: string
   }
 }
 
-export async function deletePackagingMaterial(input: { id: string; actor: string }) {
+export async function deletePackagingMaterial(input: { id: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
@@ -1883,6 +2132,16 @@ export async function deletePackagingMaterial(input: { id: string; actor: string
     await transaction.execute({ sql: "UPDATE variants SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
     await transaction.execute({ sql: "UPDATE bundle_components SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "packaging.archived",
+      entityType: "packaging",
+      entityId: input.id,
+      summary: `Archived packaging material ${title}`,
+      details: { title },
+      outcome: "succeeded",
+    });
     await transaction.commit();
     return { title };
   } catch (error) {
@@ -2127,7 +2386,7 @@ export async function getPhysicalInventoryRunways(): Promise<PhysicalInventoryRu
   }]));
 }
 
-export async function updatePhysicalProduct(input: { itemId: string; title: string }) {
+export async function updatePhysicalProduct(input: { itemId: string; title: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const transaction = await db.transaction("write");
@@ -2137,6 +2396,16 @@ export async function updatePhysicalProduct(input: { itemId: string; title: stri
     const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE lower(title) = lower(?) AND id <> ? AND active = 1", args: [title, input.itemId] });
     if (duplicate.rows[0]) throw new Error("A master product with this name already exists");
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET title = ?, updated_at = ? WHERE id = ?", args: [title, new Date().toISOString(), input.itemId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "inventory.product.renamed",
+      entityType: "physical_product",
+      entityId: input.itemId,
+      summary: `Renamed physical product to ${title}`,
+      details: { title },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2147,7 +2416,7 @@ export async function updatePhysicalProduct(input: { itemId: string; title: stri
   return getPhysicalProductDetail(input.itemId);
 }
 
-export async function addPhysicalInventoryVariant(input: { itemId: string; title: string; sku?: string | null }) {
+export async function addPhysicalInventoryVariant(input: { itemId: string; title: string; sku?: string | null; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const sku = input.sku?.trim() || null;
@@ -2169,6 +2438,16 @@ export async function addPhysicalInventoryVariant(input: { itemId: string; title
     const previousLabel = stringValue(item.rows[0].variant_label);
     const label = count === 1 ? title : /shades?$/i.test(previousLabel) ? `${count} shades` : `${count} variants`;
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET variant_label = ?, quantity_known = 0, updated_at = ? WHERE id = ?", args: [label, now, input.itemId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "inventory.variant.created",
+      entityType: "physical_variant",
+      entityId: variantId,
+      summary: `Added physical variant ${title}`,
+      details: { title, sku: sku ?? null },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2179,7 +2458,7 @@ export async function addPhysicalInventoryVariant(input: { itemId: string; title
   return getPhysicalProductDetail(input.itemId);
 }
 
-export async function updatePhysicalInventoryVariant(input: { variantId: string; title: string; sku?: string | null }) {
+export async function updatePhysicalInventoryVariant(input: { variantId: string; title: string; sku?: string | null; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const sku = input.sku?.trim() || null;
@@ -2195,6 +2474,16 @@ export async function updatePhysicalInventoryVariant(input: { variantId: string;
     await transaction.execute({ sql: "UPDATE physical_inventory_variants SET title = ?, sku = ?, updated_at = ? WHERE id = ?", args: [title, sku, now, input.variantId] });
     const count = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1", args: [itemId] });
     if (numberValue(count.rows[0]?.variant_count) === 1) await transaction.execute({ sql: "UPDATE physical_inventory_items SET variant_label = ?, updated_at = ? WHERE id = ?", args: [title, now, itemId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "inventory.variant.renamed",
+      entityType: "physical_variant",
+      entityId: input.variantId,
+      summary: `Renamed physical variant to ${title}`,
+      details: { title, sku: sku ?? null },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2205,7 +2494,7 @@ export async function updatePhysicalInventoryVariant(input: { variantId: string;
   return getPhysicalProductDetail(itemId);
 }
 
-export async function deletePhysicalInventoryVariant(variantId: string) {
+export async function deletePhysicalInventoryVariant(variantId: string, actor: ActivityActor) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   let itemId = "";
@@ -2222,6 +2511,16 @@ export async function deletePhysicalInventoryVariant(variantId: string) {
     const now = new Date().toISOString();
     await transaction.execute({ sql: "UPDATE physical_inventory_variants SET active = 0, updated_at = ? WHERE id = ?", args: [now, variantId] });
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0), quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END, variant_label = ?, updated_at = ? WHERE id = ?", args: [itemId, itemId, `${numberValue(remaining.rows[0]?.variant_count) - 1} variants`, now, itemId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor,
+      source: "manual",
+      eventName: "inventory.variant.archived",
+      entityType: "physical_variant",
+      entityId: variantId,
+      summary: "Archived a physical variant",
+      details: { itemId },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2232,7 +2531,7 @@ export async function deletePhysicalInventoryVariant(variantId: string) {
   return getPhysicalProductDetail(itemId);
 }
 
-export async function deletePhysicalProduct(itemId: string) {
+export async function deletePhysicalProduct(itemId: string, actor: ActivityActor) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   try {
@@ -2247,6 +2546,16 @@ export async function deletePhysicalProduct(itemId: string) {
       throw new Error("Remove this product's channel mappings before deleting it");
     }
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET active = 0, updated_at = ? WHERE id = ?", args: [new Date().toISOString(), itemId] });
+    await recordActivityEventInTransaction(transaction, {
+      actor,
+      source: "manual",
+      eventName: "inventory.product.archived",
+      entityType: "physical_product",
+      entityId: itemId,
+      summary: "Archived a physical product",
+      details: {},
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2271,7 +2580,7 @@ type PhysicalInventoryAdjustmentResult = {
 export async function applyPhysicalInventoryAdjustments(input: {
   adjustments: PhysicalInventoryAdjustment[];
   note: string;
-  actor: string;
+  actor: ActivityActor;
 }): Promise<{ changes: PhysicalInventoryAdjustmentResult[] }> {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
@@ -2305,7 +2614,7 @@ export async function applyPhysicalInventoryAdjustments(input: {
         await transaction.execute({
           sql: `INSERT INTO physical_inventory_ledger (id, physical_item_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          args: [randomUUID(), itemId, "manual_edit", input.actor, before, after, after - before, `${input.note ? `${input.note} · ` : ""}variant:${adjustment.variantId}`, now],
+          args: [randomUUID(), itemId, "manual_edit", input.actor.label, before, after, after - before, `${input.note ? `${input.note} · ` : ""}variant:${adjustment.variantId}`, now],
         });
       }
       itemIds.add(itemId);
@@ -2322,6 +2631,17 @@ export async function applyPhysicalInventoryAdjustments(input: {
         args: [itemId, itemId, now, itemId],
       });
     }
+
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "inventory.physical.updated",
+      entityType: "physical_inventory",
+      entityId: null,
+      summary: `Updated physical inventory for ${changes.length} variant${changes.length === 1 ? "" : "s"}`,
+      details: { variantCount: changes.length, itemCount: itemIds.size },
+      outcome: "succeeded",
+    });
 
     await transaction.commit();
     return { changes };
@@ -2722,7 +3042,7 @@ export async function getPhysicalChannelListings(channel: PhysicalChannel): Prom
   return [...listings.values()];
 }
 
-export async function savePhysicalListingMappings(input: { mappings: Array<{ listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }>; listingKind?: "individual" | "bundle" }) {
+export async function savePhysicalListingMappings(input: { mappings: Array<{ listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }>; listingKind?: "individual" | "bundle"; actor: ActivityActor }) {
   const db = await ensurePhysicalChannelListings();
   if (!input.mappings.length) throw new Error("At least one listing mapping is required");
   if (new Set(input.mappings.map((mapping) => mapping.listingId)).size !== input.mappings.length) throw new Error("A listing can only be mapped once per save");
@@ -2818,6 +3138,16 @@ export async function savePhysicalListingMappings(input: { mappings: Array<{ lis
         await transaction.execute({ sql: "DELETE FROM physical_channel_product_links WHERE channel=? AND external_product_id=?", args: [channel, externalProductId] });
       }
     }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "mapping.updated",
+      entityType: "channel_mapping",
+      entityId: editedProductKey ? `${editedProductKey.channel}:${editedProductKey.externalProductId}` : null,
+      summary: `Updated ${input.mappings.length} channel mapping${input.mappings.length === 1 ? "" : "s"}`,
+      details: { listingCount: input.mappings.length, channel: [...channels][0] ?? null, listingKind: input.listingKind ?? null },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -2829,12 +3159,12 @@ export async function savePhysicalListingMappings(input: { mappings: Array<{ lis
   return getPhysicalChannelListings([...channels][0]);
 }
 
-export async function savePhysicalListingMapping(input: { listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }) {
-  return savePhysicalListingMappings({ mappings: [input] });
+export async function savePhysicalListingMapping(input: { listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }>; actor: ActivityActor }) {
+  return savePhysicalListingMappings({ mappings: [input], actor: input.actor });
 }
 
 /** Saves the product-level association shown in the grouped channel catalogue. */
-export async function savePhysicalChannelProductLink(input: { channel: PhysicalChannel; externalProductId: string; physicalItemId: string | null }) {
+export async function savePhysicalChannelProductLink(input: { channel: PhysicalChannel; externalProductId: string; physicalItemId: string | null; actor: ActivityActor }) {
   const db = await ensurePhysicalChannelListings();
   const product = await db.execute({
     sql: "SELECT id FROM physical_channel_listings WHERE channel=? AND external_product_id=? AND active=1 LIMIT 1",
@@ -2857,6 +3187,16 @@ export async function savePhysicalChannelProductLink(input: { channel: PhysicalC
     } else {
       await transaction.execute({ sql: "DELETE FROM physical_channel_product_links WHERE channel=? AND external_product_id=?", args: [input.channel, input.externalProductId] });
     }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "mapping.product.updated",
+      entityType: "channel_mapping",
+      entityId: `${input.channel}:${input.externalProductId}`,
+      summary: input.physicalItemId ? "Linked a channel product to a physical product" : "Removed a channel product link",
+      details: { channel: input.channel, linked: Boolean(input.physicalItemId) },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) {
     await transaction.rollback();
@@ -3503,6 +3843,7 @@ export async function createLabFormula(input: {
   notes?: string;
   lines: Array<{ ingredient: string; calculation: "fixed" | "remainder" | "manual"; percentage?: number; phase?: string; note?: string }>;
   output?: { physicalVariantId: string; fillQuantity: number; fillUnit: LabQuantityUnit };
+  actor: ActivityActor;
 }) {
   const title = input.title.trim();
   const subtitle = input.subtitle?.trim() ?? "";
@@ -3563,6 +3904,16 @@ export async function createLabFormula(input: {
         args: [`lab-output-${randomUUID()}`, formulaId, output.physicalVariantId, output.fillQuantity, productionUnit(output.fillUnit), now, now],
       });
     }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.formula.created",
+      entityType: "lab_formula",
+      entityId: formulaId,
+      summary: `Created formula ${title}`,
+      details: { title, ingredientCount: lines.length, hasOutput: Boolean(output) },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
   const formula = await getLabFormula(formulaId);
@@ -3575,6 +3926,7 @@ export async function updateLabFormulaOutput(input: {
   physicalVariantId: string;
   fillQuantity: number;
   fillUnit: LabQuantityUnit;
+  actor: ActivityActor;
 }) {
   const fillQuantity = productionQuantity(input.fillQuantity);
   const fillUnit = productionUnit(input.fillUnit);
@@ -3598,12 +3950,22 @@ export async function updateLabFormulaOutput(input: {
               fill_quantity = excluded.fill_quantity, fill_unit = excluded.fill_unit, active = 1, updated_at = excluded.updated_at`,
       args: [`lab-output-${randomUUID()}`, input.formulaId, input.physicalVariantId, fillQuantity, fillUnit, now, now],
     });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.formula.output.updated",
+      entityType: "lab_formula",
+      entityId: input.formulaId,
+      summary: "Updated formula packaged output",
+      details: { physicalVariantId: input.physicalVariantId, fillQuantity, fillUnit },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
   return getLabFormula(input.formulaId);
 }
 
-export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; actor: string }) {
+export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; actor: ActivityActor }) {
   const db = await initializeLabsData();
   const quantity = labQuantity(input.quantityGrams);
   const reorderPoint = input.reorderPointGrams === undefined ? undefined : labQuantity(input.reorderPointGrams);
@@ -3617,7 +3979,17 @@ export async function updateLabIngredient(input: { id: string; quantityGrams: nu
     const finalReorder = reorderPoint ?? numberValue(row.reorder_point_grams);
     await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, quantity_known = 1, reorder_point_grams = ?, updated_at = ? WHERE id = ?", args: [quantity, finalReorder, now, input.id] });
     await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
-      VALUES (?, ?, 'manual_count', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), input.id, input.actor, before, quantity, quantity - before, `ingredient:${input.id}`, now] });
+      VALUES (?, ?, 'manual_count', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), input.id, input.actor.label, before, quantity, quantity - before, `ingredient:${input.id}`, now] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.ingredient.updated",
+      entityType: "lab_ingredient",
+      entityId: input.id,
+      summary: "Updated ingredient quantity",
+      details: { beforeQuantityGrams: before, afterQuantityGrams: quantity },
+      outcome: "succeeded",
+    });
     await transaction.commit();
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
   return getLabIngredients();
@@ -3629,7 +4001,7 @@ export async function createLabBatch(input: {
   targetGrams: number;
   outputQuantity?: number;
   outputUnit?: LabQuantityUnit;
-  actor: string;
+  actor: ActivityActor;
 }) {
   const db = await initializeLabsData();
   const batchNumber = input.batchNumber.trim();
@@ -3671,7 +4043,7 @@ export async function createLabBatch(input: {
     const duplicate = await transaction.execute({ sql: "SELECT id FROM lab_batches WHERE batch_number = ?", args: [batchNumber] });
     if (duplicate.rows[0]) throw new Error("LAB_BATCH_ALREADY_EXISTS");
     const batchId = `lab-batch-${randomUUID()}`;
-    await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor, now] });
+    await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor.label, now] });
     await transaction.execute({
       sql: "INSERT INTO lab_batch_allocations (batch_id, total_quantity, quantity_unit, packaged_quantity, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)",
       args: [batchId, outputQuantity, outputUnit, now, now],
@@ -3681,10 +4053,20 @@ export async function createLabBatch(input: {
       if (deduction.status === "deducted") {
         await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, updated_at = ? WHERE id = ?", args: [deduction.after, now, line.id] });
         await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, batch_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
-          VALUES (?, ?, ?, 'batch_deduct', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), line.id, batchId, input.actor, deduction.before, deduction.after, -deduction.deducted, batchNumber, now] });
+          VALUES (?, ?, ?, 'batch_deduct', ?, ?, ?, ?, ?, ?)`, args: [randomUUID(), line.id, batchId, input.actor.label, deduction.before, deduction.after, -deduction.deducted, batchNumber, now] });
       }
       await transaction.execute({ sql: "INSERT INTO lab_batch_ingredients (id, batch_id, ingredient_id, required_grams, quantity_before, quantity_after) VALUES (?, ?, ?, ?, ?, ?)", args: [randomUUID(), batchId, line.id, deduction.required, deduction.before, deduction.after] });
     }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.batch.created",
+      entityType: "lab_batch",
+      entityId: batchId,
+      summary: `Created production batch ${batchNumber}`,
+      details: { targetGrams, outputQuantity, outputUnit, ingredientCount: lines.length },
+      outcome: "succeeded",
+    });
     await transaction.commit();
     return { id: batchId, batchNumber, targetGrams, outputQuantity, outputUnit };
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
@@ -3693,9 +4075,11 @@ export async function createLabBatch(input: {
 export async function updateLabBatchPackaging(input: {
   batchId: string;
   addedQuantity: number;
-  actor: string;
+  actor: ActivityActor;
+  updateInventory?: boolean;
 }) {
   const added = productionQuantity(input.addedQuantity);
+  const updateInventory = input.updateInventory !== false;
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
@@ -3725,19 +4109,25 @@ export async function updateLabBatchPackaging(input: {
     const fillUnit = productionUnit(row.fill_unit);
     if (unit !== fillUnit) throw new Error("LAB_OUTPUT_UNIT_MISMATCH");
     const finishedUnits = packagedUnits(added, unit, productionQuantity(numberValue(row.fill_quantity)), fillUnit);
-    const variant = await transaction.execute({
-      sql: `SELECT piv.id, piv.physical_item_id, piv.quantity, piv.quantity_known
-            FROM physical_inventory_variants piv
-            JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
-            WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
-      args: [variantId],
-    });
-    const variantRow = variant.rows[0];
-    if (!variantRow) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
-    const before = numberValue(variantRow.quantity);
-    const after = before + finishedUnits;
-    if (!Number.isSafeInteger(after)) throw new Error("MASTER_INVENTORY_LIMIT");
-    const itemId = stringValue(variantRow.physical_item_id);
+    const inventoryEffect = packagingInventoryEffect(finishedUnits, updateInventory);
+    let before = 0;
+    let after = 0;
+    let itemId = "";
+    if (inventoryEffect.shouldUpdate) {
+      const variant = await transaction.execute({
+        sql: `SELECT piv.id, piv.physical_item_id, piv.quantity, piv.quantity_known
+              FROM physical_inventory_variants piv
+              JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
+              WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
+        args: [variantId],
+      });
+      const variantRow = variant.rows[0];
+      if (!variantRow) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
+      before = numberValue(variantRow.quantity);
+      after = before + inventoryEffect.quantityDelta;
+      if (!Number.isSafeInteger(after)) throw new Error("MASTER_INVENTORY_LIMIT");
+      itemId = stringValue(variantRow.physical_item_id);
+    }
 
     await transaction.execute({
       sql: `INSERT INTO lab_batch_allocations (batch_id, total_quantity, quantity_unit, packaged_quantity, created_at, updated_at)
@@ -3745,23 +4135,35 @@ export async function updateLabBatchPackaging(input: {
             ON CONFLICT(batch_id) DO UPDATE SET packaged_quantity = excluded.packaged_quantity, updated_at = excluded.updated_at`,
       args: [input.batchId, allocation.total, allocation.unit, allocation.packaged, now, now],
     });
-    await transaction.execute({
-      sql: "UPDATE physical_inventory_variants SET quantity = ?, updated_at = ? WHERE id = ?",
-      args: [after, now, variantId],
-    });
-    await transaction.execute({
-      sql: `UPDATE physical_inventory_items
-            SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0),
-                quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END,
-                updated_at = ?
-            WHERE id = ?`,
-      args: [itemId, itemId, now, itemId],
-    });
+    if (inventoryEffect.shouldUpdate) {
+      await transaction.execute({
+        sql: "UPDATE physical_inventory_variants SET quantity = ?, updated_at = ? WHERE id = ?",
+        args: [after, now, variantId],
+      });
+      await transaction.execute({
+        sql: `UPDATE physical_inventory_items
+              SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0),
+                  quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END,
+                  updated_at = ?
+              WHERE id = ?`,
+        args: [itemId, itemId, now, itemId],
+      });
+    }
     await transaction.execute({
       sql: `INSERT INTO lab_batch_packaging_ledger
-            (id, batch_id, physical_variant_id, actor, packaged_before, packaged_after, packaged_delta, finished_units, reference, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [randomUUID(), input.batchId, variantId, input.actor, current, allocation.packaged, added, finishedUnits, `production fill · ${variantId}`, now],
+            (id, batch_id, physical_variant_id, actor, packaged_before, packaged_after, packaged_delta, finished_units, inventory_updated, reference, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [randomUUID(), input.batchId, variantId, input.actor.label, current, allocation.packaged, added, finishedUnits, inventoryEffect.shouldUpdate ? 1 : 0, `production fill · ${variantId}`, now],
+    });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.batch.packaged",
+      entityType: "lab_batch",
+      entityId: input.batchId,
+      summary: `Allocated ${finishedUnits} packaged unit${finishedUnits === 1 ? "" : "s"} from a batch`,
+      details: { addedQuantity: added, finishedUnits, inventoryUpdated: inventoryEffect.shouldUpdate },
+      outcome: "succeeded",
     });
     await transaction.commit();
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
