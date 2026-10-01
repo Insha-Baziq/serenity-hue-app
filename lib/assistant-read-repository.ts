@@ -95,12 +95,12 @@ const specs: Record<AssistantDatasetId, DatasetSpec> = {
   },
   labs: {
     from: `(SELECT i.id, 'ingredient' AS record_type, i.title, '' AS subtitle, '' AS notes, i.quantity_grams,
-              i.reorder_point_grams, NULL AS formula_id, NULL AS batch_number, NULL AS target_grams,
+              i.quantity_known, i.reorder_point_grams, NULL AS formula_id, NULL AS batch_number, NULL AS target_grams,
               NULL AS actor, NULL AS created_at, i.updated_at FROM lab_ingredients i WHERE i.active=1
-            UNION ALL SELECT f.id, 'formula', f.title, f.subtitle, f.notes, NULL, NULL, f.id, NULL, NULL, NULL, f.created_at, f.updated_at FROM lab_formulas f WHERE f.active=1
-            UNION ALL SELECT b.id, 'batch', f.title, '', '', NULL, NULL, b.formula_id, b.batch_number, b.target_grams, b.actor, b.created_at, b.created_at
+            UNION ALL SELECT f.id, 'formula', f.title, f.subtitle, f.notes, NULL, NULL, NULL, f.id, NULL, NULL, NULL, f.created_at, f.updated_at FROM lab_formulas f WHERE f.active=1
+            UNION ALL SELECT b.id, 'batch', f.title, '', b.notes, NULL, NULL, NULL, b.formula_id, b.batch_number, b.target_grams, b.actor, b.created_at, b.updated_at
               FROM lab_batches b JOIN lab_formulas f ON f.id=b.formula_id) l`, freshness: "Labs record timestamps", freshnessField: "l.updated_at",
-    fields: { id: "l.id", record_type: "l.record_type", title: "l.title", subtitle: "l.subtitle", notes: "l.notes", quantity_grams: "l.quantity_grams", reorder_point_grams: "l.reorder_point_grams", formula_id: "l.formula_id", batch_number: "l.batch_number", target_grams: "l.target_grams", actor: "l.actor", created_at: "l.created_at", updated_at: "l.updated_at" },
+    fields: { id: "l.id", record_type: "l.record_type", title: "l.title", subtitle: "l.subtitle", notes: "l.notes", quantity_grams: "l.quantity_grams", quantity_known: "l.quantity_known", reorder_point_grams: "l.reorder_point_grams", formula_id: "l.formula_id", batch_number: "l.batch_number", target_grams: "l.target_grams", actor: "l.actor", created_at: "l.created_at", updated_at: "l.updated_at" },
   },
   affiliate_reporting: {
     from: "tiktok_affiliate_orders a", freshness: "Affiliate import timestamps", freshnessField: "a.imported_at",
@@ -227,9 +227,9 @@ async function addIncludes(db: DatabaseClient, dataset: AssistantDatasetId, rows
     for (const row of rows) row.items = byOrder.get(String(row.id)) ?? [];
   }
   if (dataset === "physical_inventory" && includes.includes("variants")) {
-    const result = await db.execute({ sql: `SELECT physical_item_id, id, title, sku, quantity, quantity_known FROM physical_inventory_variants WHERE physical_item_id IN (${placeholders}) AND active=1 ORDER BY physical_item_id, sort_order, title`, args: ids });
+    const result = await db.execute({ sql: `SELECT physical_item_id, id, title, sku, quantity, quantity_known, updated_at FROM physical_inventory_variants WHERE physical_item_id IN (${placeholders}) AND active=1 ORDER BY physical_item_id, sort_order, title`, args: ids });
     const grouped = new Map<string, unknown[]>();
-    for (const row of result.rows) { const key = String(row.physical_item_id); grouped.set(key, [...(grouped.get(key) ?? []), rowObject({ id: row.id, title: row.title, sku: row.sku, quantity: row.quantity, quantity_known: row.quantity_known })]); }
+    for (const row of result.rows) { const key = String(row.physical_item_id); grouped.set(key, [...(grouped.get(key) ?? []), rowObject({ id: row.id, title: row.title, sku: row.sku, quantity: row.quantity, quantity_known: row.quantity_known, updated_at: row.updated_at })]); }
     for (const row of rows) row.variants = grouped.get(String(row.id)) ?? [];
   }
   if (dataset === "channel_listings" && includes.includes("components")) {
@@ -237,6 +237,11 @@ async function addIncludes(db: DatabaseClient, dataset: AssistantDatasetId, rows
     const grouped = new Map<string, unknown[]>();
     for (const row of result.rows) { const key = String(row.listing_id); grouped.set(key, [...(grouped.get(key) ?? []), rowObject({ physical_variant_id: row.physical_variant_id, quantity_per_sale: row.quantity_per_sale })]); }
     for (const row of rows) row.components = grouped.get(String(row.id)) ?? [];
+  }
+  if (dataset === "channel_listings" && includes.includes("product_link")) {
+    const result = await db.execute({ sql: `SELECT l.id, p.physical_item_id FROM physical_channel_listings l LEFT JOIN physical_channel_product_links p ON p.channel = l.channel AND p.external_product_id = l.external_product_id WHERE l.id IN (${placeholders})`, args: ids });
+    const linked = new Map(result.rows.map((row) => [String(row.id), row.physical_item_id ?? null]));
+    for (const row of rows) row.physical_item_id = linked.get(String(row.id)) ?? null;
   }
   if (dataset === "labs" && includes.includes("lines")) {
     const formulaIds = rows.filter((row) => row.record_type === "formula").map((row) => row.id).filter((id): id is string => typeof id === "string");
@@ -246,6 +251,20 @@ async function addIncludes(db: DatabaseClient, dataset: AssistantDatasetId, rows
       const grouped = new Map<string, unknown[]>();
       for (const row of result.rows) { const key = String(row.formula_id); grouped.set(key, [...(grouped.get(key) ?? []), rowObject({ ingredient_id: row.ingredient_id, percentage: row.percentage, calculation: row.calculation, phase: row.phase, note: row.note })]); }
       for (const row of rows) if (row.record_type === "formula") row.lines = grouped.get(String(row.id)) ?? [];
+    }
+  }
+  if (dataset === "labs" && includes.includes("packaging")) {
+    const formulas = rows.filter((row) => row.record_type === "formula").map((row) => String(row.id));
+    if (formulas.length) {
+      const result = await db.execute({ sql: `SELECT formula_id, fill_quantity, fill_unit FROM lab_formula_packaging WHERE formula_id IN (${formulas.map(() => "?").join(",")})`, args: formulas });
+      const byFormula = new Map(result.rows.map((row) => [String(row.formula_id), rowObject({ fill_quantity: row.fill_quantity, fill_unit: row.fill_unit })]));
+      for (const row of rows) if (row.record_type === "formula") row.packaging = byFormula.get(String(row.id)) ?? null;
+    }
+    const batches = rows.filter((row) => row.record_type === "batch").map((row) => String(row.id));
+    if (batches.length) {
+      const result = await db.execute({ sql: `SELECT batch_id, total_quantity, quantity_unit, packaged_quantity FROM lab_batch_allocations WHERE batch_id IN (${batches.map(() => "?").join(",")})`, args: batches });
+      const byBatch = new Map(result.rows.map((row) => [String(row.batch_id), rowObject({ total_quantity: row.total_quantity, quantity_unit: row.quantity_unit, packaged_quantity: row.packaged_quantity })]));
+      for (const row of rows) if (row.record_type === "batch") row.packaging = byBatch.get(String(row.id)) ?? null;
     }
   }
 }

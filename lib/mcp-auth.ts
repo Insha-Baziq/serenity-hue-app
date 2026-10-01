@@ -7,6 +7,7 @@ import { getCurrentSession } from "@/lib/auth-guard";
 import { getCanonicalAppUrl } from "@/lib/auth";
 import { getTursoClient } from "@/lib/turso";
 import type { AssistantPrincipal, AssistantScope } from "@/lib/mcp-contracts";
+import { MCP_OAUTH_SCOPES, parseMcpOAuthScopes, type McpOAuthScope } from "@/lib/mcp-oauth-scopes";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -20,7 +21,7 @@ type ClientRecord = {
   redirectUris: string[];
 };
 
-type OAuthScope = AssistantScope | "offline_access";
+type OAuthScope = McpOAuthScope;
 
 type AuthorizationRequest = {
   clientId: string;
@@ -53,6 +54,9 @@ function absoluteUrl(value: string, name: string) {
 
 export function mcpEnabled() { return process.env.MCP_ENABLED === "true"; }
 export function mcpPiiEnabled() { return process.env.MCP_PII_ENABLED === "true"; }
+export function mcpWriteEnabled() { return process.env.MCP_WRITE_ENABLED === "true"; }
+export function mcpWriteAllowedUserIds() { return (process.env.MCP_WRITE_ALLOWED_USER_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean); }
+export function mcpWriteAllowedClientIds() { return (process.env.MCP_WRITE_ALLOWED_CLIENT_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean); }
 export function mcpAllowedUserId() { return process.env.MCP_ALLOWED_USER_ID?.trim() || null; }
 export function mcpAllowAllAuthenticatedUsers() { return process.env.MCP_ALLOW_ALL_AUTHENTICATED_USERS === "true"; }
 export function mcpDcrEnabled() { return process.env.MCP_DCR_ENABLED !== "false"; }
@@ -131,11 +135,12 @@ function nowIso() { return new Date().toISOString(); }
 function futureIso(seconds: number) { return new Date(Date.now() + seconds * 1000).toISOString(); }
 
 function parseScope(value: string | null | undefined, allowPii = mcpPiiEnabled()): OAuthScope[] {
-  const scopes = [...new Set((value ?? "assistant:read").split(/[\s,]+/).filter(Boolean))];
-  if (!scopes.includes("assistant:read")) scopes.unshift("assistant:read");
-  if (scopes.some((scope) => scope !== "assistant:read" && scope !== "assistant:pii" && scope !== "offline_access")) throw new Error("Unsupported OAuth scope.");
-  if (scopes.includes("assistant:pii") && !allowPii) throw new Error("The PII scope is not enabled.");
-  return scopes as OAuthScope[];
+  return parseMcpOAuthScopes(value, { allowPii, allowWrite: mcpWriteEnabled() });
+}
+
+export function mayGrantWriteScopes(userId: string, clientId: string, scopes: readonly OAuthScope[]) {
+  if (!scopes.some((scope) => scope.startsWith("assistant:write:"))) return true;
+  return mcpWriteEnabled() && mcpWriteAllowedUserIds().includes(userId) && mcpWriteAllowedClientIds().includes(clientId);
 }
 
 export function hasScope(scopes: AssistantScope[], scope: AssistantScope) { return scopes.includes(scope); }
@@ -393,12 +398,12 @@ export function bearerToken(request: Request) {
 
 export function protectedResourceMetadata() {
   const config = mcpConfig();
-  return { resource: config.resource, authorization_servers: [config.issuer], scopes_supported: ["assistant:read", "assistant:pii"], bearer_methods_supported: ["header"], resource_signing_alg_values_supported: [] };
+  return { resource: config.resource, authorization_servers: [config.issuer], scopes_supported: MCP_OAUTH_SCOPES.filter((scope) => scope !== "offline_access" && (mcpWriteEnabled() || !scope.startsWith("assistant:write:"))), bearer_methods_supported: ["header"], resource_signing_alg_values_supported: [] };
 }
 
 export function authorizationServerMetadata() {
   const config = mcpConfig();
-  return { issuer: config.issuer, authorization_endpoint: `${config.issuer}/api/mcp/oauth/authorize`, token_endpoint: `${config.issuer}/api/mcp/oauth/token`, registration_endpoint: `${config.issuer}/api/mcp/oauth/register`, revocation_endpoint: `${config.issuer}/api/mcp/oauth/revoke`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], scopes_supported: ["assistant:read", "assistant:pii", "offline_access"], token_endpoint_auth_methods_supported: ["none"] };
+  return { issuer: config.issuer, authorization_endpoint: `${config.issuer}/api/mcp/oauth/authorize`, token_endpoint: `${config.issuer}/api/mcp/oauth/token`, registration_endpoint: `${config.issuer}/api/mcp/oauth/register`, revocation_endpoint: `${config.issuer}/api/mcp/oauth/revoke`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], scopes_supported: MCP_OAUTH_SCOPES.filter((scope) => mcpWriteEnabled() || !scope.startsWith("assistant:write:")), token_endpoint_auth_methods_supported: ["none"] };
 }
 
 export function loginReturnTo(request: Request) {

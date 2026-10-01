@@ -13,10 +13,10 @@ const DialogDescription = DialogPrimitive.Description;
 
 const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
-  ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { showCloseButton?: boolean }
->(({ children, className = "", showCloseButton = true, ...props }, ref) => (
+  ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { showCloseButton?: boolean; overlayClassName?: string }
+>(({ children, className = "", overlayClassName = "", showCloseButton = true, ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="ui-dialog-overlay" />
+    <DialogPrimitive.Overlay className={`ui-dialog-overlay ${overlayClassName}`} />
     <DialogPrimitive.Content ref={ref} className={`ui-dialog ${className}`} {...props}>
       {showCloseButton && <DialogPrimitive.Close className="ui-dialog-close" aria-label="Close dialog"><Cross2Icon /></DialogPrimitive.Close>}
       {children}

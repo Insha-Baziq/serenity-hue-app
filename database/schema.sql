@@ -333,25 +333,22 @@ CREATE TABLE IF NOT EXISTS lab_batches (
   batch_number TEXT NOT NULL UNIQUE,
   target_grams REAL NOT NULL CHECK (target_grams > 0),
   actor TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS lab_batches_formula_created_idx ON lab_batches(formula_id, created_at DESC);
-
--- A formula output is the exact physical variant produced by the formula. The
--- fill amount is deliberately separate from ingredient calculations because a
--- formula is currently calculated by weight while finished stock may be filled
--- by volume.
-CREATE TABLE IF NOT EXISTS lab_formula_outputs (
-  id TEXT PRIMARY KEY,
-  formula_id TEXT NOT NULL UNIQUE REFERENCES lab_formulas(id) ON DELETE CASCADE,
-  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
-  fill_quantity REAL NOT NULL CHECK (fill_quantity > 0),
-  fill_unit TEXT NOT NULL CHECK (fill_unit IN ('g', 'ml')),
-  active INTEGER NOT NULL DEFAULT 1,
+  notes TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS lab_formula_outputs_variant_idx ON lab_formula_outputs(physical_variant_id);
+CREATE INDEX IF NOT EXISTS lab_batches_formula_created_idx ON lab_batches(formula_id, created_at DESC);
+
+-- Labs packaging describes the fill size only. It is independent from the
+-- physical catalogue and from master on-hand quantities.
+CREATE TABLE IF NOT EXISTS lab_formula_packaging (
+  id TEXT PRIMARY KEY,
+  formula_id TEXT NOT NULL UNIQUE REFERENCES lab_formulas(id) ON DELETE CASCADE,
+  fill_quantity REAL NOT NULL CHECK (fill_quantity > 0),
+  fill_unit TEXT NOT NULL CHECK (fill_unit IN ('g', 'ml')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Allocation is the production state of a batch. It is kept separate from the
 -- ingredient snapshots so bulk formulation and finished-unit packaging remain
@@ -366,19 +363,19 @@ CREATE TABLE IF NOT EXISTS lab_batch_allocations (
   CHECK (packaged_quantity <= total_quantity)
 );
 
--- This is the audit trail for packaging events. Physical inventory also gets
--- its normal stock update, while this row keeps the production allocation
--- explainable without overloading ingredient inventory history.
+-- This is the audit trail for packaging events. Finished-product stock is
+-- maintained separately and is never updated by a Labs packaging event.
 CREATE TABLE IF NOT EXISTS lab_batch_packaging_ledger (
   id TEXT PRIMARY KEY,
   batch_id TEXT NOT NULL REFERENCES lab_batches(id) ON DELETE RESTRICT,
-  physical_variant_id TEXT NOT NULL REFERENCES physical_inventory_variants(id) ON DELETE RESTRICT,
   actor TEXT NOT NULL,
   packaged_before REAL NOT NULL,
   packaged_after REAL NOT NULL,
   packaged_delta REAL NOT NULL,
-  finished_units INTEGER NOT NULL CHECK (finished_units > 0),
-  inventory_updated INTEGER NOT NULL DEFAULT 1 CHECK (inventory_updated IN (0, 1)),
+  finished_units INTEGER CHECK (finished_units IS NULL OR finished_units > 0),
+  packaging_label TEXT NOT NULL DEFAULT 'Labs packaged output',
+  -- Retained only for migrated historical events; new events always write 0.
+  inventory_updated INTEGER NOT NULL DEFAULT 0 CHECK (inventory_updated IN (0, 1)),
   reference TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -951,3 +948,28 @@ CREATE TABLE IF NOT EXISTS mcp_rate_limit_buckets (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (bucket_key, window_start)
 );
+
+-- At-most-once assistant command reservation across server instances. A pending or
+-- uncertain command is never executed again automatically; staff can inspect it.
+CREATE TABLE IF NOT EXISTS mcp_write_operations (
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'uncertain')),
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, client_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS mcp_write_operations_created_idx ON mcp_write_operations(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS employee_invitations (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES "user"(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS employee_invitations_expiry_idx ON employee_invitations(expires_at);

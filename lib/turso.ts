@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import migrations from "@/database/migrations.json";
 import physicalSeed from "@/database/physical-inventory-seed.json";
+import { migrateLabsPackagingSeparation } from "@/database/migrations/labs-packaging-separation.mjs";
 
 export type DatabaseClient = ReturnType<typeof createClient>;
 type ColumnMigration = readonly [table: string, column: string, definition: string];
@@ -181,6 +182,7 @@ async function applyDatabaseMigrations(db: DatabaseClient) {
   await ensureColumns(db);
   await db.executeMultiple(schemaSql());
   await ensureColumns(db);
+  await migrateLabsPackagingSeparation(db);
   await bootstrapPhysicalInventoryIfEmpty(db);
   await rebuildOrderSearchIndexOnce(db);
   await db.execute({

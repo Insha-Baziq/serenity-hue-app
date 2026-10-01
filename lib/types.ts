@@ -4,13 +4,14 @@ export type PaymentStatus = "paid" | "pending" | "refunded";
 export type FulfillmentStatus = "fulfilled" | "unfulfilled" | "partial" | "cancelled";
 
 export type ActivityActorType = "staff" | "system" | "provider";
-export type ActivitySource = "manual" | "scheduled" | "webhook" | "provider";
+export type ActivitySource = "manual" | "assistant" | "scheduled" | "webhook" | "provider";
 export type ActivityOutcome = "succeeded" | "failed" | "skipped";
 
 export type ActivityActor = {
   type: ActivityActorType;
   id: string;
   label: string;
+  assistant?: { clientId: string; operationId: string; toolName: string };
 };
 
 export type ActivityDetailValue = string | number | boolean | null | Array<string | number>;
@@ -254,16 +255,13 @@ export type LabFormula = {
   notes: string;
   ingredientCount: number;
   lines: LabFormulaLine[];
-  output: LabFormulaOutput | null;
+  packaging: LabFormulaPackaging | null;
 };
 
 export type LabQuantityUnit = "g" | "ml";
 
-export type LabFormulaOutput = {
+export type LabFormulaPackaging = {
   id: string;
-  physicalVariantId: string;
-  product: string;
-  variant: string;
   fillQuantity: number;
   fillUnit: LabQuantityUnit;
 };
@@ -277,10 +275,12 @@ export type LabBatch = {
   outputUnit: LabQuantityUnit;
   packagedQuantity: number;
   remainingQuantity: number;
-  packagedUnits: number;
-  output: LabFormulaOutput | null;
+  packagedUnits: number | null;
+  packaging: LabFormulaPackaging | null;
   actor: string;
+  notes: string;
   createdAt: string;
+  updatedAt: string;
 };
 
 export type LabBatchDetail = LabBatch & {

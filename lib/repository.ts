@@ -1,13 +1,15 @@
 import "server-only";
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { getTursoClient } from "@/lib/turso";
+import { assertAssistantExpectedValue } from "@/lib/mcp-write-preconditions";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
 import { hasTikTokAdsAppCredentials, type TikTokAdsTokenBundle } from "@/lib/tiktok-ads";
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
+import type { LabIngredientImportRow } from "@/lib/lab-ingredient-csv";
 import { hashPassword } from "better-auth/crypto";
-import type { ActivityActor, ActivityDetails, ActivityLogPage, ActivityLogRow, ActivityOutcome, ActivitySource, Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaOutput, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { ActivityActor, ActivityDetails, ActivityLogPage, ActivityLogRow, ActivityOutcome, ActivitySource, Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaPackaging, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { ActivityLogQuery } from "@/lib/activity-log-query";
 import { sanitizeActivityDetails } from "@/lib/activity-log-safety";
 import type { OrdersQuery } from "@/lib/orders-query";
@@ -24,7 +26,8 @@ import {
   type TikTokAffiliateComparison,
 } from "@/lib/kpi-comparisons";
 import { changedColumns } from "@/lib/sql-upsert";
-import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, packagingInventoryEffect, planIngredientDeduction } from "@/lib/lab-production";
+import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, planIngredientDeduction } from "@/lib/lab-production";
+import { nextLabBatchUpdatedAt, normalizeLabBatchNotes } from "@/lib/lab-batch-notes";
 
 type SqlValue = string | number | null;
 type DatabaseClient = Awaited<ReturnType<typeof getTursoClient>>;
@@ -61,6 +64,8 @@ function activityExpiry(occurredAt: string) {
 
 async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventInput) {
   const occurredAt = input.occurredAt ?? new Date().toISOString();
+  const assistant = input.actor.assistant;
+  const details = assistant ? { ...input.details, assistantClientId: assistant.clientId, assistantOperationId: assistant.operationId, assistantToolName: assistant.toolName } : input.details;
   const result = await executor.execute({
     sql: `INSERT INTO application_activity_log
             (id, occurred_at, expires_at, actor_type, actor_id, actor_label, source, provider,
@@ -80,7 +85,7 @@ async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventIn
       input.entityType ?? null,
       input.entityId ?? null,
       input.summary.slice(0, 500),
-      JSON.stringify(sanitizeActivityDetails(input.details)),
+      JSON.stringify(sanitizeActivityDetails(details)),
       input.outcome,
       input.dedupeKey ?? null,
     ],
@@ -215,10 +220,9 @@ export async function getActivityLogPage(query: ActivityLogQuery): Promise<Activ
     conditions.push("event_name LIKE ?");
     args.push(`${query.domain}.%`);
   }
-  if (query.source !== "all") {
-    conditions.push("source = ?");
-    args.push(query.source);
-  }
+  if (query.source === "assistant") conditions.push("json_extract(details_json, '$.assistantClientId') IS NOT NULL");
+  else if (query.source === "manual") conditions.push("source = 'manual' AND json_extract(details_json, '$.assistantClientId') IS NULL");
+  else if (query.source !== "all") { conditions.push("source = ?"); args.push(query.source); }
   if (query.provider.trim()) {
     conditions.push("provider = ?");
     args.push(query.provider.trim());
@@ -260,7 +264,7 @@ export async function getActivityLogPage(query: ActivityLogQuery): Promise<Activ
       id: stringValue(row.actor_id),
       label: stringValue(row.actor_label),
     },
-    source: stringValue(row.source) as ActivitySource,
+    source: parseActivityDetails(row.details_json).assistantClientId ? "assistant" : stringValue(row.source) as ActivitySource,
     provider: optionalString(row.provider) ?? null,
     eventName: stringValue(row.event_name),
     entityType: optionalString(row.entity_type) ?? null,
@@ -1311,7 +1315,7 @@ export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipment
   }));
 }
 
-export async function linkParcel2GoShipment(orderId: string, shipmentId: string, actor: ActivityActor) {
+export async function linkParcel2GoShipment(orderId: string, shipmentId: string, actor: ActivityActor, expectedShipmentOrderId?: string | null) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   try {
@@ -1321,6 +1325,7 @@ export async function linkParcel2GoShipment(orderId: string, shipmentId: string,
     const shipment = shipmentResult.rows[0];
     if (!shipment) throw new Error("Parcel2Go delivery not found");
     const linkedOrderId = optionalString(shipment.order_id);
+    if (expectedShipmentOrderId !== undefined) assertAssistantExpectedValue(linkedOrderId ?? null, expectedShipmentOrderId, "shipment linked order");
     if (linkedOrderId && linkedOrderId !== orderId) throw new Error("This Parcel2Go delivery is already linked to another order");
     await transaction.execute({ sql: "UPDATE shipments SET order_id = ?, updated_at = ? WHERE id = ?", args: [orderId, new Date().toISOString(), shipmentId] });
     await recordActivityEventInTransaction(transaction, {
@@ -1374,6 +1379,68 @@ export async function recordParcel2GoWebhook(input: { externalEventId: string; t
   } finally {
     transaction.close();
   }
+}
+
+/** Creates or reissues a pending staff invitation; the invitee sets the password. */
+export async function inviteEmployee(input: { name: string; email: string; actor: ActivityActor }) {
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+  if (name.length < 2 || name.length > 180 || !/^\S+@\S+\.\S+$/.test(email)) throw new Error("EMPLOYEE_INVITE_INVALID");
+  const db = await getTursoClient();
+  let userId = `user_${randomUUID()}`;
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({ sql: `SELECT id FROM "user" WHERE lower(email) = ? LIMIT 1`, args: [email] });
+    if (existing.rows[0]) {
+      userId = stringValue(existing.rows[0].id);
+      const pending = await transaction.execute({ sql: `SELECT 1 FROM employee_invitations WHERE user_id = ? AND used_at IS NULL`, args: [userId] });
+      const account = await transaction.execute({ sql: `SELECT 1 FROM "account" WHERE userId = ? LIMIT 1`, args: [userId] });
+      if (!pending.rows[0] || account.rows[0]) throw new Error("EMPLOYEE_ALREADY_EXISTS");
+      await transaction.execute({ sql: `UPDATE "user" SET name = ?, updatedAt = ? WHERE id = ?`, args: [name, now, userId] });
+      await transaction.execute({ sql: `UPDATE employee_invitations SET token_hash = ?, expires_at = ?, created_at = ? WHERE user_id = ? AND used_at IS NULL`, args: [tokenHash, expiresAt, now, userId] });
+    } else {
+      await transaction.execute({ sql: `INSERT INTO "user" (id, name, email, emailVerified, image, createdAt, updatedAt) VALUES (?, ?, ?, 0, NULL, ?, ?)`, args: [userId, name, email, now, now] });
+      await transaction.execute({ sql: "INSERT INTO employee_invitations (token_hash, user_id, expires_at, used_at, created_at) VALUES (?, ?, ?, NULL, ?)", args: [tokenHash, userId, expiresAt, now] });
+    }
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor, source: "manual", eventName: existing.rows[0] ? "employee.invitation.reissued" : "employee.invited", entityType: "employee", entityId: userId,
+      summary: existing.rows[0] ? `Reissued invitation for ${name}` : `Invited employee ${name}`, details: { name }, outcome: "succeeded",
+    });
+    await transaction.commit();
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
+  return { employeeId: userId, name, email, token, expiresAt };
+}
+
+/** Atomically consumes an invitation and creates the Better Auth credential. */
+export async function acceptEmployeeInvitation(input: { token: string; password: string }) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(input.token) || input.password.length < 8 || input.password.length > 128) throw new Error("EMPLOYEE_INVITE_INVALID");
+  const db = await getTursoClient();
+  const tokenHash = createHash("sha256").update(input.token).digest("hex");
+  const passwordHash = await hashPassword(input.password);
+  const now = new Date().toISOString();
+  const transaction = await db.transaction("write");
+  try {
+    const invitation = await transaction.execute({ sql: `UPDATE employee_invitations SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING user_id`, args: [now, tokenHash, now] });
+    const userId = invitation.rows[0]?.user_id;
+    if (typeof userId !== "string") throw new Error("EMPLOYEE_INVITE_EXPIRED");
+    const accountId = `account_${randomUUID()}`;
+    await transaction.execute({
+      sql: `INSERT INTO "account" (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
+        accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
+        VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+      args: [accountId, userId, userId, passwordHash, now, now],
+    });
+    await recordActivityEventInTransaction(transaction, {
+      actor: { type: "staff", id: userId, label: "Invited employee" }, source: "manual", eventName: "employee.invitation.accepted",
+      entityType: "employee", entityId: userId, summary: "Employee completed account setup", details: {}, outcome: "succeeded",
+    });
+    await transaction.commit();
+    return { ok: true };
+  } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
 }
 
 export async function createTikTokOAuthState(input: { id: string; stateHash: string; expiresAt: string }) {
@@ -2073,7 +2140,7 @@ export async function createPackagingMaterial(input: { title: string; quantity: 
   return { id, title, quantity };
 }
 
-export async function updatePackagingMaterial(input: { id: string; title: string; quantity: number; actor: ActivityActor }) {
+export async function updatePackagingMaterial(input: { id: string; title: string; quantity: number; expectedTitle?: string; expectedQuantity?: number; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = packagingTitle(input.title);
   const quantity = packagingQuantity(input.quantity);
@@ -2083,6 +2150,8 @@ export async function updatePackagingMaterial(input: { id: string; title: string
     const existing = await transaction.execute({ sql: "SELECT title, quantity FROM packaging_materials WHERE id = ? AND active = 1 LIMIT 1", args: [input.id] });
     const row = existing.rows[0];
     if (!row) throw new Error("PACKAGING_NOT_FOUND");
+    if (input.expectedTitle !== undefined) assertAssistantExpectedValue(stringValue(row.title), input.expectedTitle, "packaging title");
+    if (input.expectedQuantity !== undefined) assertAssistantExpectedValue(numberValue(row.quantity), input.expectedQuantity, "packaging quantity");
     const duplicate = await transaction.execute({ sql: "SELECT id FROM packaging_materials WHERE lower(title) = lower(?) AND id <> ? AND active = 1 LIMIT 1", args: [title, input.id] });
     if (duplicate.rows[0]) throw new Error("PACKAGING_ALREADY_EXISTS");
     const previousTitle = stringValue(row.title);
@@ -2120,7 +2189,7 @@ export async function updatePackagingMaterial(input: { id: string; title: string
   }
 }
 
-export async function deletePackagingMaterial(input: { id: string; actor: ActivityActor }) {
+export async function deletePackagingMaterial(input: { id: string; expectedTitle?: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
@@ -2128,6 +2197,7 @@ export async function deletePackagingMaterial(input: { id: string; actor: Activi
     const existing = await transaction.execute({ sql: "SELECT title FROM packaging_materials WHERE id = ? AND active = 1 LIMIT 1", args: [input.id] });
     if (!existing.rows[0]) throw new Error("PACKAGING_NOT_FOUND");
     const title = stringValue(existing.rows[0].title);
+    if (input.expectedTitle !== undefined) assertAssistantExpectedValue(title, input.expectedTitle, "packaging title");
     await transaction.execute({ sql: "UPDATE packaging_materials SET active = 0, updated_at = ? WHERE id = ?", args: [now, input.id] });
     await transaction.execute({ sql: "UPDATE variants SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET packaging_type = NULL WHERE packaging_type = ?", args: [title] });
@@ -2386,13 +2456,14 @@ export async function getPhysicalInventoryRunways(): Promise<PhysicalInventoryRu
   }]));
 }
 
-export async function updatePhysicalProduct(input: { itemId: string; title: string; actor: ActivityActor }) {
+export async function updatePhysicalProduct(input: { itemId: string; title: string; expectedTitle?: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const transaction = await db.transaction("write");
   try {
-    const item = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
+    const item = await transaction.execute({ sql: "SELECT id, title FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
     if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    if (input.expectedTitle !== undefined) assertAssistantExpectedValue(stringValue(item.rows[0].title), input.expectedTitle, "physical product title");
     const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE lower(title) = lower(?) AND id <> ? AND active = 1", args: [title, input.itemId] });
     if (duplicate.rows[0]) throw new Error("A master product with this name already exists");
     await transaction.execute({ sql: "UPDATE physical_inventory_items SET title = ?, updated_at = ? WHERE id = ?", args: [title, new Date().toISOString(), input.itemId] });
@@ -2416,14 +2487,15 @@ export async function updatePhysicalProduct(input: { itemId: string; title: stri
   return getPhysicalProductDetail(input.itemId);
 }
 
-export async function addPhysicalInventoryVariant(input: { itemId: string; title: string; sku?: string | null; actor: ActivityActor }) {
+export async function addPhysicalInventoryVariant(input: { itemId: string; title: string; sku?: string | null; expectedProductRevision?: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const sku = input.sku?.trim() || null;
   const transaction = await db.transaction("write");
   try {
-    const item = await transaction.execute({ sql: "SELECT id, variant_label FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
+    const item = await transaction.execute({ sql: "SELECT id, variant_label, updated_at FROM physical_inventory_items WHERE id = ? AND active = 1", args: [input.itemId] });
     if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    if (input.expectedProductRevision !== undefined) assertAssistantExpectedValue(stringValue(item.rows[0].updated_at), input.expectedProductRevision, "physical product revision");
     const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_variants WHERE physical_item_id = ? AND lower(title) = lower(?) AND active = 1", args: [input.itemId, title] });
     if (duplicate.rows[0]) throw new Error("A variant with this name already exists");
     const sortOrder = await transaction.execute({ sql: "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort_order FROM physical_inventory_variants WHERE physical_item_id = ?", args: [input.itemId] });
@@ -2458,15 +2530,16 @@ export async function addPhysicalInventoryVariant(input: { itemId: string; title
   return getPhysicalProductDetail(input.itemId);
 }
 
-export async function updatePhysicalInventoryVariant(input: { variantId: string; title: string; sku?: string | null; actor: ActivityActor }) {
+export async function updatePhysicalInventoryVariant(input: { variantId: string; title: string; sku?: string | null; expectedVariantRevision?: string; actor: ActivityActor }) {
   const db = await getTursoClient();
   const title = input.title.trim();
   const sku = input.sku?.trim() || null;
   const transaction = await db.transaction("write");
   let itemId = "";
   try {
-    const variant = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [input.variantId] });
+    const variant = await transaction.execute({ sql: "SELECT physical_item_id, updated_at FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [input.variantId] });
     if (!variant.rows[0]) throw new Error("Physical inventory variant not found");
+    if (input.expectedVariantRevision !== undefined) assertAssistantExpectedValue(stringValue(variant.rows[0].updated_at), input.expectedVariantRevision, "physical variant revision");
     itemId = stringValue(variant.rows[0].physical_item_id);
     const duplicate = await transaction.execute({ sql: "SELECT id FROM physical_inventory_variants WHERE physical_item_id = ? AND lower(title) = lower(?) AND id <> ? AND active = 1", args: [itemId, title, input.variantId] });
     if (duplicate.rows[0]) throw new Error("A variant with this name already exists");
@@ -2494,18 +2567,17 @@ export async function updatePhysicalInventoryVariant(input: { variantId: string;
   return getPhysicalProductDetail(itemId);
 }
 
-export async function deletePhysicalInventoryVariant(variantId: string, actor: ActivityActor) {
+export async function deletePhysicalInventoryVariant(variantId: string, actor: ActivityActor, expectedVariantRevision?: string) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   let itemId = "";
   try {
-    const variant = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [variantId] });
+    const variant = await transaction.execute({ sql: "SELECT physical_item_id, updated_at FROM physical_inventory_variants WHERE id = ? AND active = 1", args: [variantId] });
     if (!variant.rows[0]) throw new Error("Physical inventory variant not found");
+    if (expectedVariantRevision !== undefined) assertAssistantExpectedValue(stringValue(variant.rows[0].updated_at), expectedVariantRevision, "physical variant revision");
     itemId = stringValue(variant.rows[0].physical_item_id);
     const mappings = await transaction.execute({ sql: "SELECT COUNT(*) AS mapping_count FROM physical_listing_components WHERE physical_variant_id = ?", args: [variantId] });
     if (numberValue(mappings.rows[0]?.mapping_count) > 0) throw new Error("Remove this variant's channel mappings before deleting it");
-    const formulaOutputs = await transaction.execute({ sql: "SELECT COUNT(*) AS output_count FROM lab_formula_outputs WHERE physical_variant_id = ? AND active = 1", args: [variantId] });
-    if (numberValue(formulaOutputs.rows[0]?.output_count) > 0) throw new Error("Remove this variant's Labs formula output link before deleting it");
     const remaining = await transaction.execute({ sql: "SELECT COUNT(*) AS variant_count FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1", args: [itemId] });
     if (numberValue(remaining.rows[0]?.variant_count) <= 1) throw new Error("A product must keep at least one variant");
     const now = new Date().toISOString();
@@ -2531,12 +2603,13 @@ export async function deletePhysicalInventoryVariant(variantId: string, actor: A
   return getPhysicalProductDetail(itemId);
 }
 
-export async function deletePhysicalProduct(itemId: string, actor: ActivityActor) {
+export async function deletePhysicalProduct(itemId: string, actor: ActivityActor, expectedProductRevision?: string) {
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   try {
-    const item = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id = ? AND active = 1", args: [itemId] });
+    const item = await transaction.execute({ sql: "SELECT id, updated_at FROM physical_inventory_items WHERE id = ? AND active = 1", args: [itemId] });
     if (!item.rows[0]) throw new Error("Physical inventory item not found");
+    if (expectedProductRevision !== undefined) assertAssistantExpectedValue(stringValue(item.rows[0].updated_at), expectedProductRevision, "physical product revision");
     const componentMappings = await transaction.execute({
       sql: "SELECT COUNT(*) AS mapping_count FROM physical_listing_components c JOIN physical_inventory_variants v ON v.id = c.physical_variant_id WHERE v.physical_item_id = ?",
       args: [itemId],
@@ -2578,7 +2651,7 @@ type PhysicalInventoryAdjustmentResult = {
  * kept in sync solely as a cached total; its variants remain the source of truth.
  */
 export async function applyPhysicalInventoryAdjustments(input: {
-  adjustments: PhysicalInventoryAdjustment[];
+  adjustments: Array<PhysicalInventoryAdjustment & { expectedQuantity?: number; expectedQuantityKnown?: boolean }>;
   note: string;
   actor: ActivityActor;
 }): Promise<{ changes: PhysicalInventoryAdjustmentResult[] }> {
@@ -2606,6 +2679,8 @@ export async function applyPhysicalInventoryAdjustments(input: {
 
       const itemId = stringValue(row.physical_item_id);
       const wasKnown = numberValue(row.quantity_known) === 1;
+      if (adjustment.expectedQuantity !== undefined) assertAssistantExpectedValue(before, adjustment.expectedQuantity, "physical variant count");
+      if (adjustment.expectedQuantityKnown !== undefined) assertAssistantExpectedValue(Number(wasKnown), Number(adjustment.expectedQuantityKnown), "physical variant count status");
       if (before !== after || !wasKnown) {
         await transaction.execute({
           sql: "UPDATE physical_inventory_variants SET quantity = ?, quantity_known = 1, updated_at = ? WHERE id = ?",
@@ -3042,7 +3117,7 @@ export async function getPhysicalChannelListings(channel: PhysicalChannel): Prom
   return [...listings.values()];
 }
 
-export async function savePhysicalListingMappings(input: { mappings: Array<{ listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }> }>; listingKind?: "individual" | "bundle"; actor: ActivityActor }) {
+export async function savePhysicalListingMappings(input: { mappings: Array<{ listingId: string; components: Array<{ physicalVariantId: string; quantityPerSale: number }>; expectedListingRevision?: string }>; listingKind?: "individual" | "bundle"; actor: ActivityActor }) {
   const db = await ensurePhysicalChannelListings();
   if (!input.mappings.length) throw new Error("At least one listing mapping is required");
   if (new Set(input.mappings.map((mapping) => mapping.listingId)).size !== input.mappings.length) throw new Error("A listing can only be mapped once per save");
@@ -3054,8 +3129,9 @@ export async function savePhysicalListingMappings(input: { mappings: Array<{ lis
   let editedProductKey: { channel: PhysicalChannel; externalProductId: string } | null = null;
   try {
     for (const mapping of input.mappings) {
-      const listing = await transaction.execute({ sql: "SELECT id, channel, external_product_id, listing_kind FROM physical_channel_listings WHERE id=? AND active=1", args: [mapping.listingId] });
+      const listing = await transaction.execute({ sql: "SELECT id, channel, external_product_id, listing_kind, updated_at FROM physical_channel_listings WHERE id=? AND active=1", args: [mapping.listingId] });
       if (!listing.rows[0]) throw new Error("Channel listing not found");
+      if (mapping.expectedListingRevision !== undefined) assertAssistantExpectedValue(stringValue(listing.rows[0].updated_at), mapping.expectedListingRevision, "channel listing revision");
       const channel = stringValue(listing.rows[0].channel) === "tiktok" ? "tiktok" : "shopify";
       const externalProductId = stringValue(listing.rows[0].external_product_id);
       const kind = input.listingKind ?? stringValue(listing.rows[0].listing_kind);
@@ -3164,7 +3240,7 @@ export async function savePhysicalListingMapping(input: { listingId: string; com
 }
 
 /** Saves the product-level association shown in the grouped channel catalogue. */
-export async function savePhysicalChannelProductLink(input: { channel: PhysicalChannel; externalProductId: string; physicalItemId: string | null; actor: ActivityActor }) {
+export async function savePhysicalChannelProductLink(input: { channel: PhysicalChannel; externalProductId: string; physicalItemId: string | null; expectedPhysicalItemId?: string | null; actor: ActivityActor }) {
   const db = await ensurePhysicalChannelListings();
   const product = await db.execute({
     sql: "SELECT id FROM physical_channel_listings WHERE channel=? AND external_product_id=? AND active=1 LIMIT 1",
@@ -3175,6 +3251,10 @@ export async function savePhysicalChannelProductLink(input: { channel: PhysicalC
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
   try {
+    if (input.expectedPhysicalItemId !== undefined) {
+      const currentLink = await transaction.execute({ sql: "SELECT physical_item_id FROM physical_channel_product_links WHERE channel = ? AND external_product_id = ?", args: [input.channel, input.externalProductId] });
+      assertAssistantExpectedValue(currentLink.rows[0] ? stringValue(currentLink.rows[0].physical_item_id) : null, input.expectedPhysicalItemId, "channel product link");
+    }
     if (input.physicalItemId) {
       const physicalItem = await transaction.execute({ sql: "SELECT id FROM physical_inventory_items WHERE id=? AND active=1", args: [input.physicalItemId] });
       if (!physicalItem.rows[0]) throw new Error("The selected master product no longer exists");
@@ -3708,13 +3788,10 @@ function productionUnit(value: unknown): LabQuantityUnit {
   throw new Error("Choose grams or milliliters");
 }
 
-function toLabFormulaOutput(row: Record<string, unknown> | undefined): LabFormulaOutput | null {
-  if (!row || !row.output_id) return null;
+function toLabFormulaPackaging(row: Record<string, unknown> | undefined): LabFormulaPackaging | null {
+  if (!row || !row.packaging_id) return null;
   return {
-    id: stringValue(row.output_id),
-    physicalVariantId: stringValue(row.physical_variant_id),
-    product: stringValue(row.output_product),
-    variant: stringValue(row.output_variant),
+    id: stringValue(row.packaging_id),
     fillQuantity: numberValue(row.fill_quantity),
     fillUnit: productionUnit(row.fill_unit),
   };
@@ -3756,17 +3833,14 @@ export async function getLabFormulas(): Promise<LabFormula[]> {
   const db = await getTursoClient();
   const result = await db.execute(`
     SELECT f.id, f.title, f.subtitle, f.notes, COUNT(fi.id) AS ingredient_count,
-           fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
-           pi.title AS output_product, piv.title AS output_variant
+           fp.id AS packaging_id, fp.fill_quantity, fp.fill_unit
     FROM lab_formulas f LEFT JOIN lab_formula_ingredients fi ON fi.formula_id = f.id
-    LEFT JOIN lab_formula_outputs fo ON fo.formula_id = f.id AND fo.active = 1
-    LEFT JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
-    LEFT JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1
+    LEFT JOIN lab_formula_packaging fp ON fp.formula_id = f.id
     WHERE f.active = 1 GROUP BY f.id ORDER BY f.title
   `);
   return result.rows.map((row) => ({
     id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes),
-    ingredientCount: numberValue(row.ingredient_count), lines: [], output: toLabFormulaOutput(row as Record<string, unknown>),
+    ingredientCount: numberValue(row.ingredient_count), lines: [], packaging: toLabFormulaPackaging(row as Record<string, unknown>),
   }));
 }
 
@@ -3780,46 +3854,43 @@ export async function getLabFormula(id: string): Promise<LabFormula | null> {
           FROM lab_formula_ingredients fi JOIN lab_ingredients i ON i.id = fi.ingredient_id
           WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [id],
   });
-  const output = await db.execute({
-    sql: `SELECT fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
-                 pi.title AS output_product, piv.title AS output_variant
-          FROM lab_formula_outputs fo
-          JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
-          JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1
-          WHERE fo.formula_id = ? AND fo.active = 1`,
+  const packaging = await db.execute({
+    sql: `SELECT fp.id AS packaging_id, fp.fill_quantity, fp.fill_unit
+          FROM lab_formula_packaging fp WHERE fp.formula_id = ?`,
     args: [id],
   });
-  return { id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes), ingredientCount: lines.rows.length, lines: lines.rows.map((line) => toLabFormulaLine(line as Record<string, unknown>)), output: toLabFormulaOutput(output.rows[0] as Record<string, unknown> | undefined) };
+  return { id: stringValue(row.id), title: stringValue(row.title), subtitle: stringValue(row.subtitle), notes: stringValue(row.notes), ingredientCount: lines.rows.length, lines: lines.rows.map((line) => toLabFormulaLine(line as Record<string, unknown>)), packaging: toLabFormulaPackaging(packaging.rows[0] as Record<string, unknown> | undefined) };
 }
 
 function toLabBatch(row: Record<string, unknown>): LabBatch {
   const outputQuantity = numberValue(row.output_quantity);
   const packagedQuantity = numberValue(row.packaged_quantity);
-  const output = toLabFormulaOutput(row);
-  let packagedUnitsValue = 0;
-  if (output && stringValue(row.output_unit) === output.fillUnit) {
-    try { packagedUnitsValue = packagedUnits(packagedQuantity, output.fillUnit, output.fillQuantity, output.fillUnit); } catch { packagedUnitsValue = 0; }
+  const packaging = toLabFormulaPackaging(row);
+  let packagedUnitsValue: number | null = null;
+  if (packaging && stringValue(row.output_unit) === packaging.fillUnit) {
+    packagedUnitsValue = 0;
+    if (packagedQuantity > 0) {
+      try { packagedUnitsValue = packagedUnits(packagedQuantity, packaging.fillUnit, packaging.fillQuantity, packaging.fillUnit); } catch { packagedUnitsValue = null; }
+    }
   }
   return {
     id: stringValue(row.id), formula: stringValue(row.formula), batchNumber: stringValue(row.batch_number), targetGrams: numberValue(row.target_grams),
     outputQuantity, outputUnit: productionUnit(row.output_unit || "g"), packagedQuantity,
     remainingQuantity: Math.max(0, Math.round((outputQuantity - packagedQuantity) * 1_000_000) / 1_000_000), packagedUnits: packagedUnitsValue,
-    output, actor: stringValue(row.actor), createdAt: stringValue(row.created_at),
+    packaging, actor: stringValue(row.actor), notes: stringValue(row.notes),
+    createdAt: stringValue(row.created_at), updatedAt: stringValue(row.updated_at || row.created_at),
   };
 }
 
-const labBatchSelect = `SELECT b.id, b.formula_id, b.batch_number, b.target_grams, b.actor, b.created_at, f.title AS formula,
+const labBatchSelect = `SELECT b.id, b.formula_id, b.batch_number, b.target_grams, b.actor, b.notes, b.created_at, b.updated_at, f.title AS formula,
        COALESCE(a.total_quantity, b.target_grams) AS output_quantity,
        COALESCE(a.quantity_unit, 'g') AS output_unit,
        COALESCE(a.packaged_quantity, 0) AS packaged_quantity,
-       fo.id AS output_id, fo.physical_variant_id, fo.fill_quantity, fo.fill_unit,
-       pi.title AS output_product, piv.title AS output_variant
+       fp.id AS packaging_id, fp.fill_quantity, fp.fill_unit
        FROM lab_batches b
        JOIN lab_formulas f ON f.id = b.formula_id
        LEFT JOIN lab_batch_allocations a ON a.batch_id = b.id
-       LEFT JOIN lab_formula_outputs fo ON fo.formula_id = b.formula_id AND fo.active = 1
-       LEFT JOIN physical_inventory_variants piv ON piv.id = fo.physical_variant_id AND piv.active = 1
-       LEFT JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id AND pi.active = 1`;
+       LEFT JOIN lab_formula_packaging fp ON fp.formula_id = b.formula_id`;
 
 export async function getLabBatches(limit = 100, formulaId?: string): Promise<LabBatch[]> {
   const db = await getTursoClient();
@@ -3837,12 +3908,54 @@ export async function getLabBatchDetail(id: string): Promise<LabBatchDetail | nu
   return { ...toLabBatch(row as Record<string, unknown>), formulaId: stringValue(row.formula_id) };
 }
 
+export async function updateLabBatchNotes(input: {
+  batchId: string;
+  notes: string;
+  expectedUpdatedAt: string;
+  actor: ActivityActor;
+}): Promise<LabBatchDetail> {
+  const notes = normalizeLabBatchNotes(input.notes);
+  const db = await getTursoClient();
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({
+      sql: "SELECT batch_number, notes, updated_at FROM lab_batches WHERE id = ?",
+      args: [input.batchId],
+    });
+    const row = existing.rows[0];
+    if (!row) throw new Error("LAB_BATCH_NOT_FOUND");
+    if (stringValue(row.updated_at) !== input.expectedUpdatedAt) throw new Error("LAB_BATCH_STALE");
+    if (stringValue(row.notes) !== notes) {
+      const now = nextLabBatchUpdatedAt(stringValue(row.updated_at));
+      await transaction.execute({
+        sql: "UPDATE lab_batches SET notes = ?, updated_at = ? WHERE id = ?",
+        args: [notes, now, input.batchId],
+      });
+      await recordActivityEventInTransaction(transaction, {
+        actor: input.actor, source: "manual", eventName: "labs.batch.notes_updated",
+        entityType: "lab_batch", entityId: input.batchId,
+        summary: `Updated notes for production batch ${stringValue(row.batch_number)}`,
+        details: { hadNotes: Boolean(stringValue(row.notes)), hasNotes: Boolean(notes) },
+        outcome: "succeeded",
+      });
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  const batch = await getLabBatchDetail(input.batchId);
+  if (!batch) throw new Error("LAB_BATCH_NOT_FOUND");
+  return batch;
+}
+
 export async function createLabFormula(input: {
   title: string;
   subtitle?: string;
   notes?: string;
   lines: Array<{ ingredient: string; calculation: "fixed" | "remainder" | "manual"; percentage?: number; phase?: string; note?: string }>;
-  output?: { physicalVariantId: string; fillQuantity: number; fillUnit: LabQuantityUnit };
   actor: ActivityActor;
 }) {
   const title = input.title.trim();
@@ -3866,8 +3979,6 @@ export async function createLabFormula(input: {
   if (new Set(lines.map((line) => line.ingredient.toLocaleLowerCase())).size !== lines.length) throw new Error("Use each ingredient only once in a formula");
   if (lines.filter((line) => line.calculation === "remainder").length > 1) throw new Error("A formula can have only one remainder-to-100% ingredient");
   if (lines.filter((line) => line.calculation === "fixed").reduce((sum, line) => sum + (line.percentage ?? 0), 0) > 100) throw new Error("Fixed percentages cannot total more than 100%");
-  const output = input.output ? { ...input.output, fillQuantity: productionQuantity(input.output.fillQuantity) } : undefined;
-
   const db = await initializeLabsData();
   const formulaId = `lab-formula-${randomUUID()}`;
   const now = new Date().toISOString();
@@ -3875,33 +3986,19 @@ export async function createLabFormula(input: {
   try {
     const existing = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE lower(title) = lower(?)", args: [title] });
     if (existing.rows[0]) throw new Error("LAB_FORMULA_TITLE_EXISTS");
-    for (const line of lines) {
-      await transaction.execute({
-        sql: `INSERT OR IGNORE INTO lab_ingredients (id, title, quantity_grams, quantity_known, reorder_point_grams, active, created_at, updated_at)
-              VALUES (?, ?, 0, 0, 0, 1, ?, ?)`,
-        args: [labIngredientId(line.ingredient), line.ingredient, now, now],
-      });
-    }
+    const ingredientRows = await transaction.execute({
+      sql: `SELECT id, title FROM lab_ingredients WHERE active = 1 AND lower(title) IN (${lines.map(() => "lower(?)").join(", ")})`,
+      args: lines.map((line) => line.ingredient),
+    });
+    const ingredientIds = new Map(ingredientRows.rows.map((row) => [stringValue(row.title).toLocaleLowerCase(), stringValue(row.id)]));
+    const missingIngredient = lines.find((line) => !ingredientIds.has(line.ingredient.toLocaleLowerCase()));
+    if (missingIngredient) throw new Error(`Add “${missingIngredient.ingredient}” to Ingredient inventory before using it in a formula`);
     await transaction.execute({ sql: "INSERT INTO lab_formulas (id, title, subtitle, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)", args: [formulaId, title, subtitle, notes, now, now] });
     for (const [index, line] of lines.entries()) {
       await transaction.execute({
         sql: `INSERT INTO lab_formula_ingredients (id, formula_id, ingredient_id, percentage, calculation, phase, note, sort_order)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [`${formulaId}-line-${index + 1}`, formulaId, labIngredientId(line.ingredient), line.percentage, line.calculation, line.phase || null, line.note || null, index],
-      });
-    }
-    if (output) {
-      const variant = await transaction.execute({
-        sql: `SELECT piv.id FROM physical_inventory_variants piv
-              JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
-              WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
-        args: [output.physicalVariantId],
-      });
-      if (!variant.rows[0]) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
-      await transaction.execute({
-        sql: `INSERT INTO lab_formula_outputs (id, formula_id, physical_variant_id, fill_quantity, fill_unit, active, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-        args: [`lab-output-${randomUUID()}`, formulaId, output.physicalVariantId, output.fillQuantity, productionUnit(output.fillUnit), now, now],
+        args: [`${formulaId}-line-${index + 1}`, formulaId, ingredientIds.get(line.ingredient.toLocaleLowerCase())!, line.percentage, line.calculation, line.phase || null, line.note || null, index],
       });
     }
     await recordActivityEventInTransaction(transaction, {
@@ -3911,7 +4008,7 @@ export async function createLabFormula(input: {
       entityType: "lab_formula",
       entityId: formulaId,
       summary: `Created formula ${title}`,
-      details: { title, ingredientCount: lines.length, hasOutput: Boolean(output) },
+      details: { title, ingredientCount: lines.length },
       outcome: "succeeded",
     });
     await transaction.commit();
@@ -3921,11 +4018,12 @@ export async function createLabFormula(input: {
   return formula;
 }
 
-export async function updateLabFormulaOutput(input: {
+export async function updateLabFormulaPackaging(input: {
   formulaId: string;
-  physicalVariantId: string;
   fillQuantity: number;
   fillUnit: LabQuantityUnit;
+  expectedFillQuantity?: number | null;
+  expectedFillUnit?: LabQuantityUnit | null;
   actor: ActivityActor;
 }) {
   const fillQuantity = productionQuantity(input.fillQuantity);
@@ -3936,28 +4034,27 @@ export async function updateLabFormulaOutput(input: {
   try {
     const formula = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
     if (!formula.rows[0]) throw new Error("LAB_FORMULA_NOT_FOUND");
-    const variant = await transaction.execute({
-      sql: `SELECT piv.id FROM physical_inventory_variants piv
-            JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
-            WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
-      args: [input.physicalVariantId],
-    });
-    if (!variant.rows[0]) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
+    if (input.expectedFillQuantity !== undefined || input.expectedFillUnit !== undefined) {
+      const currentPackaging = await transaction.execute({ sql: "SELECT fill_quantity, fill_unit FROM lab_formula_packaging WHERE formula_id = ?", args: [input.formulaId] });
+      const current = currentPackaging.rows[0];
+      if (input.expectedFillQuantity !== undefined) assertAssistantExpectedValue(current ? numberValue(current.fill_quantity) : null, input.expectedFillQuantity, "formula fill quantity");
+      if (input.expectedFillUnit !== undefined) assertAssistantExpectedValue(current ? productionUnit(current.fill_unit) : null, input.expectedFillUnit, "formula fill unit");
+    }
     await transaction.execute({
-      sql: `INSERT INTO lab_formula_outputs (id, formula_id, physical_variant_id, fill_quantity, fill_unit, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(formula_id) DO UPDATE SET physical_variant_id = excluded.physical_variant_id,
-              fill_quantity = excluded.fill_quantity, fill_unit = excluded.fill_unit, active = 1, updated_at = excluded.updated_at`,
-      args: [`lab-output-${randomUUID()}`, input.formulaId, input.physicalVariantId, fillQuantity, fillUnit, now, now],
+      sql: `INSERT INTO lab_formula_packaging (id, formula_id, fill_quantity, fill_unit, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(formula_id) DO UPDATE SET fill_quantity = excluded.fill_quantity,
+              fill_unit = excluded.fill_unit, updated_at = excluded.updated_at`,
+      args: [`lab-packaging-${randomUUID()}`, input.formulaId, fillQuantity, fillUnit, now, now],
     });
     await recordActivityEventInTransaction(transaction, {
       actor: input.actor,
       source: "manual",
-      eventName: "labs.formula.output.updated",
+      eventName: "labs.formula.packaging.updated",
       entityType: "lab_formula",
       entityId: input.formulaId,
-      summary: "Updated formula packaged output",
-      details: { physicalVariantId: input.physicalVariantId, fillQuantity, fillUnit },
+      summary: "Updated formula unit fill size",
+      details: { fillQuantity, fillUnit },
       outcome: "succeeded",
     });
     await transaction.commit();
@@ -3965,7 +4062,7 @@ export async function updateLabFormulaOutput(input: {
   return getLabFormula(input.formulaId);
 }
 
-export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; actor: ActivityActor }) {
+export async function updateLabIngredient(input: { id: string; quantityGrams: number; reorderPointGrams?: number; expectedQuantityGrams?: number; actor: ActivityActor }) {
   const db = await initializeLabsData();
   const quantity = labQuantity(input.quantityGrams);
   const reorderPoint = input.reorderPointGrams === undefined ? undefined : labQuantity(input.reorderPointGrams);
@@ -3976,6 +4073,7 @@ export async function updateLabIngredient(input: { id: string; quantityGrams: nu
     const row = existing.rows[0];
     if (!row) throw new Error("LAB_INGREDIENT_NOT_FOUND");
     const before = numberValue(row.quantity_grams);
+    if (input.expectedQuantityGrams !== undefined) assertAssistantExpectedValue(before, input.expectedQuantityGrams, "ingredient quantity");
     const finalReorder = reorderPoint ?? numberValue(row.reorder_point_grams);
     await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, quantity_known = 1, reorder_point_grams = ?, updated_at = ? WHERE id = ?", args: [quantity, finalReorder, now, input.id] });
     await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
@@ -3995,12 +4093,130 @@ export async function updateLabIngredient(input: { id: string; quantityGrams: nu
   return getLabIngredients();
 }
 
+export async function deleteLabIngredient(input: { id: string; expectedTitle?: string; actor: ActivityActor }, database?: DatabaseClient) {
+  if (!input.id.trim()) throw new Error("LAB_INGREDIENT_NOT_FOUND");
+  const db = database ?? await getTursoClient();
+  const transaction = await db.transaction("write");
+  try {
+    const ingredient = await transaction.execute({ sql: "SELECT id, title FROM lab_ingredients WHERE id = ? AND active = 1", args: [input.id] });
+    if (!ingredient.rows[0]) throw new Error("LAB_INGREDIENT_NOT_FOUND");
+    if (input.expectedTitle !== undefined) assertAssistantExpectedValue(stringValue(ingredient.rows[0].title), input.expectedTitle, "ingredient title");
+    const linked = await transaction.execute({
+      sql: "SELECT 1 FROM lab_formula_ingredients WHERE ingredient_id = ? LIMIT 1",
+      args: [input.id],
+    });
+    if (linked.rows[0]) throw new Error("LAB_INGREDIENT_LINKED_TO_FORMULA");
+
+    const now = new Date().toISOString();
+    await transaction.execute({ sql: "UPDATE lab_ingredients SET active = 0, updated_at = ? WHERE id = ?", args: [now, input.id] });
+    await recordActivityEventInTransaction(transaction, {
+      actor: input.actor,
+      source: "manual",
+      eventName: "labs.ingredient.removed",
+      entityType: "lab_ingredient",
+      entityId: input.id,
+      summary: `Removed ingredient ${stringValue(ingredient.rows[0].title)} from active inventory`,
+      details: { ingredientId: input.id },
+      outcome: "succeeded",
+    });
+    await transaction.commit();
+    return { ok: true };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
+
+export async function createLabIngredients(input: {
+  ingredients: LabIngredientImportRow[];
+  actor: ActivityActor;
+  imported?: boolean;
+}, database?: DatabaseClient) {
+  if (!input.ingredients.length) throw new Error("Add at least one ingredient before saving");
+  if (input.ingredients.length > 500) throw new Error("Import at most 500 ingredients at a time");
+
+  const ingredients = input.ingredients.map((ingredient, index) => {
+    const title = ingredient.title.trim();
+    if (!title || title.length > 180) throw new Error(`Ingredient ${index + 1} needs a name of up to 180 characters`);
+    return {
+      title,
+      quantityGrams: ingredient.quantityGrams === undefined ? undefined : labQuantity(ingredient.quantityGrams),
+      reorderPointGrams: ingredient.reorderPointGrams === undefined ? 0 : labQuantity(ingredient.reorderPointGrams),
+    };
+  });
+
+  const db = database ?? await initializeLabsData();
+  const transaction = await db.transaction("write");
+  const now = new Date().toISOString();
+  const created: Array<{ id: string; title: string; quantityGrams: number; quantityKnown: boolean; reorderPointGrams: number }> = [];
+  let skippedCount = 0;
+  try {
+    const existing = await transaction.execute("SELECT title FROM lab_ingredients");
+    const seen = new Set(existing.rows.map((row) => stringValue(row.title).toLowerCase()));
+    for (const ingredient of ingredients) {
+      const normalizedTitle = ingredient.title.toLowerCase();
+      if (seen.has(normalizedTitle)) {
+        skippedCount += 1;
+        continue;
+      }
+      seen.add(normalizedTitle);
+      const id = labIngredientId(ingredient.title);
+      const quantityKnown = ingredient.quantityGrams !== undefined;
+      const quantityGrams = ingredient.quantityGrams ?? 0;
+      const inserted = await transaction.execute({
+        sql: `INSERT OR IGNORE INTO lab_ingredients
+                (id, title, quantity_grams, quantity_known, reorder_point_grams, active, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        args: [id, ingredient.title, quantityGrams, quantityKnown ? 1 : 0, ingredient.reorderPointGrams, now, now],
+      });
+      if (Number(inserted.rowsAffected ?? 0) === 0) {
+        skippedCount += 1;
+        continue;
+      }
+      if (quantityKnown) {
+        await transaction.execute({
+          sql: `INSERT INTO lab_ingredient_ledger
+                  (id, ingredient_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
+                VALUES (?, ?, 'manual_count', ?, 0, ?, ?, ?, ?)`,
+          args: [randomUUID(), id, input.actor.label, quantityGrams, quantityGrams, `ingredient:${id}`, now],
+        });
+      }
+      created.push({ id, title: ingredient.title, quantityGrams, quantityKnown, reorderPointGrams: ingredient.reorderPointGrams });
+    }
+    if (created.length) {
+      await recordActivityEventInTransaction(transaction, {
+        actor: input.actor,
+        source: "manual",
+        eventName: input.imported ? "labs.ingredient.imported" : "labs.ingredient.created",
+        entityType: "lab_ingredient",
+        entityId: created.length === 1 ? created[0].id : "lab-ingredient-import",
+        summary: input.imported ? `Imported ${created.length} ingredient${created.length === 1 ? "" : "s"}` : `Created ingredient ${created[0].title}`,
+        details: { ingredientCount: created.length, skippedCount },
+        outcome: "succeeded",
+      });
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  return { created, createdCount: created.length, skippedCount };
+}
+
 export async function createLabBatch(input: {
   formulaId: string;
   batchNumber: string;
   targetGrams: number;
   outputQuantity?: number;
   outputUnit?: LabQuantityUnit;
+  expectedFormulaRevision?: string;
+  expectedFillQuantity?: number | null;
+  expectedFillUnit?: LabQuantityUnit | null;
+  expectedIngredients?: Array<{ ingredientId: string; quantityGrams: number; quantityKnown: boolean }>;
   actor: ActivityActor;
 }) {
   const db = await initializeLabsData();
@@ -4010,23 +4226,25 @@ export async function createLabBatch(input: {
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
   try {
-    const formula = await transaction.execute({ sql: "SELECT id FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
+    const formula = await transaction.execute({ sql: "SELECT id, updated_at FROM lab_formulas WHERE id = ? AND active = 1", args: [input.formulaId] });
     if (!formula.rows[0]) throw new Error("LAB_FORMULA_NOT_FOUND");
+    if (input.expectedFormulaRevision !== undefined) assertAssistantExpectedValue(stringValue(formula.rows[0].updated_at), input.expectedFormulaRevision, "formula revision");
     const outputResult = await transaction.execute({
-      sql: `SELECT fo.physical_variant_id, fo.fill_quantity, fo.fill_unit
-            FROM lab_formula_outputs fo
-            WHERE fo.formula_id = ? AND fo.active = 1`,
+      sql: `SELECT fp.fill_quantity, fp.fill_unit
+            FROM lab_formula_packaging fp
+            WHERE fp.formula_id = ?`,
       args: [input.formulaId],
     });
     const outputRow = outputResult.rows[0];
-    const output = outputRow ? {
-      physicalVariantId: stringValue(outputRow.physical_variant_id),
+    const packaging = outputRow ? {
       fillQuantity: numberValue(outputRow.fill_quantity),
       fillUnit: productionUnit(outputRow.fill_unit),
     } : null;
-    const outputUnit = input.outputUnit ?? output?.fillUnit ?? "g";
+    if (input.expectedFillQuantity !== undefined) assertAssistantExpectedValue(packaging?.fillQuantity ?? null, input.expectedFillQuantity, "formula fill quantity");
+    if (input.expectedFillUnit !== undefined) assertAssistantExpectedValue(packaging?.fillUnit ?? null, input.expectedFillUnit, "formula fill unit");
+    const outputUnit = input.outputUnit ?? packaging?.fillUnit ?? "g";
     productionUnit(outputUnit);
-    if (output && outputUnit !== output.fillUnit) throw new Error("LAB_OUTPUT_UNIT_MISMATCH");
+    if (packaging && outputUnit !== packaging.fillUnit) throw new Error("LAB_PACKAGING_UNIT_MISMATCH");
     const outputQuantity = input.outputQuantity === undefined ? targetGrams : productionQuantity(input.outputQuantity);
     calculateBatchAllocation(outputQuantity, 0, outputUnit);
     const rows = await transaction.execute({ sql: `SELECT fi.ingredient_id, fi.percentage, fi.calculation, i.title, i.quantity_grams, i.quantity_known
@@ -4034,6 +4252,15 @@ export async function createLabBatch(input: {
       WHERE fi.formula_id = ? ORDER BY fi.sort_order`, args: [input.formulaId] });
     if (!rows.rows.length) throw new Error("LAB_FORMULA_HAS_NO_LINES");
     const lines = rows.rows.map((row) => ({ id: stringValue(row.ingredient_id), title: stringValue(row.title), percentage: row.percentage === null ? null : numberValue(row.percentage), calculation: stringValue(row.calculation), quantity: numberValue(row.quantity_grams), known: numberValue(row.quantity_known) === 1 }));
+    if (input.expectedIngredients) {
+      const expected = new Map(input.expectedIngredients.map((ingredient) => [ingredient.ingredientId, ingredient]));
+      if (expected.size !== lines.length || lines.some((line) => !expected.has(line.id))) throw new Error("MCP_STALE_STATE: formula ingredients changed since they were read");
+      for (const line of lines) {
+        const snapshot = expected.get(line.id)!;
+        assertAssistantExpectedValue(line.quantity, snapshot.quantityGrams, `ingredient ${line.id} quantity`);
+        assertAssistantExpectedValue(Number(line.known), Number(snapshot.quantityKnown), `ingredient ${line.id} count status`);
+      }
+    }
     const fixedTotal = lines.filter((line) => line.calculation === "fixed").reduce((sum, line) => sum + (line.percentage ?? 0), 0);
     const requirements = lines.flatMap((line) => {
       if (line.calculation === "manual") return [];
@@ -4043,13 +4270,15 @@ export async function createLabBatch(input: {
     const duplicate = await transaction.execute({ sql: "SELECT id FROM lab_batches WHERE batch_number = ?", args: [batchNumber] });
     if (duplicate.rows[0]) throw new Error("LAB_BATCH_ALREADY_EXISTS");
     const batchId = `lab-batch-${randomUUID()}`;
-    await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor.label, now] });
+    const deductions: Array<{ ingredientId: string; requiredGrams: number; quantityBefore: number; quantityAfter: number; status: "deducted" | "not_recorded" }> = [];
+    await transaction.execute({ sql: "INSERT INTO lab_batches (id, formula_id, batch_number, target_grams, actor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", args: [batchId, input.formulaId, batchNumber, targetGrams, input.actor.label, now, now] });
     await transaction.execute({
       sql: "INSERT INTO lab_batch_allocations (batch_id, total_quantity, quantity_unit, packaged_quantity, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)",
       args: [batchId, outputQuantity, outputUnit, now, now],
     });
     for (const line of requirements) {
       const deduction = planIngredientDeduction(line.quantity, line.known, line.required);
+      deductions.push({ ingredientId: line.id, requiredGrams: deduction.required, quantityBefore: deduction.before, quantityAfter: deduction.after, status: deduction.status });
       if (deduction.status === "deducted") {
         await transaction.execute({ sql: "UPDATE lab_ingredients SET quantity_grams = ?, updated_at = ? WHERE id = ?", args: [deduction.after, now, line.id] });
         await transaction.execute({ sql: `INSERT INTO lab_ingredient_ledger (id, ingredient_id, batch_id, change_type, actor, quantity_before, quantity_after, quantity_delta, reference, created_at)
@@ -4068,31 +4297,30 @@ export async function createLabBatch(input: {
       outcome: "succeeded",
     });
     await transaction.commit();
-    return { id: batchId, batchNumber, targetGrams, outputQuantity, outputUnit };
+    return { id: batchId, batchNumber, targetGrams, outputQuantity, outputUnit, deductions };
   } catch (error) { await transaction.rollback(); throw error; } finally { transaction.close(); }
 }
 
 export async function updateLabBatchPackaging(input: {
   batchId: string;
   addedQuantity: number;
+  expectedPackagedQuantity?: number;
   actor: ActivityActor;
-  updateInventory?: boolean;
 }) {
   const added = productionQuantity(input.addedQuantity);
-  const updateInventory = input.updateInventory !== false;
   const db = await getTursoClient();
   const transaction = await db.transaction("write");
   const now = new Date().toISOString();
   try {
     const batch = await transaction.execute({
-      sql: `SELECT b.id, b.formula_id, b.target_grams,
+      sql: `SELECT b.id, b.formula_id, b.target_grams, b.updated_at,
                    COALESCE(a.total_quantity, b.target_grams) AS total_quantity,
                    COALESCE(a.quantity_unit, 'g') AS quantity_unit,
                    COALESCE(a.packaged_quantity, 0) AS packaged_quantity,
-                   fo.physical_variant_id, fo.fill_quantity, fo.fill_unit
+                   fp.fill_quantity, fp.fill_unit
             FROM lab_batches b
             LEFT JOIN lab_batch_allocations a ON a.batch_id = b.id
-            LEFT JOIN lab_formula_outputs fo ON fo.formula_id = b.formula_id AND fo.active = 1
+            LEFT JOIN lab_formula_packaging fp ON fp.formula_id = b.formula_id
             WHERE b.id = ? LIMIT 1`,
       args: [input.batchId],
     });
@@ -4102,31 +4330,16 @@ export async function updateLabBatchPackaging(input: {
     const total = productionQuantity(numberValue(row.total_quantity));
     const unit = productionUnit(row.quantity_unit);
     const current = productionQuantity(numberValue(row.packaged_quantity), true);
+    if (input.expectedPackagedQuantity !== undefined) assertAssistantExpectedValue(current, input.expectedPackagedQuantity, "batch packaged quantity");
     const allocation = addPackagingIncrement(total, current, added, unit);
 
-    const variantId = stringValue(row.physical_variant_id);
-    if (!variantId) throw new Error("LAB_OUTPUT_NOT_LINKED");
-    const fillUnit = productionUnit(row.fill_unit);
-    if (unit !== fillUnit) throw new Error("LAB_OUTPUT_UNIT_MISMATCH");
-    const finishedUnits = packagedUnits(added, unit, productionQuantity(numberValue(row.fill_quantity)), fillUnit);
-    const inventoryEffect = packagingInventoryEffect(finishedUnits, updateInventory);
-    let before = 0;
-    let after = 0;
-    let itemId = "";
-    if (inventoryEffect.shouldUpdate) {
-      const variant = await transaction.execute({
-        sql: `SELECT piv.id, piv.physical_item_id, piv.quantity, piv.quantity_known
-              FROM physical_inventory_variants piv
-              JOIN physical_inventory_items pi ON pi.id = piv.physical_item_id
-              WHERE piv.id = ? AND piv.active = 1 AND pi.active = 1`,
-        args: [variantId],
-      });
-      const variantRow = variant.rows[0];
-      if (!variantRow) throw new Error("LAB_OUTPUT_VARIANT_NOT_FOUND");
-      before = numberValue(variantRow.quantity);
-      after = before + inventoryEffect.quantityDelta;
-      if (!Number.isSafeInteger(after)) throw new Error("MASTER_INVENTORY_LIMIT");
-      itemId = stringValue(variantRow.physical_item_id);
+    let finishedUnits: number | null = null;
+    let packagingLabel = "Unit fill size not configured";
+    if (row.fill_quantity !== null && row.fill_quantity !== undefined) {
+      const fillUnit = productionUnit(row.fill_unit);
+      if (unit !== fillUnit) throw new Error("LAB_PACKAGING_UNIT_MISMATCH");
+      finishedUnits = packagedUnits(added, unit, productionQuantity(numberValue(row.fill_quantity)), fillUnit);
+      packagingLabel = `${numberValue(row.fill_quantity)} ${fillUnit} per unit`;
     }
 
     await transaction.execute({
@@ -4135,34 +4348,24 @@ export async function updateLabBatchPackaging(input: {
             ON CONFLICT(batch_id) DO UPDATE SET packaged_quantity = excluded.packaged_quantity, updated_at = excluded.updated_at`,
       args: [input.batchId, allocation.total, allocation.unit, allocation.packaged, now, now],
     });
-    if (inventoryEffect.shouldUpdate) {
-      await transaction.execute({
-        sql: "UPDATE physical_inventory_variants SET quantity = ?, updated_at = ? WHERE id = ?",
-        args: [after, now, variantId],
-      });
-      await transaction.execute({
-        sql: `UPDATE physical_inventory_items
-              SET quantity = COALESCE((SELECT SUM(quantity) FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1), 0),
-                  quantity_known = CASE WHEN EXISTS (SELECT 1 FROM physical_inventory_variants WHERE physical_item_id = ? AND active = 1 AND quantity_known = 0) THEN 0 ELSE 1 END,
-                  updated_at = ?
-              WHERE id = ?`,
-        args: [itemId, itemId, now, itemId],
-      });
-    }
     await transaction.execute({
       sql: `INSERT INTO lab_batch_packaging_ledger
-            (id, batch_id, physical_variant_id, actor, packaged_before, packaged_after, packaged_delta, finished_units, inventory_updated, reference, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [randomUUID(), input.batchId, variantId, input.actor.label, current, allocation.packaged, added, finishedUnits, inventoryEffect.shouldUpdate ? 1 : 0, `production fill · ${variantId}`, now],
+            (id, batch_id, actor, packaged_before, packaged_after, packaged_delta,
+             finished_units, packaging_label, inventory_updated, reference, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      args: [randomUUID(), input.batchId, input.actor.label, current, allocation.packaged, added, finishedUnits, packagingLabel, `Labs packaging · ${input.batchId}`, now],
     });
+    await transaction.execute({ sql: "UPDATE lab_batches SET updated_at = ? WHERE id = ?", args: [nextLabBatchUpdatedAt(stringValue(row.updated_at)), input.batchId] });
     await recordActivityEventInTransaction(transaction, {
       actor: input.actor,
       source: "manual",
       eventName: "labs.batch.packaged",
       entityType: "lab_batch",
       entityId: input.batchId,
-      summary: `Allocated ${finishedUnits} packaged unit${finishedUnits === 1 ? "" : "s"} from a batch`,
-      details: { addedQuantity: added, finishedUnits, inventoryUpdated: inventoryEffect.shouldUpdate },
+      summary: finishedUnits === null
+        ? `Allocated ${added} ${unit} of packaged bulk from a batch`
+        : `Allocated ${finishedUnits} packaged unit${finishedUnits === 1 ? "" : "s"} from a batch`,
+      details: { addedQuantity: added, quantityUnit: unit, finishedUnits, inventoryUpdated: false },
       outcome: "succeeded",
     });
     await transaction.commit();

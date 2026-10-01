@@ -1,8 +1,9 @@
 import { z } from "zod";
+import type { AssistantWriteScope } from "@/lib/mcp-write-contracts";
 
 export const MCP_REGISTRY_VERSION = "2026-09-14-v1" as const;
 
-export type AssistantScope = "assistant:read" | "assistant:pii";
+export type AssistantScope = "assistant:read" | "assistant:pii" | AssistantWriteScope;
 
 export type AssistantDatasetId =
   | "sales"
@@ -133,7 +134,7 @@ const definitions: DatasetDefinition[] = [
   {
     id: "channel_listings", title: "Channel listings and mappings", description: "Listings and registered mapping relationships; never initializes or rewrites the listing catalogue.", freshness: "Latest imported listing and mapping state.", dateFields: ["updated_at"],
     fields: { id: operational("string", "Listing identifier"), channel: operational("string", "shopify or tiktok", { filterable: true }), external_product_id: operational("string", "Provider product identifier", { filterable: true }), external_variant_id: operational("string", "Provider variant identifier", { filterable: true }), title: operational("string", "Listing title", { filterable: true, sortable: true }), variant_title: operational("string", "Listing variant title", { filterable: true }), channel_quantity: operational("integer", "Provider display quantity", { aggregatable: true, sortable: true }), listing_kind: operational("string", "individual, bundle, or unknown", { filterable: true }), mapping_status: operational("string", "confirmed, review, or unmapped", { filterable: true, sortable: true }), active: operational("boolean", "Whether listing is active", { filterable: true }), updated_at: operational("date", "Last listing update", { sortable: true }) },
-    metrics: ["count", "sum", "average", "minimum", "maximum"], includes: ["components"], examples: ["Show unmapped TikTok listings"],
+    metrics: ["count", "sum", "average", "minimum", "maximum"], includes: ["components", "product_link"], examples: ["Show unmapped TikTok listings"],
   },
   {
     id: "inventory_history", title: "Inventory history", description: "Inventory ledger and stock movement facts; reads do not append audit rows.", freshness: "Ledger write timestamps.", dateFields: ["created_at"],
@@ -147,8 +148,8 @@ const definitions: DatasetDefinition[] = [
   },
   {
     id: "labs", title: "Labs", description: "Ingredients, formulas, and batches. Labs quantities are grams and do not affect finished-product stock.", freshness: "Latest Labs record updates.", dateFields: ["updated_at", "created_at"],
-    fields: { id: operational("string", "Labs record identifier"), record_type: operational("string", "ingredient, formula, or batch", { filterable: true }), title: operational("string", "Ingredient or formula title", { filterable: true, sortable: true }), subtitle: operational("string", "Formula subtitle"), notes: operational("string", "Formula notes"), quantity_grams: operational("number", "Ingredient quantity in grams", { aggregatable: true, sortable: true }), reorder_point_grams: operational("number", "Ingredient reorder threshold in grams", { aggregatable: true }), formula_id: operational("string", "Formula identifier", { filterable: true }), batch_number: operational("string", "Batch number", { filterable: true, sortable: true }), target_grams: operational("number", "Batch target in grams", { aggregatable: true }), actor: operational("string", "Batch actor", { filterable: true }), created_at: operational("date", "Creation timestamp", { filterable: true, sortable: true }), updated_at: operational("date", "Last update timestamp", { sortable: true }) },
-    metrics: ["count", "sum", "average", "minimum", "maximum"], includes: ["lines"], examples: ["Which formulas use an ingredient?"],
+    fields: { id: operational("string", "Labs record identifier"), record_type: operational("string", "ingredient, formula, or batch", { filterable: true }), title: operational("string", "Ingredient or formula title", { filterable: true, sortable: true }), subtitle: operational("string", "Formula subtitle"), notes: operational("string", "Formula or batch notes"), quantity_grams: operational("number", "Ingredient quantity in grams", { aggregatable: true, sortable: true }), quantity_known: operational("boolean", "Whether ingredient quantity is known", { filterable: true }), reorder_point_grams: operational("number", "Ingredient reorder threshold in grams", { aggregatable: true }), formula_id: operational("string", "Formula identifier", { filterable: true }), batch_number: operational("string", "Batch number", { filterable: true, sortable: true }), target_grams: operational("number", "Batch target in grams", { aggregatable: true }), actor: operational("string", "Batch actor", { filterable: true }), created_at: operational("date", "Creation timestamp", { filterable: true, sortable: true }), updated_at: operational("date", "Last update timestamp", { sortable: true }) },
+    metrics: ["count", "sum", "average", "minimum", "maximum"], includes: ["lines", "packaging"], examples: ["Which formulas use an ingredient?"],
   },
   {
     id: "affiliate_reporting", title: "TikTok affiliate reporting", description: "Normalized TikTok affiliate attribution facts, kept separate from ordinary TikTok Shop orders.", freshness: "Latest affiliate import and sync status.", dateFields: ["source_created_at", "source_updated_at", "imported_at"],

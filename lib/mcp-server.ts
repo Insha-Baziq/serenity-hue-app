@@ -3,6 +3,8 @@ import { z } from "zod";
 import { publicDatasetCatalog, assistantQueryRequestSchema, assistantReportRequestSchema, type AssistantPrincipal } from "@/lib/mcp-contracts";
 import { assistantQueryError, getAssistantReport, runAssistantQuery } from "@/lib/assistant-read-repository";
 import { logMcpEvent } from "@/lib/mcp-logging";
+import { MCP_STAFF_WRITE_TOOLS } from "@/lib/mcp-write-contracts";
+import { mcpWriteEnabled } from "@/lib/mcp-auth";
 
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
@@ -77,6 +79,32 @@ export function createSerenityHueMcpServer(principal: AssistantPrincipal, reques
       return result({ error: safe.code, message: safe.message }, true);
     }
   });
+
+  if (mcpWriteEnabled()) {
+    for (const tool of MCP_STAFF_WRITE_TOOLS) {
+      if (!principal.scopes.includes(tool.scope)) continue;
+      server.registerTool(tool.name, {
+        title: tool.name.replaceAll("_", " "),
+        description: `Perform the named Serenity Hue staff action ${tool.name}. Uses existing business rules, a required idempotency key, a scoped OAuth grant, and activity history.`,
+        inputSchema: tool.schema,
+        annotations: { readOnlyHint: false, destructiveHint: tool.name.startsWith("archive_") || tool.name.startsWith("clear_"), idempotentHint: true, openWorldHint: tool.name.startsWith("refresh_") || tool.name.startsWith("run_") || tool.name.startsWith("start_") },
+        _meta: { securitySchemes: [{ type: "oauth2", scopes: [tool.scope] }], requiredScopes: [tool.scope] },
+      }, async (input: Record<string, unknown>) => {
+        const started = Date.now();
+        try {
+          const { runAssistantWrite } = await import("@/lib/assistant-write-repository");
+          const value = await runAssistantWrite(principal, tool.name, input);
+          logMcpEvent({ event: "tool_call", success: true, requestId, clientId: principal.clientId, userId: principal.userId, toolName: tool.name, statusCode: 200, durationMs: Date.now() - started });
+          return result(value);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "MCP_WRITE_FAILED";
+          const code = /^(MCP_[A-Z_]+|LAB_[A-Z_]+)/.exec(message)?.[1] ?? "MCP_WRITE_FAILED";
+          logMcpEvent({ event: "tool_call", success: false, reasonCode: code, requestId, clientId: principal.clientId, userId: principal.userId, toolName: tool.name, statusCode: 400, durationMs: Date.now() - started });
+          return result({ error: code, message: code === "MCP_WRITE_FAILED" ? "The staff action failed. Check the app state before retrying with a new key." : message }, true);
+        }
+      });
+    }
+  }
 
   return server;
 }

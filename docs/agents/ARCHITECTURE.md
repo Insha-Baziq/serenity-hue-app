@@ -63,14 +63,18 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   getTikTokAdsReport(period) -> retained, provider-attributed Ads KPI view model;
     advertiser rows drive headline metrics while campaign/ad-group/ad and product
     breakdowns are exposed only when the provider returns those identifiers
-  getCustomers / getEmployees / createEmployee
+  getCustomers / getEmployees / createEmployee / inviteEmployee / acceptEmployeeInvitation
   getInventory / getChannelInventory / getPhysicalInventory / getProductDetail
   create/update/deletePackagingMaterial
   applyPhysicalInventoryAdjustments / updatePhysicalProduct / add/update/deletePhysicalInventoryVariant
   getPhysicalChannelListings / savePhysicalListingMappings / savePhysicalChannelProductLink
-  getLabIngredients / getLabFormulas / getLabFormula / getLabBatches / getLabBatchDetail
-  createLabFormula / updateLabFormulaOutput / updateLabIngredient / createLabBatch /
-  updateLabBatchPackaging({ batchId, addedQuantity, actor, updateInventory? })
+  getLabIngredients / getLabFormulas / getLabFormula / getLabBatches / getLabBatchDetail;
+    batch rows include notes plus exact created/updated timestamps
+  createLabFormula / createLabIngredients / updateLabFormulaPackaging / updateLabIngredient / createLabBatch /
+  updateLabBatchPackaging({ batchId, addedQuantity, actor }) -> Labs-only packaging ledger;
+    optional formula fill measurement determines finished unit counts, and packaged output never mutates master on-hand
+  updateLabBatchNotes({ batchId, notes, expectedUpdatedAt, actor }) -> authenticated,
+    stale-safe batch note replacement with activity provenance and no inventory effect
   recordActivityEvent / recordActivityEvents / getActivityLogPage / pruneExpiredActivityLog
   ActivityEventInput / ActivityLogQuery / ActivityLogPage
   recordSyncRun / takeSyncLease / releaseSyncLease / reconcileInventoryAlerts
@@ -128,9 +132,9 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 ### Labs production domain
 
-- **Owns**: gram-based ingredient calculations, formula-to-physical-variant output links, batch bulk allocations, packaging increments, atomic finished-unit updates, and ingredient ledger behavior.
-- **Public interface**: formula/ingredient/batch repository functions plus `LabsWorkspace`, `LabFormulaWorkspace`, `LabIngredientsWorkspace`, and `LabBatchesWorkspace`.
-- **Hides**: percentage/remainder calculation, advisory ingredient deduction planning, unit-compatible fill conversion, batch allocation invariants, and physical variant update transactions.
+- **Owns**: gram-based ingredient calculations, batch bulk allocations, packaging increments, optional finished-unit counts, and ingredient ledger behavior.
+- **Public interface**: formula/ingredient/batch repository functions plus `LabsWorkspace`, `LabFormulaWorkspace`, `LabIngredientsWorkspace`, and `LabBatchesWorkspace`; `POST /api/labs/ingredients` creates one inventory item, `POST /api/labs/ingredients/import` imports a CSV, and `DELETE /api/labs/ingredients` safely removes only unlinked ingredients from active inventory.
+- **Hides**: percentage/remainder calculation, advisory ingredient deduction planning, unit-compatible fill conversion when a fill is configured, batch allocation invariants, and packaging ledger writes.
 - **Depends on**: repository, Labs seed definitions, authenticated routes, shared types.
 - **Tested at**: `tests/lab-production.test.mjs` protects allocation, unit conversion, and advisory ingredient deduction rules; browser verification remains needed for the authenticated side-sheet flow.
 - **Depth**: mixed; pure allocation rules are isolated, while repository SQL remains broad.
@@ -149,7 +153,7 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - App pages and route handlers never issue SQL; persistence goes through repository/domain interfaces.
 - Client components never read server credentials or call provider SDKs directly.
 - Physical catalogue quantities do not silently update Shopify/TikTok channel quantities.
-- Ingredient calculations remain grams. A formula may link to an exact physical variant with a per-unit fill amount in grams or milliliters; packaging increments finished physical stock, while remaining bulk stays in Labs.
+- Ingredient calculations remain grams. Formula packaging optionally records a per-unit fill amount in grams or milliliters. Without a fill amount, Labs still records packaged bulk and leaves finished unit counts unknown. Packaging never increments finished physical stock; remaining bulk stays in Labs.
 - Ledgers and historical application rows are append-only; corrections are new records.
 - Provider payloads are normalized before they reach UI contracts; tokens and buyer details remain server-only.
 - Authenticated mutation routes must validate the session before invoking a write.
@@ -158,19 +162,25 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 
 - **Owns**: the stateless Streamable HTTP MCP adapter, OAuth 2.1 authorization-code
   flow with S256 PKCE, the versioned dataset registry, the validated read-only query DSL,
-  assistant report adapters, signed cursors, staged PII scope, distributed rate limits,
-  and redacted connector logging.
+  named staff write contracts, assistant report adapters, signed cursors, staged PII
+  and write scopes, distributed rate limits, and redacted connector logging.
 - **Public interface**: `/api/mcp`; the OAuth/discovery routes documented in
   `docs/REMOTE-MCP.md`; `describe_serenity_hue_data`, `query_serenity_hue`,
-  `get_serenity_hue_report`, and `get_serenity_hue_freshness`.
+  `get_serenity_hue_report`, and `get_serenity_hue_freshness`; the 29 named write
+  tools in `lib/mcp-write-contracts.ts`; `runAssistantWrite(principal, name, input)`;
+  `executeMcpWriteOnce(db, operation, perform)`; `inviteEmployee` and the one-use
+  `/invite/[token]` setup flow.
 - **Hides**: OAuth token/code hashes, client registration records, database credentials,
   SQL fragments, provider payloads, synchronization behavior, and all unregistered or
   secret-bearing fields.
 - **Depends on**: `lib/turso.ts` for the provider-enforced read-only database boundary,
-  the primary auth database for OAuth/rate-limit records, `lib/mcp-contracts.ts`,
-  `lib/assistant-read-repository.ts`, and the official MCP SDK.
-- **Tested at**: contract/import-graph tests in `tests/mcp-connector.test.mjs`; full
-  protocol and client compatibility requires live staging checks described in
-  `docs/REMOTE-MCP.md`.
+  the primary database for OAuth/rate-limit/idempotency records, `lib/mcp-contracts.ts`,
+  `lib/assistant-read-repository.ts`, `lib/assistant-write-repository.ts`, existing
+  repository/domain commands, and the official MCP SDK. The write module is imported
+  dynamically by the tool callback, leaving the read repository's import graph isolated.
+- **Tested at**: contract/import-graph and route-coverage tests; the isolated real
+  protocol run in `scripts/verify-mcp-write.mjs` exercises writes, replay, stale state,
+  ledger, audit, invitation, and revocation. Live provider-client compatibility still
+  requires staging checks described in `docs/REMOTE-MCP.md`.
 - **Depth**: new security-critical boundary; production remains gated on database-level
   write rejection and live Claude/ChatGPT/Codex validation.

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { authenticateBrowserUser, createAuthorizationCode, jsonResponse, loginReturnTo, mcpEnabled, mcpIssuerUrl, redirectNoStore, safeExternalRedirect, signConsentRequest, validateAuthorizationRequest, verifyConsentRequest } from "@/lib/mcp-auth";
+import { authenticateBrowserUser, createAuthorizationCode, jsonResponse, loginReturnTo, mayGrantWriteScopes, mcpEnabled, mcpIssuerUrl, redirectNoStore, safeExternalRedirect, signConsentRequest, validateAuthorizationRequest, verifyConsentRequest } from "@/lib/mcp-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +38,9 @@ async function consentPage(request: Request, method: "GET" | "POST") {
     const target = `/login?returnTo=${encodeURIComponent(loginReturnTo(request))}`;
     return redirectNoStore(new URL(target, url.origin));
   }
+  if (!mayGrantWriteScopes(user.id, validated.request.clientId, validated.request.scope)) {
+    return html("<!doctype html><title>Write access unavailable</title><p>This account and connector are not approved for Serenity Hue write access.</p>", 403);
+  }
   if (method === "POST") {
     const form = await request.formData();
     const consent = String(form.get("consent") ?? "deny");
@@ -50,8 +53,23 @@ async function consentPage(request: Request, method: "GET" | "POST") {
     } catch { return html("<!doctype html><title>Authorization failed</title><p>We could not create the authorization code. Try again.</p>", 500); }
   }
   const csrf = signConsentRequest(validated.request, user.id);
-  const scopes = validated.request.scope.map((scope) => `<li><code>${escapeHtml(scope)}</code> — ${scope === "assistant:pii" ? "approved customer and operational contact fields" : "read-only operational data"}</li>`).join("");
-  return html(`<!doctype html><html><head><title>Connect Serenity Hue</title></head><body style="font:16px system-ui;max-width:600px;margin:4rem auto;padding:0 1rem"><h1>Connect Serenity Hue Operations</h1><p><strong>${escapeHtml(validated.client.clientName)}</strong> is requesting access to the Serenity Hue Operations data connector.</p><p>This connector is read-only. It cannot change orders, inventory, customers, settings, or synchronization.</p><h2>Requested access</h2><ul>${scopes}</ul><p>Signed in as <strong>${escapeHtml(user.email ?? user.name ?? "approved user")}</strong>.</p><form method="post" action="${escapeHtml(url.toString())}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}" /><button name="consent" value="approve" type="submit">Approve access</button> <button name="consent" value="deny" type="submit">Decline</button></form></body></html>`);
+  const scopeDescriptions: Record<string, string> = {
+    "assistant:read": "read operational data", "assistant:pii": "read approved contact fields",
+    "assistant:write:inventory": "change physical products, variants, and stock counts",
+    "assistant:write:packaging": "change packaging materials and counts",
+    "assistant:write:mappings": "change channel listing and product links",
+    "assistant:write:labs": "change ingredients, formulas, batches, and Labs packaging",
+    "assistant:write:shipments": "link Parcel2Go shipments to orders",
+    "assistant:write:team": "invite employees",
+    "assistant:write:integrations": "run manual syncs and report refreshes",
+    "assistant:write:connections": "start TikTok Shop and Ads connection flows",
+    offline_access: "keep this connection active through refresh tokens",
+  };
+  const scopes = validated.request.scope.map((scope) => `<li><code>${escapeHtml(scope)}</code> — ${escapeHtml(scopeDescriptions[scope] ?? scope)}</li>`).join("");
+  const writeNotice = validated.request.scope.some((scope) => scope.startsWith("assistant:write:"))
+    ? "<p>With these permissions, your assistant can make the selected business changes directly after you connect it. Routine changes will not require another Serenity Hue login or approval.</p>"
+    : "<p>This grant is read-only and cannot change business records.</p>";
+  return html(`<!doctype html><html><head><title>Connect Serenity Hue</title></head><body style="font:16px system-ui;max-width:600px;margin:4rem auto;padding:0 1rem"><h1>Connect Serenity Hue Operations</h1><p><strong>${escapeHtml(validated.client.clientName)}</strong> is requesting access to Serenity Hue Operations.</p>${writeNotice}<h2>Requested access</h2><ul>${scopes}</ul><p>Signed in as <strong>${escapeHtml(user.email ?? user.name ?? "approved user")}</strong>.</p><form method="post" action="${escapeHtml(url.toString())}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}" /><button name="consent" value="approve" type="submit">Approve access</button> <button name="consent" value="deny" type="submit">Decline</button></form></body></html>`);
 }
 
 export async function GET(request: Request) { return consentPage(request, "GET"); }

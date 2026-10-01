@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, packagingInventoryEffect, planIngredientDeduction } from "../lib/lab-production.ts";
+import { addPackagingIncrement, calculateBatchAllocation, packagedUnits, planIngredientDeduction } from "../lib/lab-production.ts";
 
 test("batch allocation reports remaining bulk from the packaged amount", () => {
   assert.deepEqual(calculateBatchAllocation(5000, 1000, "ml"), {
@@ -40,11 +40,6 @@ test("packaged output must be a whole number of finished units", () => {
 
 test("packaged and fill units cannot be mixed without an explicit conversion", () => {
   assert.throws(() => packagedUnits(1000, "ml", 10, "g"), /PACKAGED_UNIT_MISMATCH/);
-});
-
-test("packaging can record finished units without changing master inventory", () => {
-  assert.deepEqual(packagingInventoryEffect(100, false), { shouldUpdate: false, quantityDelta: 0 });
-  assert.deepEqual(packagingInventoryEffect(100, true), { shouldUpdate: true, quantityDelta: 100 });
 });
 
 test("an uncounted ingredient does not block a batch or create a negative count", () => {

@@ -408,6 +408,50 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 860px) { .lab-formula-builder__row { grid-template-columns: minmax(160px, 1.2fr) minmax(128px, .8fr) minmax(100px, .55fr) 34px; grid-template-areas: "ingredient calculation ratio remove" "phase note note note"; }.lab-formula-builder__note { min-width: 0; } }
 @media (max-width: 700px) { .labs-section-heading { align-items: flex-start; }.labs-section-heading > .ui-button { flex: 0 0 auto; }.labs-formula-grid { grid-template-columns: 1fr; }.labs-formula-card { min-height: 147px; }.labs-ingredients-footer { align-items: flex-start; flex-direction: column; }.labs-ingredients-footer .pagination { margin-left: 0; }.lab-formula-builder__details { grid-template-columns: 1fr; }.lab-formula-builder__details > label:last-child { grid-column: auto; }.lab-formula-builder__heading { align-items: flex-start; flex-direction: column; }.lab-formula-builder__row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; grid-template-areas: "ingredient ingredient ingredient" "calculation ratio remove" "phase phase phase" "note note note"; }.lab-formula-builder__calculation-note { grid-column: 1 / -1; }.lab-formula-builder__remove { align-self: end; } }
 
+/* Labs ingredient inventory actions and searchable formula ingredient picker. */
+.labs-ingredient-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; }
+.labs-ingredient-file-input { display: none; }
+.labs-ingredient-import-status { margin: 0 0 12px; color: var(--plum); font-size: 12px; }
+.labs-ingredient-csv-hint { color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.labs-ingredient-csv-hint code { padding: 2px 4px; border-radius: 4px; background: #f8edf3; color: var(--plum); font-size: 10px; }
+.labs-add-ingredient-dialog { max-height: calc(100dvh - 28px); overflow-y: auto; }
+.labs-add-ingredient-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.labs-add-ingredient-name { grid-column: 1 / -1; }
+.labs-ingredient-row-actions { display: flex; align-items: center; gap: 6px; }
+.labs-delete-button { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #a45164; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease; }
+.labs-delete-button:hover { border-color: #edcbd0; background: #fff0f1; color: var(--red); }
+.labs-delete-button:focus-visible { outline: 3px solid rgba(193, 58, 155, .28); outline-offset: 2px; }
+.labs-delete-confirm { background: var(--red) !important; }
+.labs-delete-confirm:hover { background: #ad3642 !important; }
+.labs-delete-ingredient-error { padding: 11px 12px; border: 1px solid #f1d3d5; border-radius: 9px; background: #fff5f5; }
+.lab-formula-builder__rows { overflow: visible; }
+.lab-formula-builder__row { position: relative; }
+.lab-ingredient-picker { position: relative; min-width: 0; }
+.lab-ingredient-picker__trigger { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--paper-strong); color: var(--ink); text-align: left; font: inherit; font-size: 12px; }
+.lab-ingredient-picker__trigger:hover, .lab-ingredient-picker__trigger[aria-expanded="true"] { border-color: #b66191; background: #fffafd; }
+.lab-ingredient-picker__trigger:focus-visible { outline: 3px solid rgba(193, 58, 155, .15); outline-offset: 1px; }
+.lab-ingredient-picker__trigger svg { flex: 0 0 auto; color: var(--ink-soft); }
+.lab-ingredient-picker__trigger .is-placeholder { color: var(--ink-faint); }
+.lab-ingredient-picker__popover { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: max(100%, 250px); overflow: hidden; border: 1px solid #e4d2dd; border-radius: 12px; background: #fffefd; box-shadow: 0 16px 36px rgba(58, 24, 47, .17); }
+.lab-ingredient-picker__search { display: flex; align-items: center; gap: 8px; padding: 9px; border-bottom: 1px solid var(--line); color: var(--plum); }
+.lab-ingredient-picker__search .ui-input { height: 37px; min-height: 37px; border-color: transparent; background: #fff8fc; }
+.lab-ingredient-picker__options { max-height: 276px; overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
+.lab-ingredient-picker__option { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; font: inherit; font-size: 12px; cursor: pointer; }
+.lab-ingredient-picker__option:hover, .lab-ingredient-picker__option[aria-selected="true"] { background: #fbedf5; color: var(--plum-dark); }
+.lab-ingredient-picker__option svg { color: var(--magenta); }
+.lab-ingredient-picker__empty { padding: 12px 10px; color: var(--ink-soft); font-size: 11px; line-height: 1.5; }
+@media (max-width: 700px) {
+  .labs-ingredient-actions { width: 100%; justify-content: stretch; }
+  .labs-ingredient-actions .ui-button { flex: 1 1 140px; min-height: 44px; }
+  .labs-add-ingredient-fields { grid-template-columns: 1fr; }
+  .labs-add-ingredient-name { grid-column: auto; }
+  .labs-ingredient-row-actions { justify-content: flex-end; }
+  .labs-delete-button { width: 42px; height: 42px; }
+  .labs-add-ingredient-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); padding: 22px 17px; }
+  .lab-ingredient-picker__popover { width: min(100%, calc(100vw - 56px)); }
+  .lab-batch-actions .ui-button { min-height: 44px; }
+}
+
 /* Orders table: clean, data-dense Shopify-inspired layout */
 .orders-table-frame { overflow: visible; border-color: #e4dce0; border-radius: 10px; background: #fffefd; box-shadow: 0 1px 2px rgba(61, 32, 48, 0.03); }
 .orders-tabs { min-height: 52px; padding: 0 10px 0 7px; background: #fffefd; }
@@ -1955,8 +1999,8 @@ th.ci-qty--active { color: var(--accent-deep); }
 .labs-header-actions, .labs-formula-header__actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
 .labs-formula-header__actions { margin-left: auto; }
 .labs-formula-header .labs-formula-header__actions .ui-button { margin-left: 0; }
-.labs-batches-panel { width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }
-.labs-batches-table { min-width: 880px; }
+.labs-batches-panel { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }
+.labs-batches-table { min-width: 1110px; }
 .labs-batches-table .shadcn-table__head { height: 46px; padding-inline: 18px; background: #fcf7f9; color: var(--plum-dark); font-size: 10px; font-weight: 760; letter-spacing: .025em; }
 .labs-batches-table .shadcn-table__cell { height: 88px; padding-inline: 18px; color: #5c4853; font-size: 12px; }
 .labs-batches-table__row { cursor: pointer; }
@@ -1964,6 +2008,7 @@ th.ci-qty--active { color: var(--accent-deep); }
 .labs-batches-table__row:focus-within .shadcn-table__cell { background: #fff8fb; }
 .labs-batches-table .shadcn-table__cell strong { color: var(--ink); font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .labs-batches-table .shadcn-table__cell small { margin-top: 4px; color: var(--ink-faint); font-size: 10px; }
+.labs-batches-table .shadcn-table__cell time { display: block; min-width: 160px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .labs-batches-table__formula { display: block; max-width: 290px; overflow: hidden; color: #604b56; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .labs-batches-table__action { width: 58px; padding-inline: 8px !important; text-align: center; }
 .labs-batches-table__action .ui-button { color: #9b7e8d; }
@@ -1978,23 +2023,35 @@ th.ci-qty--active { color: var(--accent-deep); }
 .lab-batch-sheet h2 { color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 34px; font-weight: 400; letter-spacing: -.035em; }
 .lab-batch-sheet [data-radix-dialog-description] { margin-top: 5px; color: #66535d; font-size: 13px; font-weight: 700; line-height: 1.4; }
 .lab-batch-sheet__header > p { margin-top: 4px; color: var(--ink-faint); font-size: 10px; }
+.lab-batch-sheet__header time { font-variant-numeric: tabular-nums; }
 .lab-batch-sheet__totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 17px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .lab-batch-sheet__totals > div { display: grid; gap: 6px; padding: 0 14px; border-left: 1px solid var(--line); }
 .lab-batch-sheet__totals > div:first-child { padding-left: 0; border-left: 0; }
 .lab-batch-sheet__totals > div:last-child { padding-right: 0; }
 .lab-batch-sheet__totals dt { color: var(--ink-soft); font-size: 9px; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
 .lab-batch-sheet__totals dd { color: var(--plum-dark); font-size: 14px; font-weight: 760; font-variant-numeric: tabular-nums; }
+.lab-batch-sheet__notes { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.lab-batch-sheet__notes > div { min-width: 0; }
+.lab-batch-sheet__notes h3 { color: var(--ink); font-size: 14px; font-weight: 750; }
+.lab-batch-sheet__notes p { display: -webkit-box; max-height: 4.8em; margin-top: 6px; overflow: hidden; color: var(--ink-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.lab-batch-sheet__notes .ui-button { flex: 0 0 auto; }
+.ui-dialog-overlay--over-sheet { z-index: 70; }
+.ui-dialog.lab-batch-notes-dialog { z-index: 71; width: min(620px, calc(100vw - 32px)); max-height: min(760px, calc(100dvh - 32px)); padding: 30px; }
+.lab-batch-notes-dialog h2 { padding-right: 28px; color: var(--ink); font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-size: 27px; font-weight: 500; }
+.lab-batch-notes-dialog [data-radix-dialog-description] { margin: 6px 0 18px; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+.lab-batch-notes-dialog__reader { min-height: 150px; max-height: min(440px, 50dvh); overflow-y: auto; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fffafd; color: var(--ink); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.lab-batch-notes-dialog__editor { display: grid; gap: 8px; }
+.lab-batch-notes-dialog__editor label { color: var(--ink); font-size: 12px; font-weight: 750; }
+.lab-batch-notes-dialog__editor textarea { width: 100%; min-height: 230px; max-height: 48dvh; resize: vertical; padding: 13px 14px; border: 1px solid var(--line-strong); border-radius: 9px; outline: none; background: var(--paper-strong); color: var(--ink); font: inherit; font-size: 13px; line-height: 1.55; }
+.lab-batch-notes-dialog__editor textarea:focus-visible { border-color: var(--magenta); box-shadow: 0 0 0 3px rgba(193, 58, 155, .15); }
+.lab-batch-notes-dialog__editor small { justify-self: end; color: var(--ink-faint); font-size: 10px; }
+.lab-batch-notes-dialog__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .lab-batch-sheet__packaging { display: grid; gap: 16px; }
 .lab-batch-sheet__packaging-heading { display: grid; gap: 5px; }
 .lab-batch-sheet__packaging-heading h3 { color: var(--ink); font-size: 17px; font-weight: 750; }
 .lab-batch-sheet__packaging-heading p { color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
 .lab-batch-sheet__packaging label { display: grid; gap: 7px; color: #594651; font-size: 11px; font-weight: 750; }
 .lab-batch-sheet__packaging label > small { color: var(--ink-faint); font-size: 10px; font-weight: 500; }
-.lab-batch-sheet__inventory-toggle { display: flex !important; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid #e9cbd2; border-radius: 11px; background: #fff5f6; cursor: pointer; }
-.lab-batch-sheet__inventory-toggle input { width: 22px; height: 22px; flex: 0 0 auto; margin: 1px 0 0; accent-color: var(--red); cursor: pointer; }
-.lab-batch-sheet__inventory-toggle > span { display: grid; gap: 4px; }
-.lab-batch-sheet__inventory-toggle strong { color: #8f2838; font-size: 16px; font-weight: 850; letter-spacing: .015em; line-height: 1.1; }
-.lab-batch-sheet__inventory-toggle small { color: #8f5f67; font-size: 11px; font-weight: 500; line-height: 1.4; }
 .lab-batch-sheet__output, .lab-batch-sheet__warning { display: flex; align-items: flex-start; gap: 9px; font-size: 11px; line-height: 1.45; }.lab-batch-sheet__output { color: var(--plum); }.lab-batch-sheet__output span, .lab-batch-sheet__warning span { display: grid; gap: 3px; }.lab-batch-sheet__output strong { color: var(--ink); font-size: 11px; }.lab-batch-sheet__output small { color: var(--ink-soft); font-size: 10px; }.lab-batch-sheet__warning { padding: 11px 12px; border: 1px solid #eedfc8; border-radius: 9px; background: #fffaf1; color: #a56528; }
 .lab-batch-sheet__preview { display: grid; gap: 3px; padding: 12px 14px; border-radius: 9px; background: #faf3f7; }
 .lab-batch-sheet__preview > span { color: var(--ink-soft); font-size: 9px; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
@@ -2002,7 +2059,7 @@ th.ci-qty--active { color: var(--accent-deep); }
 .lab-batch-sheet__preview small { color: var(--ink-soft); font-size: 10px; }
 .lab-batch-sheet__save { width: 100%; margin-top: 2px; }
 @media (max-width: 700px) { .labs-header-actions, .labs-formula-header__actions { width: 100%; justify-content: stretch; }.labs-header-actions > .ui-button, .labs-formula-header__actions > .ui-button { flex: 1 1 auto; }.labs-formula-header .labs-formula-header__actions { width: 100%; margin: 3px 0 0; }.labs-formula-header .labs-formula-header__actions .ui-button { width: auto; } }
-@media (max-width: 760px) { .lab-batch-sheet { padding-inline: 22px; }.lab-batch-sheet__totals { grid-template-columns: 1fr; padding-block: 5px; }.lab-batch-sheet__totals > div { grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); border-left: 0; }.lab-batch-sheet__totals > div:first-child { border-top: 0; } }
+@media (max-width: 760px) { .lab-batch-sheet { padding-inline: 22px; }.lab-batch-sheet__totals { grid-template-columns: 1fr; padding-block: 5px; }.lab-batch-sheet__totals > div { grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); border-left: 0; }.lab-batch-sheet__totals > div:first-child { border-top: 0; }.lab-batch-sheet__notes { flex-direction: column; }.lab-batch-sheet__notes .ui-button { width: 100%; }.ui-dialog.lab-batch-notes-dialog { padding: 24px 18px; } }
 
 /* Variant-aware physical inventory updates. */
 .physical-products-toolbar__actions { display: flex; align-items: center; gap: 10px; }

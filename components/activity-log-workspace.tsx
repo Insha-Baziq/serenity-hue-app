@@ -23,6 +23,7 @@ function eventLabel(value: string) {
 }
 
 function sourceLabel(value: string, provider: string | null) {
+  if (value === "assistant") return "Assistant";
   if (provider) return provider === "parcel2go" ? "Parcel2Go" : provider === "tiktok-ads" ? "TikTok Ads" : provider === "tiktok" ? "TikTok" : "Shopify";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -106,7 +107,7 @@ export function ActivityLogWorkspace({ page, query }: Props) {
             </Select>
             <Select value={query.source} onValueChange={(value) => navigate({ source: value as ActivityLogQuery["source"] })}>
               <SelectTrigger aria-label="Activity source"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="all">All sources</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="scheduled">Scheduled</SelectItem><SelectItem value="webhook">Webhook</SelectItem><SelectItem value="provider">Provider</SelectItem></SelectContent>
+              <SelectContent><SelectItem value="all">All sources</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="assistant">Assistant</SelectItem><SelectItem value="scheduled">Scheduled</SelectItem><SelectItem value="webhook">Webhook</SelectItem><SelectItem value="provider">Provider</SelectItem></SelectContent>
             </Select>
             <Select value={query.outcome} onValueChange={(value) => navigate({ outcome: value as ActivityLogQuery["outcome"] })}>
               <SelectTrigger aria-label="Activity outcome"><SelectValue /></SelectTrigger>

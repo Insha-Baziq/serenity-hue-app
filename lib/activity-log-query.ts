@@ -2,7 +2,7 @@ import type { ActivityLogPage } from "@/lib/types";
 
 export type ActivityEventDomain = "all" | "sync" | "order" | "shipment" | "inventory" | "mapping" | "packaging" | "employee" | "labs";
 export type ActivityOutcomeFilter = "all" | "succeeded" | "failed" | "skipped";
-export type ActivitySourceFilter = "all" | "manual" | "scheduled" | "webhook" | "provider";
+export type ActivitySourceFilter = "all" | "manual" | "assistant" | "scheduled" | "webhook" | "provider";
 export type ActivityDateRange = "7" | "all";
 
 export type ActivityLogQuery = {
@@ -21,7 +21,7 @@ export const ACTIVITY_LOG_PAGE_SIZES = [25, 50, 100] as const;
 export const ACTIVITY_LOG_DEFAULT_PAGE_SIZE = 50;
 
 const DOMAINS: ActivityEventDomain[] = ["all", "sync", "order", "shipment", "inventory", "mapping", "packaging", "employee", "labs"];
-const SOURCES: ActivitySourceFilter[] = ["all", "manual", "scheduled", "webhook", "provider"];
+const SOURCES: ActivitySourceFilter[] = ["all", "manual", "assistant", "scheduled", "webhook", "provider"];
 const OUTCOMES: ActivityOutcomeFilter[] = ["all", "succeeded", "failed", "skipped"];
 const DATE_RANGES: ActivityDateRange[] = ["7", "all"];
 

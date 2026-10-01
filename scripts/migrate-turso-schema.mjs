@@ -2,6 +2,9 @@ import { createClient } from "@libsql/client";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import nextEnv from "@next/env";
+import { migrateLabsPackagingSeparation } from "../database/migrations/labs-packaging-separation.mjs";
+import { migrateLabBatchNotes } from "../database/migrations/lab-batch-notes.mjs";
+import { migrateLabBatchOptionalFillPackaging } from "../database/migrations/lab-batch-optional-fill-packaging.mjs";
 
 const { loadEnvConfig, updateInitialEnv } = nextEnv;
 
@@ -53,6 +56,9 @@ try {
   }
 
   await client.executeMultiple(schema);
+  await migrateLabsPackagingSeparation(client);
+  await migrateLabBatchNotes(client);
+  await migrateLabBatchOptionalFillPackaging(client);
 
   for (const [table, column, definition] of migrationManifest.columns) {
     const columns = await client.execute(`PRAGMA table_info(${table})`);

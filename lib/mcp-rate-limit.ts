@@ -35,6 +35,16 @@ export async function enforceMcpRateLimits(input: { token?: string | null; clien
   return true;
 }
 
+/** Shared database bucket for business actions across serverless instances. */
+export async function enforceMcpWriteRateLimit(input: { userId: string; clientId: string; toolName: string }) {
+  const checks = await Promise.all([
+    consume(`write:user:${input.userId}:${input.toolName}`, 20),
+    consume(`write:client:${input.clientId}:${input.toolName}`, 30),
+    consume(`write:user-total:${input.userId}`, 100),
+  ]);
+  return checks.every(Boolean);
+}
+
 export function tryAcquireTokenConcurrency(token: string, limit = 4) {
   const id = key(`active:${token}`);
   const current = activeByToken.get(id) ?? 0;

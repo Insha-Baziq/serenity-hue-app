@@ -77,6 +77,7 @@ test("activity query defaults to a seven-day feed and bounds pagination choices"
   assert.deepEqual(parseActivityLogQuery({ domain: "labs", source: "manual", outcome: "failed", dateRange: "all", pageSize: "100", page: "3" }), {
     q: "", domain: "labs", source: "manual", provider: "", actor: "", outcome: "failed", dateRange: "all", pageSize: 100, page: 3,
   });
+  assert.equal(parseActivityLogQuery({ source: "assistant" }).source, "assistant");
   assert.equal(parseActivityLogQuery({ pageSize: "20", page: "-2" }).pageSize, 50);
   assert.equal(parseActivityLogQuery({ pageSize: "20", page: "-2" }).page, 1);
 });
