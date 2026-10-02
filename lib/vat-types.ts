@@ -29,6 +29,8 @@ export type VatInvoiceRow = {
   hasFile: boolean;
   emailSubject: string | null;
   emailFrom: string | null;
+  /** When the source email arrived (null for uploads). */
+  receivedAt: string | null;
   removedReason: string | null;
   removedAt: string | null;
   removedBy: string | null;

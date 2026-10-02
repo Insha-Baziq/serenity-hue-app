@@ -81,7 +81,10 @@ const INVOICE_COLUMNS = `i.id, i.email_id, i.source, i.document_type, i.supplier
   i.invoice_number, i.invoice_date, i.due_date, i.currency, i.net_amount_minor, i.vat_amount_minor,
   i.gross_amount_minor, i.status, i.notes_json, i.portal_url, i.file_name, i.dropbox_path, i.dropbox_url,
   i.dropbox_account_id, i.removed_reason, i.removed_at, i.removed_by_label, i.updated_at,
-  e.subject AS email_subject, COALESCE(e.from_name, e.from_email) AS email_from`;
+  e.subject AS email_subject, COALESCE(e.from_name, e.from_email) AS email_from, e.received_at AS email_received_at`;
+
+// Lists show and filter by when the email arrived; uploads (no email) use their invoice date.
+const RECEIVED_DATE = "COALESCE(substr(e.received_at, 1, 10), i.invoice_date)";
 
 function toInvoiceRow(row: Row): VatInvoiceRow {
   const dropboxPath = text(row.dropbox_path);
@@ -108,6 +111,7 @@ function toInvoiceRow(row: Row): VatInvoiceRow {
     hasFile: Boolean(dropboxPath),
     emailSubject: text(row.email_subject),
     emailFrom: text(row.email_from),
+    receivedAt: text(row.email_received_at),
     removedReason: text(row.removed_reason),
     removedAt: text(row.removed_at),
     removedBy: text(row.removed_by_label),
@@ -137,7 +141,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
   const db = await getTursoClient();
   const range = monthRange(query.month);
   const offset = (query.page - 1) * VAT_PAGE_SIZE;
-  const savedFilter = range ? "AND i.invoice_date >= ? AND i.invoice_date < ?" : "";
+  const savedFilter = range ? `AND ${RECEIVED_DATE} >= ? AND ${RECEIVED_DATE} < ?` : "";
   const rangeArgs = range ? [range.start, range.end] : [];
   const emailFilter = range ? "AND e.received_at >= ? AND e.received_at < ?" : "";
 
@@ -154,7 +158,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
         sql: `SELECT ${INVOICE_COLUMNS}
               FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id
               WHERE i.status = ? ${query.tab === "saved" ? savedFilter : ""}
-              ORDER BY ${query.tab === "removed" ? "i.removed_at DESC" : "i.invoice_date IS NULL, i.invoice_date DESC"}, i.id DESC
+              ORDER BY ${query.tab === "removed" ? "i.removed_at DESC" : `${RECEIVED_DATE} IS NULL, ${RECEIVED_DATE} DESC`}, i.id DESC
               LIMIT ? OFFSET ?`,
         args: [query.tab, ...(query.tab === "saved" ? rangeArgs : []), VAT_PAGE_SIZE, offset],
       };
@@ -165,12 +169,12 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
               COALESCE(SUM(CASE WHEN i.status = 'saved' ${savedFilter} THEN 1 ELSE 0 END), 0) AS saved,
               COALESCE(SUM(CASE WHEN i.status = 'to_get' THEN 1 ELSE 0 END), 0) AS to_get,
               COALESCE(SUM(CASE WHEN i.status = 'removed' THEN 1 ELSE 0 END), 0) AS removed
-            FROM vat_invoices i`,
+            FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id`,
       args: rangeArgs,
     },
     { sql: `SELECT COUNT(*) AS count FROM vat_emails e WHERE ${EMAIL_LIST_FILTER} ${emailFilter}`, args: rangeArgs },
     listStatement,
-    { sql: "SELECT MIN(invoice_date) AS earliest FROM vat_invoices WHERE status = 'saved'", args: [] },
+    { sql: `SELECT MIN(${RECEIVED_DATE}) AS earliest FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id WHERE i.status = 'saved'`, args: [] },
     { sql: "SELECT value FROM vat_settings WHERE key = 'sync_start_date'", args: [] },
   ], "read");
 
