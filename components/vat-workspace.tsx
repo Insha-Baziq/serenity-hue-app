@@ -55,7 +55,7 @@ function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[
   return <>
     <Table className={styles.table}>
       <TableHeader><TableRow>
-        <TableHead>{tab === "removed" ? "Removed" : "Received"}</TableHead>
+        <TableHead>{tab === "removed" ? "Removed" : "Email date"}</TableHead>
         <TableHead>Supplier</TableHead>
         <TableHead>{tab === "to_get" ? "What to do" : tab === "removed" ? "Reason" : "Invoice no"}</TableHead>
         {tab === "saved" && <><TableHead className={styles.amount}>Net</TableHead><TableHead className={styles.amount}>VAT</TableHead></>}
@@ -64,7 +64,7 @@ function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[
         <TableHead>Links</TableHead>
       </TableRow></TableHeader>
       <TableBody>{rows.map((row) => <TableRow key={row.id} {...open(row.id)}>
-        <TableCell>{formatVatDate(tab === "removed" ? row.removedAt : row.receivedAt ?? row.invoiceDate)}{tab !== "removed" && row.receivedAt && row.invoiceDate && row.invoiceDate !== row.receivedAt.slice(0, 10) && <span className={styles.muted}>Invoice {formatVatDate(row.invoiceDate)}</span>}</TableCell>
+        <TableCell>{formatVatDate(tab === "removed" ? row.removedAt : row.receivedAt ?? row.invoiceDate)}</TableCell>
         <TableCell className={styles.supplierCell}><span className={styles.strong}>{row.supplierName ?? "Unknown supplier"}</span>{row.emailSubject && <span className={styles.muted} title={row.emailSubject}>{row.emailSubject}</span>}</TableCell>
         <TableCell>{tab === "to_get" ? <VatNoteChips notes={row.notes.filter((note) => note in VAT_GET_REASON_LABELS)} /> : tab === "removed" ? VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? "—" : row.invoiceNumber ?? "—"}</TableCell>
         {tab === "saved" && <><TableCell className={styles.amount}>{formatVatMoney(row.netMinor, row.currency)}</TableCell><TableCell className={styles.amount}>{formatVatMoney(row.vatMinor, row.currency)}</TableCell></>}
