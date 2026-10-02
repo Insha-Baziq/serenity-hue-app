@@ -34,7 +34,8 @@ import type { ActivityActor } from "@/lib/types";
 const LEASE_MS = 290_000;
 // Stop taking new emails after this long; in-flight extraction may take ~150s more.
 const STEP_BUDGET_MS = 100_000;
-const WORKERS = 6;
+// Same as the original app: 3 per inbox, all inboxes side by side.
+const WORKERS_PER_INBOX = 3;
 
 export async function startVatRun(startDate: string, actor: ActivityActor) {
   if (!isIsoDate(startDate)) throw new VatInputError("Choose a valid start date.");
@@ -81,75 +82,90 @@ export async function stepVatRun(runId: string, actor: ActivityActor) {
   }
 }
 
-/** Lists email ids only (no reading, no AI cost) and queues those never handled before. */
+/**
+ * Lists email ids only (no reading, no AI cost) in every inbox at once and
+ * queues those never handled before, interleaved across inboxes so each step
+ * works on all of them side by side.
+ */
 async function listRun(runId: string, startDate: string) {
   const since = new Date(`${startDate}T00:00:00Z`);
-  const items: Array<{ emailId: string; accountId: number }> = [];
   let lastError: string | null = null;
-  for (const accountId of await connectedVatMailboxIds()) {
-    let mailbox: VatMailbox;
+  const perInbox = await Promise.all((await connectedVatMailboxIds()).map(async (accountId) => {
     try {
-      mailbox = await openVatMailbox(accountId);
+      const mailbox = await openVatMailbox(accountId);
       // Mailboxes list newest first; work oldest first.
       const ids = (await filterUnhandledVatEmails(await mailbox.listIdsSince(since))).reverse();
-      items.push(...ids.map((emailId) => ({ emailId, accountId })));
       await markVatMailboxError(accountId, null);
+      return ids.map((emailId) => ({ emailId, accountId }));
     } catch (error) {
-      if (isVatServiceBlocked(error)) {
-        lastError = error.message;
-        continue;
-      }
       // One inbox failing must not stop the others; Connections shows it needs attention.
-      lastError = `Inbox ${accountId}: ${(error as Error).message}`;
-      await markVatMailboxError(accountId, (error as Error).message);
+      lastError = isVatServiceBlocked(error) ? error.message : `Inbox ${accountId}: ${(error as Error).message}`;
+      if (!isVatServiceBlocked(error)) await markVatMailboxError(accountId, (error as Error).message);
+      return [];
     }
+  }));
+  const items: Array<{ emailId: string; accountId: number }> = [];
+  for (let index = 0; perInbox.some((list) => index < list.length); index += 1) {
+    for (const list of perInbox) if (index < list.length) items.push(list[index]);
   }
   await enqueueVatRunItems(runId, items);
   if (lastError) await addVatRunCounts(runId, { lastError });
 }
 
+/**
+ * As in the original app: every inbox is worked through at the same time with
+ * its own workers (Outlook limits concurrent requests per mailbox), while Jev
+ * and LlamaExtract keep their shared caps.
+ */
 async function processRun(runId: string, startDate: string, actor: ActivityActor) {
   const started = Date.now();
   const dropbox = await getVatDropboxAccess();
-  const queue = await nextVatRunItems(runId, WORKERS * 40);
+  const inboxCount = Math.max(1, (await connectedVatMailboxIds()).length);
+  const queue = await nextVatRunItems(runId, inboxCount * WORKERS_PER_INBOX * 30);
   if (!queue.length) return finishRun(runId, startDate, actor);
 
-  const mailboxes = new Map<number, Promise<VatMailbox>>();
-  const mailboxFor = (accountId: number) => {
-    if (!mailboxes.has(accountId)) mailboxes.set(accountId, openVatMailbox(accountId));
-    return mailboxes.get(accountId)!;
-  };
   const counts = { processed: 0, failed: 0, invoices: 0, toGet: 0, lastError: null as string | null };
   let blocked: unknown = null;
-  let next = 0;
+  const byInbox = new Map<number, string[]>();
+  for (const item of queue) byInbox.set(item.accountId, [...(byInbox.get(item.accountId) ?? []), item.emailId]);
 
-  const worker = async () => {
-    while (!blocked && next < queue.length && Date.now() - started < STEP_BUDGET_MS) {
-      const item = queue[next++];
-      try {
-        const outcome = await processVatEmail(await mailboxFor(item.accountId), item.emailId, dropbox, actor);
-        if (outcome === "saved") counts.invoices += 1;
-        if (outcome === "to_get") counts.toGet += 1;
-        counts.processed += 1;
-        await setVatRunItemState(runId, item.emailId, "done");
-      } catch (error) {
-        if (isVatServiceBlocked(error)) {
-          // Nothing was decided for this email; it stays queued for after the top-up.
-          blocked ??= error;
-          continue;
-        }
-        counts.processed += 1;
-        counts.failed += 1;
-        counts.lastError = (error as Error).message.slice(0, 300);
-        await setVatRunItemState(runId, item.emailId, "failed");
-      }
+  await Promise.all([...byInbox].map(async ([accountId, emailIds]) => {
+    let mailbox: VatMailbox;
+    try {
+      mailbox = await openVatMailbox(accountId);
+    } catch (error) {
+      if (isVatServiceBlocked(error)) blocked ??= error;
+      else counts.lastError = (error as Error).message.slice(0, 300);
+      return;
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(WORKERS, queue.length) }, worker));
+    let next = 0;
+    const worker = async () => {
+      while (!blocked && next < emailIds.length && Date.now() - started < STEP_BUDGET_MS) {
+        const emailId = emailIds[next++];
+        try {
+          const outcome = await processVatEmail(mailbox, emailId, dropbox, actor);
+          if (outcome === "saved") counts.invoices += 1;
+          if (outcome === "to_get") counts.toGet += 1;
+          counts.processed += 1;
+          await setVatRunItemState(runId, emailId, "done");
+        } catch (error) {
+          if (isVatServiceBlocked(error)) {
+            // Nothing was decided for this email; it stays queued for after the top-up.
+            blocked ??= error;
+            continue;
+          }
+          counts.processed += 1;
+          counts.failed += 1;
+          counts.lastError = (error as Error).message.slice(0, 300);
+          await setVatRunItemState(runId, emailId, "failed");
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(WORKERS_PER_INBOX, emailIds.length) }, worker));
+  }));
   await addVatRunCounts(runId, counts);
   if (blocked) throw blocked;
 }
-
 async function finishRun(runId: string, startDate: string, actor: ActivityActor) {
   const run = await getVatRun(runId);
   const from = new Date(Date.parse(`${startDate}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
