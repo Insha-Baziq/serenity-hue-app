@@ -2,7 +2,7 @@
 // tokens, or provider payloads appear in these shapes.
 
 export type VatInvoiceStatus = "saved" | "to_get" | "removed";
-export type VatTab = "saved" | "to_get" | "ignored" | "removed";
+export type VatTab = "summary" | "saved" | "to_get" | "ignored" | "removed";
 export type VatVatLine = { rate: number; netMinor: number; vatMinor: number };
 
 export type VatInvoiceRow = {
@@ -128,4 +128,21 @@ export type VatInvoiceFieldsInput = {
   netAmount?: string | null;
   vatAmount?: string | null;
   grossAmount?: string | null;
+};
+
+export type VatSummaryPreset = "month" | "last_month" | "quarter" | "year" | "all" | "custom";
+export type VatSummaryQuery = { preset: VatSummaryPreset; month: string; from: string | null; to: string | null };
+
+export type VatSummaryTotals = { invoices: number; netMinor: number; vatMinor: number; grossMinor: number; estimatedVatMinor: number };
+
+export type VatSummaryData = {
+  query: VatSummaryQuery;
+  /** Inclusive start and exclusive end (YYYY-MM-DD); null means no limit. */
+  range: { from: string | null; to: string | null; label: string };
+  totals: VatSummaryTotals;
+  byMonth: Array<VatSummaryTotals & { month: string }>;
+  bySupplier: Array<VatSummaryTotals & { supplier: string }>;
+  /** Not converted to GBP: shown separately in their own currency. */
+  foreign: Array<{ currency: string; invoices: number; vatMinor: number; grossMinor: number }>;
+  awaitingReview: number;
 };

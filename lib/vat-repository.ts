@@ -153,7 +153,10 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
   const rangeArgs = range ? [range.start, range.end] : [];
   const emailFilter = range ? "AND e.received_at >= ? AND e.received_at < ?" : "";
 
-  const listStatement = query.tab === "ignored"
+  // The Summary tab reads its own figures (lib/vat-summary); no list is needed here.
+  const listStatement = query.tab === "summary"
+    ? { sql: "SELECT 1 WHERE 0", args: [] }
+    : query.tab === "ignored"
     ? {
         sql: `SELECT e.id, e.from_name, e.from_email, e.subject, e.received_at, e.category, e.status, e.error, e.decided_by,
                      a.account_email AS inbox
@@ -189,6 +192,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
 
   const countRow = counts.rows[0] ?? {};
   const tabCounts = {
+    summary: 0,
     saved: Number(countRow.saved ?? 0),
     to_get: Number(countRow.to_get ?? 0),
     removed: Number(countRow.removed ?? 0),
@@ -200,7 +204,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
     query,
     counts: tabCounts,
     reviewCount,
-    invoices: query.tab === "ignored" ? [] : list.rows.map((row) => toInvoiceRow(row as Row)),
+    invoices: query.tab === "ignored" || query.tab === "summary" ? [] : list.rows.map((row) => toInvoiceRow(row as Row)),
     emails: query.tab === "ignored" ? list.rows.map((row) => toEmailRow(row as Row)) : [],
     total,
     pageSize: VAT_PAGE_SIZE,

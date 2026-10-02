@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useState, useTransition } from "react";
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, Inbox, Link2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, Inbox, Link2, Mail, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,16 +11,17 @@ import { VatConnectionsSheet } from "@/components/vat-connections-sheet";
 import { VatInvoiceSheet } from "@/components/vat-invoice-sheet";
 import { VatUploadDialog, type VatUploadTarget } from "@/components/vat-upload-dialog";
 import { VatGetInvoicesDialog } from "@/components/vat-get-invoices-dialog";
+import { VatSummary } from "@/components/vat-summary";
 import { useVatRun } from "@/components/use-vat-run";
 import { getPageItems } from "@/lib/pagination";
 import { formatVatMoney } from "@/lib/vat-money";
 import { vatEmailLink, VAT_CATEGORY_LABELS, VAT_GET_REASON_LABELS, VAT_MONTH_NAMES, VAT_NOTE_LABELS, VAT_REMOVED_REASON_LABELS } from "@/lib/vat-rules";
-import type { VatEmailRow, VatInvoiceRow, VatTab, VatWorkspaceData } from "@/lib/vat-types";
+import type { VatEmailRow, VatInvoiceRow, VatSummaryData, VatTab, VatWorkspaceData } from "@/lib/vat-types";
 import styles from "./vat-workspace.module.css";
 
-type Props = { data: VatWorkspaceData; notice: string | null; connectionError: string | null };
+type Props = { data: VatWorkspaceData; summary: VatSummaryData | null; notice: string | null; connectionError: string | null };
 
-const TAB_LABELS: Record<VatTab, string> = { saved: "Invoices", to_get: "To get", ignored: "Ignored", removed: "Removed" };
+const TAB_LABELS: Record<VatTab, string> = { summary: "Summary", saved: "Invoices", to_get: "To get", ignored: "Ignored", removed: "Removed" };
 
 export function formatVatDate(value: string | null) {
   if (!value) return "—";
@@ -42,6 +43,16 @@ export function VatNoteChips({ notes }: { notes: string[] }) {
     const tone = note === "extraction_failed" || note === "totals_dont_add_up" ? styles.chipError : note === "duplicate" || note === "unsure" ? styles.chipWarn : "";
     return <span key={note} className={`${styles.chip} ${tone}`} title={(reason ?? VAT_NOTE_LABELS[note]).help}>{label}</span>;
   })}</span>;
+}
+
+/** Open the source email or the filed document, as small buttons. Clicks don't open the row. */
+export function VatLinkButtons({ emailId, inbox, dropboxUrl, labels = false }: { emailId: string | null; inbox?: string | null; dropboxUrl: string | null; labels?: boolean }) {
+  if (!emailId && !dropboxUrl) return null;
+  const stop = (event: React.SyntheticEvent) => event.stopPropagation();
+  return <span className={styles.linkButtons} onClick={stop} onKeyDown={stop}>
+    {emailId && <a className={styles.linkButton} href={vatEmailLink(emailId, inbox)} target="_blank" rel="noreferrer" aria-label="Open the email in Outlook"><Mail size={14} aria-hidden="true" />{labels ? "Open email" : "Email"}</a>}
+    {dropboxUrl && <a className={styles.linkButton} href={dropboxUrl} target="_blank" rel="noreferrer" aria-label="Open the file in Dropbox"><FileText size={14} aria-hidden="true" />{labels ? "Open file" : "File"}</a>}
+  </span>;
 }
 
 function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[]; onOpen: (id: number) => void }) {
@@ -70,14 +81,15 @@ function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[
         {tab === "saved" && <><TableCell className={styles.amount}>{formatVatMoney(row.netMinor, row.currency)}</TableCell><TableCell className={styles.amount}>{formatVatMoney(row.vatMinor, row.currency)}</TableCell></>}
         <TableCell className={styles.amount}>{formatVatMoney(row.grossMinor, row.currency)}</TableCell>
         <TableCell className={styles.notesCell}>{tab === "saved" ? <>{row.needsReview && <span className={`${styles.chip} ${styles.chipWarn}`} style={{ marginBottom: 4 }}>To review</span>}<VatNoteChips notes={row.notes} /></> : tab === "removed" ? row.removedBy ?? "—" : row.source === "manual" ? "Upload" : row.emailFrom ?? "Email"}</TableCell>
-<TableCell onClick={(event) => event.stopPropagation()}><span className={styles.chips}>{row.emailId && <a className={styles.link} href={vatEmailLink(row.emailId)} target="_blank" rel="noreferrer">Email</a>}{row.dropboxUrl && <a className={styles.link} href={row.dropboxUrl} target="_blank" rel="noreferrer">File</a>}</span></TableCell>
+        <TableCell><VatLinkButtons emailId={row.emailId} dropboxUrl={row.dropboxUrl} /></TableCell>
       </TableRow>)}</TableBody>
     </Table>
-    <div className={styles.mobileList}>{rows.map((row) => <button type="button" className={styles.mobileCard} key={row.id} onClick={() => onOpen(row.id)}>
+    <div className={styles.mobileList}>{rows.map((row) => <div className={styles.mobileCard} key={row.id} {...open(row.id)}>
       <span className={styles.mobileCardTop}><span className={styles.strong}>{row.supplierName ?? "Unknown supplier"}</span><span className={styles.amount}>{formatVatMoney(row.grossMinor, row.currency)}</span></span>
       <span className={styles.muted}>{formatVatDate(tab === "removed" ? row.removedAt : row.receivedAt ?? row.invoiceDate)}{row.invoiceNumber ? ` · ${row.invoiceNumber}` : ""}</span>
-      {tab === "removed" ? <span className={styles.muted}>{VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? ""}</span> : <VatNoteChips notes={row.notes} />}
-    </button>)}</div>
+      {tab === "removed" ? <span className={styles.muted}>{VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? ""}</span> : <span className={styles.chips}>{row.needsReview && <span className={`${styles.chip} ${styles.chipWarn}`}>To review</span>}<VatNoteChips notes={row.notes} /></span>}
+      <VatLinkButtons emailId={row.emailId} dropboxUrl={row.dropboxUrl} />
+    </div>)}</div>
   </>;
 }
 
@@ -104,7 +116,7 @@ function EmailTable({ rows }: { rows: VatEmailRow[] }) {
   </>;
 }
 
-export function VatWorkspace({ data, notice, connectionError }: Props) {
+export function VatWorkspace({ data, summary, notice, connectionError }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [isPending, startTransition] = useTransition();
@@ -175,10 +187,10 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
     <div className={styles.toolbar}>
       <nav className={styles.tabs} aria-label="VAT lists">
         {(Object.keys(TAB_LABELS) as VatTab[]).map((tab) => <Link key={tab} className={styles.tab} href={href({ tab })} aria-current={query.tab === tab ? "page" : undefined} scroll={false}>
-          {TAB_LABELS[tab]} <b>{data.counts[tab]}</b>
+          {TAB_LABELS[tab]}{tab !== "summary" && <b>{data.counts[tab]}</b>}
         </Link>)}
       </nav>
-      <div className={styles.filters}>
+      {query.tab !== "summary" && <div className={styles.filters}>
         {query.tab === "saved" && <Button
           variant={query.review ? "primary" : "outline"}
           className={styles.control}
@@ -190,10 +202,10 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
           <SelectContent><SelectItem value="all">All months</SelectItem>{data.months.map((month) => <SelectItem key={month} value={month}>{monthLabel(month)}</SelectItem>)}</SelectContent>
         </Select>}
         {exportYear && <a className={`ui-button ui-button--outline ${styles.control}`} href={`/api/vat/export?year=${exportYear}`} download title={`Invoice log for ${exportYear}`}><Download size={15} aria-hidden="true" /> Export CSV</a>}
-      </div>
+      </div>}
     </div>
 
-    <div className={styles.panel} aria-busy={isPending} style={{ opacity: isPending ? 0.62 : 1 }}>
+    {query.tab === "summary" && summary ? <VatSummary data={summary} months={data.months} /> : <div className={styles.panel} aria-busy={isPending} style={{ opacity: isPending ? 0.62 : 1 }}>
       {rows === 0
         ? <div className={styles.empty}>
             <strong>{query.tab === "saved" ? "No saved invoices for this view" : query.tab === "to_get" ? "Nothing to get" : query.tab === "ignored" ? "No ignored emails for this view" : "Nothing has been removed"}</strong>
@@ -208,10 +220,11 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
           <button type="button" onClick={() => navigate({ page: query.page + 1 })} disabled={query.page >= data.pageCount} aria-label="Next page"><ChevronRight size={16} /></button>
         </div>}
       </footer>
-    </div>
+    </div>}
 
     <VatInvoiceSheet
       invoiceId={openInvoiceId}
+      initialInvoice={data.invoices.find((row) => row.id === openInvoiceId) ?? null}
       dropboxReady={dropboxReady}
       onClose={() => setOpenInvoiceId(null)}
       onChanged={refresh}

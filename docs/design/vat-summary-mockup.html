@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VAT Summary mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Source+Serif+4:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--canvas:#fcfaf8;--paper:#fffefd;--ink:#33212d;--soft:#756a70;--faint:#a89da2;--line:#e9dfe2;--plum:#6c285f;--plumd:#49163f;--mag:#c13a9b;--magsoft:#f8e9f2;--rose:#e9c3d2;--orsoft:#fff3e4}
+*{box-sizing:border-box;margin:0}body{font:14px/1.5 "DM Sans",sans-serif;color:var(--ink);background:var(--canvas);display:flex;min-height:100vh}
+aside{width:234px;background:linear-gradient(180deg,#3b1232,#2a0c24);color:#f3e6ee;padding:28px 16px}aside .brand{font-family:"Source Serif 4";font-size:22px;text-align:center;margin-bottom:34px}
+aside small{display:block;font-size:10px;letter-spacing:.08em;opacity:.6;margin:0 10px 8px}aside a{display:block;padding:9px 12px;border-radius:10px;opacity:.85}aside a.on{background:rgba(193,58,155,.28);opacity:1;box-shadow:inset 3px 0 0 var(--mag)}
+main{flex:1;padding:40px 44px}
+.head{display:flex;justify-content:space-between;align-items:flex-start}h1{font:400 64px/1 "Source Serif 4";letter-spacing:-.04em}.head p{color:var(--soft);margin-top:12px}
+.btns{display:flex;gap:10px}.btn{height:42px;padding:0 16px;border:1px solid #d6b7c7;border-radius:11px;background:var(--paper);display:inline-flex;align-items:center;font-weight:700;color:var(--plumd)}.btn.p{background:linear-gradient(115deg,#4c183f,#7f2d70 54%,#b43b8e);color:#fff;border:0}
+.bar{display:flex;justify-content:space-between;align-items:center;margin:28px 0 12px}
+.tabs{display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.tab{padding:7px 14px;border-radius:9px;color:var(--soft);font-weight:650;font-size:13px}.tab b{margin-left:6px;padding:1px 7px;border-radius:99px;background:rgba(108,40,95,.08);font-size:11px}.tab.on{background:var(--magsoft);color:var(--plumd);box-shadow:inset 0 0 0 1px rgba(193,58,155,.28)}
+.ctl{display:flex;gap:8px}.ctl .btn{height:40px;font-size:13px}.sel{width:190px;justify-content:space-between}
+.chips{display:flex;gap:6px;margin-bottom:22px}.chip{padding:5px 11px;border:1px solid var(--line);border-radius:99px;font-size:12px;color:var(--soft);background:var(--paper)}.chip.on{border-color:var(--mag);color:var(--plumd);background:var(--magsoft)}
+.cards{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}.card{background:var(--paper);border:1px solid var(--line);border-radius:15px;padding:18px 20px}.card.lead{background:linear-gradient(160deg,#fbf1f7,#fffefd)}
+.card small{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--plum);text-transform:uppercase}.card strong{display:block;font:400 34px/1.15 "Source Serif 4";margin-top:6px}.card span{font-size:12px;color:var(--soft)}
+.grid{display:grid;grid-template-columns:1fr 1.25fr;gap:16px;margin-bottom:16px}.panel{background:var(--paper);border:1px solid var(--line);border-radius:16px;overflow:hidden}.panel h3{font:500 18px "Source Serif 4";padding:16px 20px 6px}
+.chart{display:flex;align-items:flex-end;gap:34px;height:190px;padding:14px 34px 10px;border-bottom:1px solid var(--line)}.m{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1}.pair{display:flex;gap:6px;align-items:flex-end;height:150px}.pair i{width:26px;border-radius:6px 6px 0 0;display:block}.n{background:var(--rose)}.v{background:var(--plum)}.m em{font-style:normal;font-size:12px;color:var(--soft)}
+.leg{display:flex;gap:14px;padding:10px 20px;font-size:12px;color:var(--soft)}.leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+table{width:100%;border-collapse:collapse}th{height:42px;background:#fcf7f9;color:var(--plum);font-size:11px;letter-spacing:.04em;text-transform:uppercase;text-align:left;padding:0 16px}td{padding:11px 16px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}.r{text-align:right}tr.t td{font-weight:700;background:#fdf9fb}
+.note{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border:1px solid #f1d8b8;border-radius:11px;background:var(--orsoft);font-size:13px}.note .btn{height:32px;font-size:12px}
+</style></head><body>
+<aside><div class="brand">Serenity Hue</div><small>WORKSPACE</small><a>Overview</a><a>Analytics</a><a>Orders</a><a>Customers</a><a>Employees</a><a>Labs</a><a class="on">VAT</a><a>Inventory</a></aside>
+<main>
+ <div class="head"><div><h1>VAT</h1><p>Purchase invoices for the VAT return, shared by all staff.</p></div>
+  <div class="btns"><span class="btn">Connections</span><span class="btn">Upload invoice</span><span class="btn p">Get invoices</span></div></div>
+ <div class="bar">
+  <div class="tabs"><span class="tab on">Summary</span><span class="tab">Invoices<b>168</b></span><span class="tab">To get<b>111</b></span><span class="tab">Ignored<b>9550</b></span><span class="tab">Removed<b>123</b></span></div>
+  <div class="ctl"><span class="btn sel">September 2026 <span>▾</span></span><span class="btn">⤓ Export CSV</span></div>
+ </div>
+ <div class="chips"><span class="chip on">This month</span><span class="chip">Last month</span><span class="chip">VAT quarter</span><span class="chip">This year</span><span class="chip">All time</span><span class="chip">Custom range…</span></div>
+ <div class="cards">
+  <div class="card lead"><small>VAT paid</small><strong>£460.46</strong><span>£62.40 estimated at 20% where no VAT was shown</span></div>
+  <div class="card"><small>Net spend</small><strong>£2,302.20</strong><span>Before VAT</span></div>
+  <div class="card"><small>Total paid</small><strong>£2,762.66</strong><span>Including VAT</span></div>
+  <div class="card"><small>Invoices</small><strong>28</strong><span>Approved, September 2026</span></div>
+ </div>
+ <div class="grid">
+  <div class="panel"><h3>VAT by month</h3>
+   <div class="chart">
+    <div class="m"><div class="pair"><i class="n" style="height:118px"></i><i class="v" style="height:24px"></i></div><em>Jul</em></div>
+    <div class="m"><div class="pair"><i class="n" style="height:109px"></i><i class="v" style="height:22px"></i></div><em>Aug</em></div>
+    <div class="m"><div class="pair"><i class="n" style="height:127px"></i><i class="v" style="height:26px"></i></div><em>Sep</em></div>
+   </div>
+   <div class="leg"><span><i class="n"></i>Net</span><span><i class="v"></i>VAT</span></div>
+   <table><tr><th>Month</th><th class="r">Invoices</th><th class="r">Net</th><th class="r">VAT</th><th class="r">Total</th></tr>
+    <tr><td>July 2026</td><td class="r">31</td><td class="r">£2,140.00</td><td class="r">£428.00</td><td class="r">£2,568.00</td></tr>
+    <tr><td>August 2026</td><td class="r">27</td><td class="r">£1,980.20</td><td class="r">£396.04</td><td class="r">£2,376.24</td></tr>
+    <tr><td>September 2026</td><td class="r">28</td><td class="r">£2,302.20</td><td class="r">£460.46</td><td class="r">£2,762.66</td></tr>
+    <tr class="t"><td>Total</td><td class="r">86</td><td class="r">£6,422.40</td><td class="r">£1,284.50</td><td class="r">£7,706.90</td></tr></table>
+  </div>
+  <div class="panel"><h3>VAT by supplier</h3>
+   <table><tr><th>Supplier</th><th class="r">Invoices</th><th class="r">Net</th><th class="r">VAT</th><th class="r">Total</th></tr>
+    <tr><td>TikTok Information Technologies UK</td><td class="r">12</td><td class="r">£1,510.00</td><td class="r">£302.00</td><td class="r">£1,812.00</td></tr>
+    <tr><td>Fast Labels Ltd</td><td class="r">3</td><td class="r">£420.00</td><td class="r">£84.00</td><td class="r">£504.00</td></tr>
+    <tr><td>Xero</td><td class="r">3</td><td class="r">£117.00</td><td class="r">£23.40</td><td class="r">£140.40</td></tr>
+    <tr><td>GoDaddy</td><td class="r">4</td><td class="r">£87.42</td><td class="r">£17.48</td><td class="r">£104.90</td></tr>
+    <tr><td>Canva Pty Ltd</td><td class="r">2</td><td class="r">£21.67</td><td class="r">£4.33</td><td class="r">£26.00</td></tr>
+    <tr><td>Amazon (refund)</td><td class="r">1</td><td class="r">−£38.33</td><td class="r">−£7.67</td><td class="r">−£46.00</td></tr>
+    <tr class="t"><td>All suppliers (28)</td><td class="r">28</td><td class="r">£2,302.20</td><td class="r">£460.46</td><td class="r">£2,762.66</td></tr></table>
+  </div>
+ </div>
+ <div class="note"><span>Only approved invoices are counted. <b>26 waiting for review</b> are not included. Foreign-currency invoices are shown separately (USD $72.00).</span><span class="btn">Review now</span></div>
+</main></body></html>

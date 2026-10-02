@@ -124,3 +124,17 @@ test("a GBP total with no VAT shown is split at the 20% standard rate", async ()
   assert.equal(withEstimatedVat({ ...base, grossMinor: 1000, currency: "USD" }, []).figures.vatMinor, null, "foreign currency is left as printed");
   assert.equal(withEstimatedVat({ ...base, grossMinor: -1200 }, []).figures.vatMinor, -200, "credit notes estimate negative VAT");
 });
+
+test("summary periods cover whole months, calendar quarters and inclusive custom ranges", async () => {
+  const { vatSummaryRange, parseVatSummaryQuery } = await import("../lib/vat-rules.ts");
+  const today = new Date("2026-10-03T12:00:00Z");
+  const range = (params) => vatSummaryRange(parseVatSummaryQuery(params, today), today);
+  assert.deepEqual(range({ period: "month", month: "2026-09" }), { from: "2026-09-01", to: "2026-10-01", label: "September 2026" });
+  assert.deepEqual(range({ period: "last_month" }), { from: "2026-09-01", to: "2026-10-01", label: "September 2026" });
+  assert.deepEqual(range({ period: "month", month: "2026-12" }).to, "2027-01-01");
+  assert.equal(range({ period: "quarter" }).from, "2026-10-01");
+  assert.equal(range({ period: "quarter" }).to, "2027-01-01");
+  assert.deepEqual(range({ period: "year" }), { from: "2026-01-01", to: "2027-01-01", label: "2026" });
+  assert.deepEqual(range({ period: "all" }), { from: null, to: null, label: "All time" });
+  assert.equal(range({ period: "custom", from: "2026-07-01", to: "2026-07-31" }).to, "2026-08-01", "the end date is included");
+});

@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { VatInvoiceFields, vatFormFromInvoice } from "@/components/vat-invoice-fields";
-import { formatVatDate } from "@/components/vat-workspace";
+import { formatVatDate, VatLinkButtons } from "@/components/vat-workspace";
 import { vatRequest, type VatInvoiceForm } from "@/lib/vat-client";
 import { formatVatMoney } from "@/lib/vat-money";
-import { vatEmailLink, VAT_DOC_TYPE_LABELS, VAT_GET_REASON_LABELS, VAT_NOTE_LABELS, VAT_REMOVED_REASON_LABELS } from "@/lib/vat-rules";
-import type { VatInvoiceDetail } from "@/lib/vat-types";
+import { VAT_DOC_TYPE_LABELS, VAT_GET_REASON_LABELS, VAT_NOTE_LABELS, VAT_REMOVED_REASON_LABELS } from "@/lib/vat-rules";
+import type { VatInvoiceDetail, VatInvoiceRow } from "@/lib/vat-types";
 import styles from "./vat-workspace.module.css";
 
 type Props = {
@@ -19,6 +19,8 @@ type Props = {
   /** Called after a review decision so the next invoice to review can open. */
   onReviewed: (id: number) => void;
   onUpload: (invoice: VatInvoiceDetail) => void;
+  /** The row already shown in the list, so the panel opens instantly while details load. */
+  initialInvoice?: VatInvoiceRow | null;
 };
 
 const REMOVE_REASONS = ["not_invoice", "not_needed", "duplicate"] as const;
@@ -27,7 +29,12 @@ function statusLabel(invoice: VatInvoiceDetail) {
   return invoice.status === "saved" ? "Saved invoice" : invoice.status === "to_get" ? "To get" : "Removed";
 }
 
-export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, onReviewed, onUpload }: Props) {
+/** A list row as a detail placeholder; history and similar invoices arrive from the server. */
+function placeholderDetail(row: VatInvoiceRow): VatInvoiceDetail {
+  return { ...row, vatBreakdown: [], originalInvoiceNumber: null, inbox: null, updatedBy: null, createdAt: row.updatedAt, events: [], similar: [] };
+}
+
+export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, onReviewed, onUpload, initialInvoice }: Props) {
   const [invoice, setInvoice] = useState<VatInvoiceDetail | null>(null);
   const [form, setForm] = useState<VatInvoiceForm>(vatFormFromInvoice(null));
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -36,6 +43,7 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
   const [busy, setBusy] = useState(false);
   const [removeReason, setRemoveReason] = useState<(typeof REMOVE_REASONS)[number]>("not_invoice");
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [detailLoaded, setDetailLoaded] = useState(false);
 
   async function load(id: number) {
     setLoadError(null);
@@ -52,7 +60,10 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
   const [shownId, setShownId] = useState<number | null>(null);
   if (shownId !== invoiceId) {
     setShownId(invoiceId);
-    setInvoice(null);
+    const placeholder = initialInvoice && initialInvoice.id === invoiceId ? placeholderDetail(initialInvoice) : null;
+    setInvoice(placeholder);
+    setForm(vatFormFromInvoice(placeholder));
+    setDetailLoaded(false);
     setLoadError(null);
     setError(null);
     setMessage(null);
@@ -67,6 +78,7 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
         if (cancelled) return;
         setInvoice(result.invoice);
         setForm(vatFormFromInvoice(result.invoice));
+        setDetailLoaded(true);
       })
       .catch((requestError: Error) => { if (!cancelled) setLoadError(requestError.message); });
     return () => { cancelled = true; };
@@ -143,17 +155,14 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
 
           {invoice.needsReview && <section className={styles.dangerZone} style={{ borderColor: "#f1d8b8", background: "var(--orange-soft)" }} aria-label="Review">
             <h3>Review</h3>
-            {invoice.similar.length
+            {!detailLoaded ? <p className={styles.loadingLine}>Looking for similar invoices…</p> : invoice.similar.length
               ? <>
                   <p className={styles.formHint}>Similar invoices from this supplier. If one is the same purchase, remove the extra one.</p>
                   {invoice.similar.map((other) => <div className={styles.connectionRow} key={other.id}>
                     <div>
                       <span className={styles.strong}>{formatVatMoney(other.grossMinor, other.currency)} · {formatVatDate(other.receivedAt ?? other.invoiceDate)}</span>
                       <span className={styles.muted}>{[other.invoiceNumber && `No. ${other.invoiceNumber}`, other.emailSubject].filter(Boolean).join(" · ") || "No number"}</span>
-                      <span className={styles.chips}>
-                        {other.emailId && <a className={styles.link} href={vatEmailLink(other.emailId)} target="_blank" rel="noreferrer">Email</a>}
-                        {other.dropboxUrl && <a className={styles.link} href={other.dropboxUrl} target="_blank" rel="noreferrer">File</a>}
-                      </span>
+                      <VatLinkButtons emailId={other.emailId} dropboxUrl={other.dropboxUrl} />
                     </div>
                     <Button variant="ghost" size="compact" disabled={busy} onClick={() => removeOther(other.id, other.updatedAt)}>Remove that one</Button>
                   </div>)}
@@ -187,14 +196,13 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
 
           <section className={styles.section}>
             <h3>Source</h3>
+            <VatLinkButtons emailId={invoice.emailId} inbox={invoice.inbox} dropboxUrl={invoice.dropboxUrl} labels />
             <dl className={styles.facts}>
               <dt>Document</dt>
-              <dd>{invoice.dropboxUrl ? <a className={styles.link} href={invoice.dropboxUrl} target="_blank" rel="noreferrer">{invoice.fileName ?? "Open in Dropbox"}</a> : "No file"}{invoice.legacyFile ? " (filed by the earlier app)" : ""}</dd>
+              <dd>{invoice.dropboxUrl ? invoice.fileName ?? "In Dropbox" : "No file"}{invoice.legacyFile ? " (filed by the earlier app)" : ""}</dd>
               {invoice.portalUrl && <><dt>Supplier site</dt><dd><a className={styles.link} href={invoice.portalUrl} target="_blank" rel="noreferrer">{invoice.portalUrl}</a></dd></>}
               <dt>Came from</dt>
-              <dd>{invoice.source === "manual" ? "Upload" : invoice.emailId
-                ? <a className={styles.link} href={vatEmailLink(invoice.emailId, invoice.inbox)} target="_blank" rel="noreferrer">{invoice.emailSubject ?? "Open email"}</a>
-                : invoice.emailSubject ?? "Email"}</dd>
+              <dd>{invoice.source === "manual" ? "Upload" : invoice.emailSubject ?? "Email"}</dd>
               {invoice.emailFrom && <><dt>Sender</dt><dd>{invoice.emailFrom}</dd></>}
               {invoice.inbox && <><dt>Inbox</dt><dd>{invoice.inbox}</dd></>}
               {invoice.originalInvoiceNumber && <><dt>Credits invoice</dt><dd>{invoice.originalInvoiceNumber}</dd></>}

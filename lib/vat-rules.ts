@@ -2,7 +2,7 @@
 // from the standalone VAT Automation app. Rules stay general: never per supplier.
 
 import { minorToDecimal, parseMoneyToMinor } from "./vat-money.ts";
-import type { VatInvoiceFieldsInput, VatTab, VatWorkspaceQuery } from "./vat-types.ts";
+import type { VatInvoiceFieldsInput, VatSummaryPreset, VatSummaryQuery, VatTab, VatWorkspaceQuery } from "./vat-types.ts";
 
 /** A plain-language problem with what staff entered; safe to show as-is. */
 export class VatInputError extends Error {
@@ -345,7 +345,7 @@ export function vatMonthOptions(earliest: string | null, now = new Date()) {
   return months;
 }
 
-const TABS: VatTab[] = ["saved", "to_get", "ignored", "removed"];
+const TABS: VatTab[] = ["summary", "saved", "to_get", "ignored", "removed"];
 
 export function parseVatWorkspaceQuery(params: Record<string, string | string[] | undefined>): VatWorkspaceQuery {
   const first = (key: string) => {
@@ -403,4 +403,49 @@ export function buildVatInvoiceLogCsv(rows: VatLogRow[]) {
   ].map(csvCell).join(","));
   // BOM so Excel shows £ correctly.
   return `﻿${[header.join(","), ...lines].join("\r\n")}\r\n`;
+}
+
+const SUMMARY_PRESETS = ["month", "last_month", "quarter", "year", "all", "custom"] as const;
+
+/** Summary period from the URL; defaults to the current month. Invoices count by email date. */
+export function parseVatSummaryQuery(params: Record<string, string | string[] | undefined>, today = new Date()): VatSummaryQuery {
+  const first = (key: string) => {
+    const value = params[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  const preset = (SUMMARY_PRESETS as readonly string[]).includes(first("period") ?? "") ? first("period") as VatSummaryPreset : "month";
+  const thisMonth = today.toISOString().slice(0, 7);
+  const month = first("month") && MONTH.test(first("month")!) ? first("month")! : thisMonth;
+  const from = first("from") && isIsoDate(first("from")!) ? first("from")! : null;
+  const to = first("to") && isIsoDate(first("to")!) ? first("to")! : null;
+  return { preset, month, from, to };
+}
+
+function shiftMonth(month: string, delta: number) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, monthNumber - 1 + delta, 1));
+  return date.toISOString().slice(0, 7);
+}
+
+const monthName = (month: string) => `${VAT_MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
+
+/**
+ * The date range a summary covers: inclusive start, exclusive end. Quarters are
+ * calendar quarters (Jan�Mar, Apr�Jun, �).
+ */
+export function vatSummaryRange(query: VatSummaryQuery, today = new Date()) {
+  const thisMonth = today.toISOString().slice(0, 7);
+  if (query.preset === "all") return { from: null, to: null, label: "All time" };
+  if (query.preset === "custom" && (query.from || query.to)) {
+    const end = query.to ? new Date(Date.parse(`${query.to}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : null;
+    return { from: query.from, to: end, label: `${query.from ?? "Start"} to ${query.to ?? "today"}` };
+  }
+  if (query.preset === "year") return { from: `${thisMonth.slice(0, 4)}-01-01`, to: `${Number(thisMonth.slice(0, 4)) + 1}-01-01`, label: thisMonth.slice(0, 4) };
+  if (query.preset === "quarter") {
+    const quarterStart = `${thisMonth.slice(0, 4)}-${String(Math.floor((Number(thisMonth.slice(5, 7)) - 1) / 3) * 3 + 1).padStart(2, "0")}`;
+    const end = shiftMonth(quarterStart, 3);
+    return { from: `${quarterStart}-01`, to: `${end}-01`, label: `${monthName(quarterStart)} � ${monthName(shiftMonth(quarterStart, 2))}` };
+  }
+  const month = query.preset === "last_month" ? shiftMonth(thisMonth, -1) : query.month;
+  return { from: `${month}-01`, to: `${shiftMonth(month, 1)}-01`, label: monthName(month) };
 }
