@@ -60,8 +60,8 @@ const specs: Record<AssistantDatasetId, DatasetSpec> = {
     fields: { id: "c.identity", name: "c.name", email: "c.email", phone: "c.phone", orders: "c.orders", total_spent: "c.total_spent", last_order_at: "c.last_order_at", type: "c.type", channels: "c.channels" },
   },
   shipments: {
-    from: "shipments s LEFT JOIN orders o ON o.id = s.order_id", freshness: "Shipment sync timestamps", freshnessField: "s.last_synced_at",
-    fields: { id: "s.id", order_id: "s.order_id", order_number: "o.order_number", provider: "s.provider", courier: "s.courier", service: "s.service", status: "s.status", tracking_url: "s.tracking_url", paid_at: "s.paid_at", collection_date: "s.collection_date", estimated_delivery_at: "s.estimated_delivery_at", last_synced_at: "s.last_synced_at" },
+    from: "shipments s LEFT JOIN shipment_orders links ON links.shipment_id = s.id LEFT JOIN orders o ON o.id = links.order_id", freshness: "Shipment sync timestamps", freshnessField: "s.last_synced_at",
+    fields: { id: "s.id", order_id: "links.order_id", order_number: "o.order_number", provider: "s.provider", courier: "s.courier", service: "s.service", status: "s.status", tracking_url: "s.tracking_url", paid_at: "s.paid_at", collection_date: "s.collection_date", estimated_delivery_at: "s.estimated_delivery_at", last_synced_at: "s.last_synced_at" },
   },
   employees: {
     from: `(SELECT u.id, u.name, u.email, u.createdAt AS created_at, MAX(s.updatedAt) AS last_seen_at,

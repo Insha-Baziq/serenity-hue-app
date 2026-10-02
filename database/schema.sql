@@ -224,6 +224,20 @@ CREATE TABLE IF NOT EXISTS shipments (
 CREATE INDEX IF NOT EXISTS shipments_order_id_idx ON shipments(order_id, last_synced_at DESC);
 CREATE INDEX IF NOT EXISTS shipments_provider_updated_idx ON shipments(provider, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS shipment_orders (
+  shipment_id TEXT NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
+  order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  match_method TEXT CHECK (match_method IN ('order_reference', 'customer_email', 'customer_phone', 'delivery_address')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (shipment_id, order_id)
+);
+
+CREATE INDEX IF NOT EXISTS shipment_orders_order_id_idx ON shipment_orders(order_id, shipment_id);
+
+-- Preserve existing automatic and manual links when upgrading.
+INSERT OR IGNORE INTO shipment_orders (shipment_id, order_id, match_method, created_at)
+SELECT id, order_id, match_method, created_at FROM shipments WHERE order_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS shipment_events (
   id TEXT PRIMARY KEY,
   shipment_id TEXT NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,

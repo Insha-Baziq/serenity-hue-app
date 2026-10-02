@@ -1,5 +1,3 @@
-import "server-only";
-
 import type { Parcel2GoShipment } from "@/lib/parcel2go";
 
 export type Parcel2GoMatchMethod = "order_reference" | "customer_email" | "customer_phone" | "delivery_address";
@@ -95,7 +93,7 @@ function matchingReferenceOrder(shipment: Parcel2GoShipment, orders: Parcel2GoOr
       const orderNumberKeys = referenceKeys(order.orderNumber);
       return [...sourceOrderKeys, ...orderNumberKeys].some((key) => leadingReferenceIds.has(key));
     });
-    if (leadingMatches.length === 1) return leadingMatches[0];
+    return leadingMatches.length === 1 ? leadingMatches[0] : undefined;
   }
 
   const references = new Set(shipment.importedReferences.flatMap((reference) => [...referenceKeys(reference)]));
@@ -180,4 +178,16 @@ export function findParcel2GoOrderMatch(shipment: Parcel2GoShipment, orders: Par
   const runnerUp = candidates[1];
   if (!best || best.score < 80 || (runnerUp && best.score - runnerUp.score < 20)) return undefined;
   return { orderId: best.order.id, method: best.method };
+}
+
+/** Resolve each imported order reference independently; absent orders never block other links. */
+export function findParcel2GoOrderMatches(shipment: Parcel2GoShipment, orders: Parcel2GoOrderMatchCandidate[]): Parcel2GoOrderMatch[] {
+  const matches = new Map<string, Parcel2GoOrderMatch>();
+  for (const reference of shipment.importedReferences) {
+    const order = matchingReferenceOrder({ ...shipment, importedReferences: [reference] }, orders);
+    if (order) matches.set(order.id, { orderId: order.id, method: "order_reference" });
+  }
+  if (matches.size > 0) return [...matches.values()];
+  const fallback = findParcel2GoOrderMatch(shipment, orders);
+  return fallback ? [fallback] : [];
 }

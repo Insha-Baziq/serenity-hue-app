@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
+import { getParcel2GoDeliveriesForOrders } from "@/lib/parcel2go-deliveries";
 import { getTursoClient } from "@/lib/turso";
 import { assertAssistantExpectedValue } from "@/lib/mcp-write-preconditions";
 import { decryptTikTokToken, encryptTikTokToken } from "@/lib/tiktok-token-crypto";
@@ -9,7 +10,7 @@ import { hasTikTokAdsAppCredentials, type TikTokAdsTokenBundle } from "@/lib/tik
 import { tiktokShopProductUrl } from "@/lib/tiktok-links";
 import type { LabIngredientImportRow } from "@/lib/lab-ingredient-csv";
 import { hashPassword } from "better-auth/crypto";
-import type { ActivityActor, ActivityDetails, ActivityLogPage, ActivityLogRow, ActivityOutcome, ActivitySource, Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaPackaging, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoDelivery, Parcel2GoMatchMethod, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
+import type { ActivityActor, ActivityDetails, ActivityLogPage, ActivityLogRow, ActivityOutcome, ActivitySource, Channel, ChannelInventoryRow, ChannelInventorySnapshot, Customer, Employee, InventoryAlert, InventoryLedgerEntry, InventorySnapshot, LabBatch, LabBatchDetail, LabFormula, LabFormulaLine, LabFormulaPackaging, LabIngredient, LabQuantityUnit, Order, OrdersPageResult, PackagingMaterial, Parcel2GoShipmentOption, PhysicalChannel, PhysicalChannelListing, PhysicalInventoryAdjustment, PhysicalInventoryItem, PhysicalInventoryRunway, PhysicalInventoryRunways, PhysicalListingMappingStatus, PhysicalProductDetail, ProductDetail, ProductInventory, ProductDetailVariant, StockMovement, SyncSnapshot } from "@/lib/types";
 import type { ActivityLogQuery } from "@/lib/activity-log-query";
 import { sanitizeActivityDetails } from "@/lib/activity-log-safety";
 import type { OrdersQuery } from "@/lib/orders-query";
@@ -276,68 +277,6 @@ export async function getActivityLogPage(query: ActivityLogQuery): Promise<Activ
   return { rows, total, page, pageSize, pageCount };
 }
 
-function toParcel2GoMatchMethod(value: unknown): Parcel2GoMatchMethod | undefined {
-  const method = stringValue(value);
-  return method === "order_reference" || method === "customer_email" || method === "customer_phone" || method === "delivery_address"
-    ? method
-    : undefined;
-}
-
-async function getParcel2GoDeliveriesForOrders(orderIds: string[]) {
-  const deliveriesByOrderId = new Map<string, Parcel2GoDelivery[]>();
-  if (orderIds.length === 0) return deliveriesByOrderId;
-  const db = await getTursoClient();
-  const placeholders = orderIds.map(() => "?").join(", ");
-  const shipments = await db.execute({
-    sql: `SELECT id, order_id, external_order_line_id, source_references_json, courier, service, status, paid_at, collection_date, estimated_delivery_at, tracking_url, match_method
-          FROM shipments WHERE order_id IN (${placeholders}) AND provider = 'parcel2go' ORDER BY last_synced_at DESC`,
-    args: orderIds,
-  });
-  const deliveriesByShipmentId = new Map<string, Parcel2GoDelivery>();
-  for (const shipment of shipments.rows) {
-    const shipmentId = stringValue(shipment.id);
-    const orderId = stringValue(shipment.order_id);
-    if (!shipmentId || !orderId) continue;
-    const delivery: Parcel2GoDelivery = {
-      id: shipmentId,
-      orderLineId: stringValue(shipment.external_order_line_id),
-      sourceReferences: stringArray(shipment.source_references_json),
-      courier: stringValue(shipment.courier) || "Parcel2Go courier",
-      service: stringValue(shipment.service) || "Service details unavailable",
-      status: stringValue(shipment.status) || "booked",
-      paidAt: optionalString(shipment.paid_at),
-      collectionDate: optionalString(shipment.collection_date),
-      estimatedDeliveryAt: optionalString(shipment.estimated_delivery_at),
-      trackingUrl: optionalString(shipment.tracking_url),
-      matchMethod: toParcel2GoMatchMethod(shipment.match_method),
-      events: [],
-    };
-    deliveriesByShipmentId.set(shipmentId, delivery);
-    const orderDeliveries = deliveriesByOrderId.get(orderId) ?? [];
-    orderDeliveries.push(delivery);
-    deliveriesByOrderId.set(orderId, orderDeliveries);
-  }
-  const shipmentIds = [...deliveriesByShipmentId.keys()];
-  if (shipmentIds.length === 0) return deliveriesByOrderId;
-  const eventPlaceholders = shipmentIds.map(() => "?").join(", ");
-  const events = await db.execute({
-    sql: `SELECT id, shipment_id, event_key, label, occurred_at FROM shipment_events
-          WHERE shipment_id IN (${eventPlaceholders}) ORDER BY occurred_at ASC`,
-    args: shipmentIds,
-  });
-  for (const event of events.rows) {
-    const delivery = deliveriesByShipmentId.get(stringValue(event.shipment_id));
-    if (!delivery) continue;
-    delivery.events.push({
-      id: stringValue(event.id),
-      key: stringValue(event.event_key),
-      label: stringValue(event.label),
-      occurredAt: stringValue(event.occurred_at),
-    });
-  }
-  return deliveriesByOrderId;
-}
-
 const ORDERS_BASE_COLUMNS = `o.id, o.source, o.source_order_id, o.order_number, o.customer_name, o.customer_email,
   o.customer_phone, o.shipping_address_json, o.financial_status, o.fulfillment_status, o.cancelled_at,
   o.source_created_at, o.subtotal_amount, o.shipping_amount, o.tax_amount, o.total_amount`;
@@ -398,7 +337,7 @@ async function hydrateOrders(db: DatabaseClient, rows: QueryRows): Promise<Order
   if (rows.length === 0) return [];
   const orderIds = rows.map((row) => stringValue(row.id)).filter(Boolean);
   const [deliveriesByOrderId, itemsResult] = await Promise.all([
-    getParcel2GoDeliveriesForOrders(orderIds),
+    getParcel2GoDeliveriesForOrders(await getTursoClient(), orderIds),
     db.execute({
       sql: `SELECT order_id, id, title, variant_title, sku, quantity, unit_price_amount, image_url
             FROM order_items WHERE order_id IN (${orderIds.map(() => "?").join(", ")}) ORDER BY order_id, rowid`,
@@ -1299,7 +1238,7 @@ export async function getUnlinkedParcel2GoShipments(): Promise<Parcel2GoShipment
   const result = await db.execute(`
     SELECT id, external_order_line_id, source_references_json, courier, service, status, collection_date, estimated_delivery_at
     FROM shipments
-    WHERE provider = 'parcel2go' AND order_id IS NULL
+    WHERE provider = 'parcel2go' AND NOT EXISTS (SELECT 1 FROM shipment_orders links WHERE links.shipment_id = shipments.id)
     ORDER BY COALESCE(collection_date, updated_at) DESC
     LIMIT 25
   `);
@@ -1326,8 +1265,12 @@ export async function linkParcel2GoShipment(orderId: string, shipmentId: string,
     if (!shipment) throw new Error("Parcel2Go delivery not found");
     const linkedOrderId = optionalString(shipment.order_id);
     if (expectedShipmentOrderId !== undefined) assertAssistantExpectedValue(linkedOrderId ?? null, expectedShipmentOrderId, "shipment linked order");
-    if (linkedOrderId && linkedOrderId !== orderId) throw new Error("This Parcel2Go delivery is already linked to another order");
-    await transaction.execute({ sql: "UPDATE shipments SET order_id = ?, updated_at = ? WHERE id = ?", args: [orderId, new Date().toISOString(), shipmentId] });
+    const now = new Date().toISOString();
+    await transaction.execute({
+      sql: "INSERT OR IGNORE INTO shipment_orders (shipment_id, order_id, created_at) VALUES (?, ?, ?)",
+      args: [shipmentId, orderId, now],
+    });
+    await transaction.execute({ sql: "UPDATE shipments SET order_id = COALESCE(order_id, ?), updated_at = ? WHERE id = ?", args: [orderId, now, shipmentId] });
     await recordActivityEventInTransaction(transaction, {
       actor,
       source: "manual",

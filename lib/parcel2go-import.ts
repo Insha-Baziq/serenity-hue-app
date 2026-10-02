@@ -1,6 +1,7 @@
 import "server-only";
 
-import { findParcel2GoOrderMatch, type Parcel2GoOrderMatchCandidate } from "@/lib/parcel2go-matching";
+import { findParcel2GoOrderMatches, type Parcel2GoOrderMatchCandidate } from "@/lib/parcel2go-matching";
+import { addParcel2GoOrderLinks, reconcileParcel2GoOrderLinks } from "@/lib/parcel2go-links";
 import { getRecentParcel2GoShipments } from "@/lib/parcel2go";
 import { getTursoClient } from "@/lib/turso";
 import { changedColumns } from "@/lib/sql-upsert";
@@ -30,9 +31,6 @@ function shippingAddress(value: unknown) {
 /** Upserts Parcel2Go's recent delivery feed and links only high-confidence channel matches. */
 export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportResult> {
   const shipments = await getRecentParcel2GoShipments();
-  // The candidate scan below reads every channel order, so it is only worth
-  // paying for when there is something to match against.
-  if (shipments.length === 0) return { shipments: 0, newShipments: 0, materiallyChangedShipments: 0, events: 0, autoLinked: 0 };
   const db = await getTursoClient();
   // NOTE: this deliberately reads all channel orders rather than a date window.
   // findParcel2GoOrderMatch() resolves an exact Parcel2Go reference before it
@@ -63,7 +61,7 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
 
   for (const shipment of shipments) {
     const shipmentId = `parcel2go:${shipment.orderLineId}`;
-    const match = findParcel2GoOrderMatch(shipment, orders);
+    const matches = findParcel2GoOrderMatches(shipment, orders);
     const existing = await db.execute({
       sql: `SELECT transaction_id, courier, service, source, status, source_references_json,
                    paid_at, collection_date, estimated_delivery_at, tracking_url
@@ -129,15 +127,7 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
       ],
     });
 
-    if (match) {
-      const linked = await db.execute({
-        sql: `UPDATE shipments
-              SET order_id = ?, match_method = ?, updated_at = ?
-              WHERE id = ? AND order_id IS NULL`,
-        args: [match.orderId, match.method, now, shipmentId],
-      });
-      autoLinked += linked.rowsAffected;
-    }
+    autoLinked += await addParcel2GoOrderLinks(db, shipmentId, matches, now);
 
     for (const event of shipment.events) {
       events += 1;
@@ -154,5 +144,6 @@ export async function importRecentParcel2GoShipments(): Promise<Parcel2GoImportR
     }
   }
 
+  autoLinked += await reconcileParcel2GoOrderLinks(db, orders);
   return { shipments: shipments.length, newShipments, materiallyChangedShipments, events, autoLinked };
 }

@@ -2,6 +2,14 @@
 
 Interfaces only. Update this file in the same commit as any public interface change.
 
+### Shared Parcel2Go bookings
+
+- `findParcel2GoOrderMatches(shipment, orders)` resolves each imported reference independently and returns deduplicated matches. Missing or ambiguous references do not block other references. Smart Send's leading order ID takes precedence over checkout/line IDs; customer fallback remains a single high-confidence match.
+- `shipment_orders` stores many orders per shipment; schema initialization backfills existing scalar links. `shipments.order_id` remains a stable primary anchor for existing assistant mutation preconditions.
+- `addParcel2GoOrderLinks(db, shipmentId, matches)` adds links atomically and idempotently. `reconcileParcel2GoOrderLinks(db, orders)` retries all saved references on each sync, even outside the provider's recent feed.
+- `getParcel2GoDeliveriesForOrders(db, orderIds)` hydrates every linked order with the shared booking's tracking, status, and complete event history. Assistant shipment reads also expose each relationship.
+- Covered by `tests/parcel2go-matching.test.mjs` and `tests/parcel2go-links.test.mjs`.
+
 ## System shape
 
 ```text
