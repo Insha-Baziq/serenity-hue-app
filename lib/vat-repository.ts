@@ -168,7 +168,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
     : {
         sql: `SELECT ${INVOICE_COLUMNS}
               FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id
-              WHERE i.status = ? ${query.tab === "saved" ? savedFilter : ""} ${query.review ? `AND ${NEEDS_REVIEW}` : ""}
+              WHERE ${query.tab === "to_get" ? `(i.status = ? OR ${NEEDS_REVIEW})` : "i.status = ?"} ${query.tab === "saved" ? `${savedFilter} AND NOT ${NEEDS_REVIEW}` : ""}
               ORDER BY ${query.tab === "removed" ? "i.removed_at DESC" : `${RECEIVED_DATE} IS NULL, ${RECEIVED_DATE} DESC`}, i.id DESC
               LIMIT ? OFFSET ?`,
         args: [query.tab, ...(query.tab === "saved" ? rangeArgs : []), VAT_PAGE_SIZE, offset],
@@ -180,7 +180,8 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
               COALESCE(SUM(CASE WHEN i.status = 'saved' ${savedFilter} THEN 1 ELSE 0 END), 0) AS saved,
               COALESCE(SUM(CASE WHEN i.status = 'to_get' THEN 1 ELSE 0 END), 0) AS to_get,
               COALESCE(SUM(CASE WHEN i.status = 'removed' THEN 1 ELSE 0 END), 0) AS removed,
-              COALESCE(SUM(CASE WHEN ${NEEDS_REVIEW} ${savedFilter} THEN 1 ELSE 0 END), 0) AS review
+              COALESCE(SUM(CASE WHEN ${NEEDS_REVIEW} ${savedFilter} THEN 1 ELSE 0 END), 0) AS review,
+              COALESCE(SUM(CASE WHEN ${NEEDS_REVIEW} THEN 1 ELSE 0 END), 0) AS review_all
             FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id`,
       args: [...rangeArgs, ...rangeArgs],
     },
@@ -193,13 +194,15 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
   const countRow = counts.rows[0] ?? {};
   const tabCounts = {
     summary: 0,
-    saved: Number(countRow.saved ?? 0),
-    to_get: Number(countRow.to_get ?? 0),
+    // Invoices awaiting review sit in their own tab, not in Invoices.
+    saved: Number(countRow.saved ?? 0) - Number(countRow.review ?? 0),
+    // Needs review: invoices to fetch plus flagged invoices awaiting a decision.
+    to_get: Number(countRow.to_get ?? 0) + Number(countRow.review_all ?? 0),
     removed: Number(countRow.removed ?? 0),
     ignored: Number(ignored.rows[0]?.count ?? 0),
   };
   const reviewCount = Number(countRow.review ?? 0);
-  const total = query.review ? reviewCount : tabCounts[query.tab];
+  const total = tabCounts[query.tab];
   return {
     query,
     counts: tabCounts,

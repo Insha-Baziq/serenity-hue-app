@@ -21,7 +21,12 @@ import styles from "./vat-workspace.module.css";
 
 type Props = { data: VatWorkspaceData; summary: VatSummaryData | null; notice: string | null; connectionError: string | null };
 
-const TAB_LABELS: Record<VatTab, string> = { summary: "Summary", saved: "Invoices", to_get: "To get", ignored: "Ignored", removed: "Removed" };
+// Ignored and Removed stay reachable by URL but are hidden: they don't need anyone's attention.
+const NAV_TABS: { tab: VatTab; review: boolean; label: string }[] = [
+  { tab: "summary", review: false, label: "Summary" },
+  { tab: "saved", review: false, label: "Invoices" },
+  { tab: "to_get", review: false, label: "Needs review" },
+];
 
 export function formatVatDate(value: string | null) {
   if (!value) return "—";
@@ -77,7 +82,7 @@ function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[
       <TableBody>{rows.map((row) => <TableRow key={row.id} {...open(row.id)}>
         <TableCell>{formatVatDate(tab === "removed" ? row.removedAt : row.receivedAt ?? row.invoiceDate)}</TableCell>
         <TableCell className={styles.supplierCell}><span className={styles.strong}>{row.supplierName ?? "Unknown supplier"}</span>{row.emailSubject && <span className={styles.muted} title={row.emailSubject}>{row.emailSubject}</span>}</TableCell>
-        <TableCell>{tab === "to_get" ? <VatNoteChips notes={row.notes.filter((note) => note in VAT_GET_REASON_LABELS)} /> : tab === "removed" ? VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? "—" : row.invoiceNumber ?? "—"}</TableCell>
+        <TableCell>{tab === "to_get" ? (row.needsReview ? <><span className={`${styles.chip} ${styles.chipWarn}`}>Check invoice</span> <VatNoteChips notes={row.notes} /></> : <><span className={styles.chip}>Get invoice</span> <VatNoteChips notes={row.notes.filter((note) => note in VAT_GET_REASON_LABELS)} /></>) : tab === "removed" ? VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? "—" : row.invoiceNumber ?? "—"}</TableCell>
         {tab === "saved" && <><TableCell className={styles.amount}>{formatVatMoney(row.netMinor, row.currency)}</TableCell><TableCell className={styles.amount}>{formatVatMoney(row.vatMinor, row.currency)}</TableCell></>}
         <TableCell className={styles.amount}>{formatVatMoney(row.grossMinor, row.currency)}</TableCell>
         <TableCell className={styles.notesCell}>{tab === "saved" ? <>{row.needsReview && <span className={`${styles.chip} ${styles.chipWarn}`} style={{ marginBottom: 4 }}>To review</span>}<VatNoteChips notes={row.notes} /></> : tab === "removed" ? row.removedBy ?? "—" : row.source === "manual" ? "Upload" : row.emailFrom ?? "Email"}</TableCell>
@@ -186,17 +191,15 @@ export function VatWorkspace({ data, summary, notice, connectionError }: Props) 
 
     <div className={styles.toolbar}>
       <nav className={styles.tabs} aria-label="VAT lists">
-        {(Object.keys(TAB_LABELS) as VatTab[]).map((tab) => <Link key={tab} className={styles.tab} href={href({ tab })} aria-current={query.tab === tab ? "page" : undefined} scroll={false}>
-          {TAB_LABELS[tab]}{tab !== "summary" && <b>{data.counts[tab]}</b>}
-        </Link>)}
+        {NAV_TABS.map(({ tab, review, label }) => {
+          const current = query.tab === tab && query.review === review;
+          const count = review ? data.reviewCount : data.counts[tab];
+          return <Link key={label} className={styles.tab} href={href({ tab, review })} aria-current={current ? "page" : undefined} scroll={false}>
+            {label}{tab !== "summary" && <b>{count}</b>}
+          </Link>;
+        })}
       </nav>
       {query.tab !== "summary" && <div className={styles.filters}>
-        {query.tab === "saved" && <Button
-          variant={query.review ? "primary" : "outline"}
-          className={styles.control}
-          aria-pressed={query.review}
-          onClick={() => navigate({ review: !query.review })}
-        >To review {!query.review && <span className={styles.reviewCount}>{data.reviewCount}</span>}{query.review && `(${data.reviewCount})`}</Button>}
         {monthFilters && <Select value={query.month ?? "all"} onValueChange={(value) => navigate({ month: value === "all" ? null : value })}>
           <SelectTrigger aria-label="Month" className={styles.monthSelect}><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="all">All months</SelectItem>{data.months.map((month) => <SelectItem key={month} value={month}>{monthLabel(month)}</SelectItem>)}</SelectContent>
@@ -208,8 +211,8 @@ export function VatWorkspace({ data, summary, notice, connectionError }: Props) 
     {query.tab === "summary" && summary ? <VatSummary data={summary} months={data.months} /> : <div className={styles.panel} aria-busy={isPending} style={{ opacity: isPending ? 0.62 : 1 }}>
       {rows === 0
         ? <div className={styles.empty}>
-            <strong>{query.tab === "saved" ? "No saved invoices for this view" : query.tab === "to_get" ? "Nothing to get" : query.tab === "ignored" ? "No ignored emails for this view" : "Nothing has been removed"}</strong>
-            <span>{query.tab === "saved" ? "Upload an invoice, or import the existing VAT records." : query.tab === "to_get" ? "Purchases whose invoice must be fetched will appear here." : query.tab === "ignored" ? "Emails classified as not a purchase appear here once inbox data exists." : "Removed records stay here and can be restored."}</span>
+            <strong>{query.review ? "Nothing needs review" : query.tab === "saved" ? "No saved invoices for this view" : query.tab === "to_get" ? "Nothing needs review" : query.tab === "ignored" ? "No ignored emails for this view" : "Nothing has been removed"}</strong>
+            <span>{query.review ? "Possible duplicates and invoices to check will appear here." : query.tab === "saved" ? "Upload an invoice, or import the existing VAT records." : query.tab === "to_get" ? "Invoices to fetch, possible duplicates and invoices to check appear here." : query.tab === "ignored" ? "Emails classified as not a purchase appear here once inbox data exists." : "Removed records stay here and can be restored."}</span>
           </div>
         : query.tab === "ignored" ? <EmailTable rows={data.emails} /> : <InvoiceTable tab={query.tab} rows={data.invoices} onOpen={setOpenInvoiceId} />}
       <footer className={styles.footer}>
