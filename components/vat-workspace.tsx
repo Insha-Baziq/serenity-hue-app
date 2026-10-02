@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, Inbox, Link2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,6 +11,7 @@ import { VatConnectionsSheet } from "@/components/vat-connections-sheet";
 import { VatInvoiceSheet } from "@/components/vat-invoice-sheet";
 import { VatUploadDialog, type VatUploadTarget } from "@/components/vat-upload-dialog";
 import { VatGetInvoicesDialog } from "@/components/vat-get-invoices-dialog";
+import { useVatRun } from "@/components/use-vat-run";
 import { getPageItems } from "@/lib/pagination";
 import { formatVatMoney } from "@/lib/vat-money";
 import { vatEmailLink, VAT_CATEGORY_LABELS, VAT_GET_REASON_LABELS, VAT_MONTH_NAMES, VAT_NOTE_LABELS, VAT_REMOVED_REASON_LABELS } from "@/lib/vat-rules";
@@ -111,6 +112,9 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
   const [uploadTarget, setUploadTarget] = useState<VatUploadTarget | null>(null);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [getInvoicesOpen, setGetInvoicesOpen] = useState(false);
+  const refreshList = useCallback(() => router.refresh(), [router]);
+  const runController = useVatRun(refreshList);
+  const activeRun = runController.run && ["listing", "processing", "paused"].includes(runController.run.status) ? runController.run : null;
   const { query, connections } = data;
   const dropboxReady = connections.dropbox.configured && connections.dropbox.connected;
   const years = [...new Set(data.months.map((month) => month.slice(0, 4)))];
@@ -149,6 +153,15 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
       </div>
     </header>
 
+    {activeRun && <button type="button" className={activeRun.status === "paused" ? styles.warning : styles.notice} style={{ width: "100%", textAlign: "left", cursor: "pointer" }} onClick={() => setGetInvoicesOpen(true)}>
+      <Inbox size={16} aria-hidden="true" />
+      <span style={{ flex: 1 }}>
+        {activeRun.status === "listing" ? "Getting invoices: finding emails…"
+          : activeRun.status === "paused" ? `Getting invoices paused at ${activeRun.processed} of ${activeRun.total}. Open to resume.`
+            : `Getting invoices: ${activeRun.processed} of ${activeRun.total} checked · ${activeRun.invoices} filed · ${activeRun.toGet} to get`}
+        {activeRun.total > 0 && <progress max={activeRun.total} value={activeRun.processed} style={{ display: "block", width: "100%", marginTop: 6 }} aria-label="Get invoices progress" />}
+      </span>
+    </button>}
     {notice && <div className={styles.notice} role="status"><CheckCircle2 size={16} aria-hidden="true" />{notice}</div>}
     {connectionError && <div className={styles.errorNotice} role="alert"><AlertTriangle size={16} aria-hidden="true" />Connection not completed: {connectionError}</div>}
     {!dropboxReady && <div className={styles.warning} role="status">
@@ -197,7 +210,7 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
       onUpload={(invoice) => { setOpenInvoiceId(null); setUploadTarget({ invoice }); }}
     />
     <VatUploadDialog target={uploadTarget} dropboxReady={dropboxReady} onClose={() => setUploadTarget(null)} onFiled={refresh} />
-    <VatGetInvoicesDialog open={getInvoicesOpen} onOpenChange={setGetInvoicesOpen} onProgress={refresh} />
+    <VatGetInvoicesDialog open={getInvoicesOpen} onOpenChange={setGetInvoicesOpen} controller={runController} />
     <VatConnectionsSheet open={connectionsOpen} onOpenChange={setConnectionsOpen} connections={connections} syncStartDate={data.syncStartDate} onChanged={refresh} />
   </section>;
 }

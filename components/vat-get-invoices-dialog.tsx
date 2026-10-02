@@ -1,134 +1,38 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { vatRequest } from "@/lib/vat-client";
+import type { VatRunController } from "@/components/use-vat-run";
 import styles from "./vat-workspace.module.css";
 
-type Run = {
-  id: string;
-  startDate: string;
-  status: "listing" | "processing" | "paused" | "completed" | "cancelled";
-  total: number;
-  processed: number;
-  failed: number;
-  invoices: number;
-  toGet: number;
-  pauseService: string | null;
-  pauseDetail: string | null;
-  lastError: string | null;
-};
-
-type Overview = { activeRun: Run | null; suggestedStartDate: string; latestEmailAt: string | null };
-type Props = { open: boolean; onOpenChange: (open: boolean) => void; onProgress: () => void };
+type Props = { open: boolean; onOpenChange: (open: boolean) => void; controller: VatRunController };
 
 const SERVICE_NAMES: Record<string, string> = { jev: "OpenRouter (Jev)", llama: "LlamaCloud", dropbox: "Dropbox", outlook: "Outlook" };
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function VatGetInvoicesDialog({ open, onOpenChange, onProgress }: Props) {
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [startDate, setStartDate] = useState("");
-  const [run, setRun] = useState<Run | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
-  const active = useRef(false);
-
-  useEffect(() => {
-    if (!open) {
-      active.current = false;
-      return;
-    }
-    let cancelled = false;
-    vatRequest<Overview>("/api/vat/runs")
-      .then((result) => {
-        if (cancelled) return;
-        setOverview(result);
-        setStartDate(result.suggestedStartDate);
-        setRun(result.activeRun);
-        setError(null);
-      })
-      .catch((requestError: Error) => { if (!cancelled) setError(requestError.message); });
-    return () => { cancelled = true; };
-  }, [open]);
-
-  /** Advances the run step by step while this window stays open. */
-  async function drive(current: Run) {
-    active.current = true;
-    setWorking(true);
-    let latest = current;
-    try {
-      while (active.current && (latest.status === "listing" || latest.status === "processing")) {
-        const result = await vatRequest<{ busy: boolean; run: Run }>(`/api/vat/runs/${latest.id}/step`, { body: {} });
-        latest = result.run;
-        setRun(latest);
-        onProgress();
-        if (result.busy) await wait(4_000);
-      }
-    } catch (requestError) {
-      setError((requestError as Error).message);
-    } finally {
-      active.current = false;
-      setWorking(false);
-    }
-  }
-
-  async function start() {
-    setError(null);
-    try {
-      const result = await vatRequest<{ run: Run }>("/api/vat/runs", { body: { startDate } });
-      setRun(result.run);
-      await drive(result.run);
-    } catch (requestError) {
-      setError((requestError as Error).message);
-    }
-  }
-
-  async function resume() {
-    if (!run) return;
-    setError(null);
-    try {
-      const result = await vatRequest<{ run: Run }>(`/api/vat/runs/${run.id}/resume`, { body: {} });
-      setRun(result.run);
-      await drive(result.run);
-    } catch (requestError) {
-      setError((requestError as Error).message);
-    }
-  }
-
-  function close(next: boolean) {
-    if (!next) active.current = false;
-    onOpenChange(next);
-  }
-
+/** Choose a start date and watch progress. The run keeps going after this closes. */
+export function VatGetInvoicesDialog({ open, onOpenChange, controller }: Props) {
+  const { run, working, error } = controller;
+  const [startDate, setStartDate] = useState<string | null>(null);
+  const [startingOver, setStartingOver] = useState(false);
+  const date = startDate ?? controller.suggestedStartDate ?? "";
   const unfinished = run && ["listing", "processing", "paused"].includes(run.status);
+  const choosing = !run || startingOver || !unfinished;
   const percent = run && run.total ? Math.round((run.processed / run.total) * 100) : 0;
 
-  return <Dialog open={open} onOpenChange={close}>
+  return <Dialog open={open} onOpenChange={(next) => { if (!next) setStartingOver(false); onOpenChange(next); }}>
     <DialogContent className={styles.dialog}>
       <div className={styles.sheetHeader}>
         <DialogTitle asChild><h2>Get invoices</h2></DialogTitle>
         <DialogDescription className="sr-only">Find invoices in the connected inboxes</DialogDescription>
       </div>
       <div className={styles.sheetBody}>
-        {!overview && !error && <p className={styles.formHint}>Loading…</p>}
-
-        {overview && !run && <>
-          <label className={styles.field} htmlFor="vat-run-start">Start date
-            <Input id="vat-run-start" className={styles.input} type="date" value={startDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setStartDate(event.target.value)} />
-          </label>
-          <p className={styles.formHint}>Emails already checked are skipped.</p>
-          <div className={styles.actions}><Button variant="primary" onClick={start} disabled={!startDate}>Get invoices</Button></div>
-        </>}
-
-        {run && <>
+        {run && !choosing && <>
           <p className={styles.progress} role="status">
             {run.status === "listing" && `Finding emails since ${run.startDate}…`}
             {run.status === "processing" && `Checking emails: ${run.processed} of ${run.total} (${percent}%)`}
             {run.status === "paused" && `Paused at ${run.processed} of ${run.total}`}
-            {run.status === "completed" && `Done: ${run.processed} new emails checked`}
-            {run.status === "cancelled" && "Stopped"}
           </p>
           {run.total > 0 && <progress max={run.total} value={run.processed} style={{ width: "100%" }} aria-label="Progress" />}
           <dl className={styles.facts}>
@@ -136,16 +40,26 @@ export function VatGetInvoicesDialog({ open, onOpenChange, onProgress }: Props) 
             <dt>To get</dt><dd>{run.toGet}</dd>
             {run.failed > 0 && <><dt>Couldn&apos;t process</dt><dd>{run.failed}</dd></>}
           </dl>
-          {run.status === "paused" && <p className={styles.formError} role="alert">
-            {SERVICE_NAMES[run.pauseService ?? ""] ?? "A service"}: {run.pauseDetail}. Fix it, then resume.
-          </p>}
-          {working && <p className={styles.formHint}>Keep this window open while it runs.</p>}
+          {run.status === "paused" && <p className={styles.formError} role="alert">{SERVICE_NAMES[run.pauseService ?? ""] ?? "A service"}: {run.pauseDetail}. Fix it, then resume.</p>}
+          {working && <p className={styles.formHint}>You can close this; it keeps running while the VAT page is open.</p>}
           <div className={styles.actions}>
-            {run.status === "paused" && <Button variant="primary" onClick={resume}>Resume</Button>}
-            {unfinished && run.status !== "paused" && !working && <Button variant="primary" onClick={() => drive(run)}>Continue</Button>}
-            {working && <Button variant="outline" onClick={() => { active.current = false; }}>Pause</Button>}
-            {!working && unfinished && <Button variant="ghost" onClick={() => setRun(null)}>Start over from a date</Button>}
-            {!working && !unfinished && <Button variant="outline" onClick={() => close(false)}>Close</Button>}
+            {run.status === "paused" && <Button variant="primary" onClick={() => void controller.resume()}>Resume</Button>}
+            {run.status !== "paused" && !working && <Button variant="primary" onClick={controller.continueRun}>Continue</Button>}
+            {working && <Button variant="outline" onClick={controller.pause}>Pause</Button>}
+            {!working && <Button variant="ghost" onClick={() => setStartingOver(true)}>Start over from a date</Button>}
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          </div>
+        </>}
+
+        {choosing && <>
+          {run?.status === "completed" && !startingOver && <p className={styles.progress} role="status">Last run: {run.processed} emails checked, {run.invoices} invoices filed, {run.toGet} to get.</p>}
+          <label className={styles.field} htmlFor="vat-run-start">Start date
+            <Input id="vat-run-start" className={styles.input} type="date" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <p className={styles.formHint}>Emails already checked are skipped.</p>
+          <div className={styles.actions}>
+            <Button variant="primary" disabled={!date || working} onClick={() => { setStartingOver(false); void controller.start(date); }}>Get invoices</Button>
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
           </div>
         </>}
         {error && <p className={styles.formError} role="alert">{error}</p>}
