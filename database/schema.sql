@@ -1113,6 +1113,10 @@ CREATE TABLE IF NOT EXISTS vat_invoices (
   updated_by_id TEXT,
   updated_by_label TEXT,
   imported_at TEXT,
+  -- Set when staff keep a flagged invoice (Possible duplicate / Check) or edit it.
+  reviewed_at TEXT,
+  reviewed_by_id TEXT,
+  reviewed_by_label TEXT,
   CHECK ((status = 'removed') = (removed_at IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS vat_invoices_status_date_idx ON vat_invoices(status, invoice_date DESC, id DESC);

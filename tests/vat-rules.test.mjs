@@ -98,8 +98,8 @@ test("a saved invoice clears matching To get items and only flags possible dupli
 });
 
 test("workspace query parsing falls back to safe defaults", () => {
-  assert.deepEqual(parseVatWorkspaceQuery({ tab: "to_get", month: "2026-09", page: "3" }), { tab: "to_get", month: "2026-09", page: 3 });
-  assert.deepEqual(parseVatWorkspaceQuery({ tab: "drop table", month: "2026-13", page: "-4" }), { tab: "saved", month: null, page: 1 });
+  assert.deepEqual(parseVatWorkspaceQuery({ tab: "to_get", month: "2026-09", page: "3" }), { tab: "to_get", month: "2026-09", page: 3, review: false });
+  assert.deepEqual(parseVatWorkspaceQuery({ tab: "drop table", month: "2026-13", page: "-4" }), { tab: "saved", month: null, page: 1, review: false });
   assert.deepEqual(vatMonthOptions("2026-08-14", new Date("2026-10-01T00:00:00Z")), ["2026-10", "2026-09", "2026-08"]);
 });
 

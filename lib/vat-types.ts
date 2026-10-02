@@ -27,6 +27,8 @@ export type VatInvoiceRow = {
   /** The file was filed by the earlier standalone app's Dropbox account. */
   legacyFile: boolean;
   hasFile: boolean;
+  /** Flagged Possible duplicate or Check, and not yet kept by staff. Left out of the accountant's log. */
+  needsReview: boolean;
   emailSubject: string | null;
   emailFrom: string | null;
   /** When the source email arrived (null for uploads). */
@@ -44,6 +46,8 @@ export type VatInvoiceDetail = VatInvoiceRow & {
   updatedBy: string | null;
   createdAt: string;
   events: VatEventRow[];
+  /** Other saved invoices from the same supplier within 14 days, for deciding duplicates. */
+  similar: VatInvoiceRow[];
 };
 
 export type VatEventRow = {
@@ -96,11 +100,13 @@ export type VatConnectionState = {
   apiKeys: Array<{ service: "jev" | "llama"; name: string; source: "app" | "server" | "missing"; last4: string | null; updatedBy: string | null; updatedAt: string | null }>;
 };
 
-export type VatWorkspaceQuery = { tab: VatTab; month: string | null; page: number };
+export type VatWorkspaceQuery = { tab: VatTab; month: string | null; page: number; review: boolean };
 
 export type VatWorkspaceData = {
   query: VatWorkspaceQuery;
   counts: Record<VatTab, number>;
+  /** Saved invoices still waiting for review (in the selected month). */
+  reviewCount: number;
   invoices: VatInvoiceRow[];
   emails: VatEmailRow[];
   total: number;

@@ -34,6 +34,7 @@ export const MCP_STAFF_ROUTE_COVERAGE = {
   // VAT workspace (ADR 0011): staff-only in this phase; MCP VAT tools need their own decision.
   "vat/connections/dropbox": { internalReason: "VAT shared connection management; MCP VAT tools deferred (ADR 0011)" },
   "vat/invoices/[invoiceId]": { internalReason: "VAT invoice review in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
+  "vat/invoices/[invoiceId]/approve": { internalReason: "VAT review in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
   "vat/invoices/[invoiceId]/remove": { internalReason: "Retained VAT removal in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
   "vat/invoices/[invoiceId]/restore": { internalReason: "VAT restore in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
   "vat/mailboxes/[mailboxId]": { internalReason: "VAT shared connection management; MCP VAT tools deferred (ADR 0011)" },

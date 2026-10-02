@@ -6,7 +6,7 @@ import { getTursoClient } from "@/lib/turso";
 import { getVatApiKeyStatuses } from "@/lib/vat-api-keys";
 import { insertActivityEvent, invalidateActivityLogCache } from "@/lib/repository";
 import { decryptVatToken, encryptVatToken, hashVatOAuthState, isVatDropboxConfigured, isVatOutlookConfigured, missingVatSettings, vatDropboxRedirectUri, vatOutlookRedirectUri } from "@/lib/vat-config";
-import { matchSavedInvoice, monthRange, notesAfterReview, VAT_PAGE_SIZE, vatMonthOptions, type NormalizedVatFields, type VatLogRow, type VatMatchCandidate } from "@/lib/vat-rules";
+import { matchSavedInvoice, monthRange, notesAfterReview, sameSupplier, VAT_PAGE_SIZE, vatMonthOptions, type NormalizedVatFields, type VatLogRow, type VatMatchCandidate } from "@/lib/vat-rules";
 import type { ActivityActor } from "@/lib/types";
 import type { VatConnectionState, VatEmailRow, VatEventRow, VatInvoiceDetail, VatInvoiceRow, VatInvoiceStatus, VatMailboxRow, VatVatLine, VatWorkspaceData, VatWorkspaceQuery } from "@/lib/vat-types";
 
@@ -77,7 +77,14 @@ async function recordVatEvent(executor: Executor, input: { actor: ActivityActor;
   });
 }
 
-const INVOICE_COLUMNS = `i.id, i.email_id, i.source, i.document_type, i.supplier_name, i.supplier_vat_number,
+/**
+ * Only saved invoices flagged Possible duplicate or Check need a person to look;
+ * everything else is approved automatically. Kept or edited invoices are reviewed.
+ */
+const NEEDS_REVIEW = `(i.status = 'saved' AND i.reviewed_at IS NULL
+  AND EXISTS (SELECT 1 FROM json_each(i.notes_json) WHERE json_each.value IN ('duplicate', 'unsure')))`;
+
+const INVOICE_COLUMNS = `${NEEDS_REVIEW} AS needs_review, i.id, i.email_id, i.source, i.document_type, i.supplier_name, i.supplier_vat_number,
   i.invoice_number, i.invoice_date, i.due_date, i.currency, i.net_amount_minor, i.vat_amount_minor,
   i.gross_amount_minor, i.status, i.notes_json, i.portal_url, i.file_name, i.dropbox_path, i.dropbox_url,
   i.dropbox_account_id, i.removed_reason, i.removed_at, i.removed_by_label, i.updated_at,
@@ -109,6 +116,7 @@ function toInvoiceRow(row: Row): VatInvoiceRow {
     dropboxUrl: text(row.dropbox_url),
     legacyFile: Boolean(dropboxPath) && !row.dropbox_account_id,
     hasFile: Boolean(dropboxPath),
+    needsReview: Boolean(Number(row.needs_review ?? 0)),
     emailSubject: text(row.email_subject),
     emailFrom: text(row.email_from),
     receivedAt: text(row.email_received_at),
@@ -157,7 +165,7 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
     : {
         sql: `SELECT ${INVOICE_COLUMNS}
               FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id
-              WHERE i.status = ? ${query.tab === "saved" ? savedFilter : ""}
+              WHERE i.status = ? ${query.tab === "saved" ? savedFilter : ""} ${query.review ? `AND ${NEEDS_REVIEW}` : ""}
               ORDER BY ${query.tab === "removed" ? "i.removed_at DESC" : `${RECEIVED_DATE} IS NULL, ${RECEIVED_DATE} DESC`}, i.id DESC
               LIMIT ? OFFSET ?`,
         args: [query.tab, ...(query.tab === "saved" ? rangeArgs : []), VAT_PAGE_SIZE, offset],
@@ -168,9 +176,10 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
       sql: `SELECT
               COALESCE(SUM(CASE WHEN i.status = 'saved' ${savedFilter} THEN 1 ELSE 0 END), 0) AS saved,
               COALESCE(SUM(CASE WHEN i.status = 'to_get' THEN 1 ELSE 0 END), 0) AS to_get,
-              COALESCE(SUM(CASE WHEN i.status = 'removed' THEN 1 ELSE 0 END), 0) AS removed
+              COALESCE(SUM(CASE WHEN i.status = 'removed' THEN 1 ELSE 0 END), 0) AS removed,
+              COALESCE(SUM(CASE WHEN ${NEEDS_REVIEW} ${savedFilter} THEN 1 ELSE 0 END), 0) AS review
             FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id`,
-      args: rangeArgs,
+      args: [...rangeArgs, ...rangeArgs],
     },
     { sql: `SELECT COUNT(*) AS count FROM vat_emails e WHERE ${EMAIL_LIST_FILTER} ${emailFilter}`, args: rangeArgs },
     listStatement,
@@ -185,10 +194,12 @@ export async function getVatWorkspace(query: VatWorkspaceQuery): Promise<VatWork
     removed: Number(countRow.removed ?? 0),
     ignored: Number(ignored.rows[0]?.count ?? 0),
   };
-  const total = tabCounts[query.tab];
+  const reviewCount = Number(countRow.review ?? 0);
+  const total = query.review ? reviewCount : tabCounts[query.tab];
   return {
     query,
     counts: tabCounts,
+    reviewCount,
     invoices: query.tab === "ignored" ? [] : list.rows.map((row) => toInvoiceRow(row as Row)),
     emails: query.tab === "ignored" ? list.rows.map((row) => toEmailRow(row as Row)) : [],
     total,
@@ -253,8 +264,26 @@ export async function getVatInvoiceDetail(id: number): Promise<VatInvoiceDetail 
   ], "read");
   const row = invoice.rows[0] as Row | undefined;
   if (!row) return null;
+  const current = toInvoiceRow(row);
+
+  // Similar saved invoices: same supplier within 14 days (by invoice or email date), read from a bounded window.
+  const anchor = current.invoiceDate ?? current.receivedAt?.slice(0, 10) ?? null;
+  let similar: VatInvoiceRow[] = [];
+  if (anchor && current.supplierName) {
+    const shift = (days: number) => new Date(Date.parse(`${anchor}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+    const nearby = await db.execute({
+      sql: `SELECT ${INVOICE_COLUMNS} FROM vat_invoices i LEFT JOIN vat_emails e ON e.id = i.email_id
+            WHERE i.status = 'saved' AND i.id <> ?
+              AND (i.invoice_date BETWEEN ? AND ? OR substr(e.received_at, 1, 10) BETWEEN ? AND ?)
+            ORDER BY i.invoice_date DESC LIMIT 200`,
+      args: [id, shift(-14), shift(14), shift(-14), shift(14)],
+    });
+    similar = nearby.rows.map((item) => toInvoiceRow(item as Row)).filter((item) => sameSupplier(item.supplierName, current.supplierName)).slice(0, 10);
+  }
+
   return {
-    ...toInvoiceRow(row),
+    ...current,
+    similar,
     vatBreakdown: jsonArray<VatVatLine>(row.vat_breakdown_json),
     originalInvoiceNumber: text(row.original_invoice_number),
     inbox: text(row.inbox),
@@ -380,8 +409,9 @@ export async function updateVatInvoiceDetails(input: {
       assignments.push("dropbox_path = ?", "file_name = ?", "dropbox_url = ?", "dropbox_account_id = ?");
       args.push(input.file.dropboxPath, input.file.fileName, input.file.dropboxUrl, input.file.dropboxAccountId);
     }
-    assignments.push("updated_at = ?", "updated_by_id = ?", "updated_by_label = ?");
-    args.push(updatedAt, input.actor.id, input.actor.label, input.id);
+    // Staff checked these details, so the invoice no longer needs review.
+    assignments.push("updated_at = ?", "updated_by_id = ?", "updated_by_label = ?", "reviewed_at = ?", "reviewed_by_id = ?", "reviewed_by_label = ?");
+    args.push(updatedAt, input.actor.id, input.actor.label, updatedAt, input.actor.id, input.actor.label, input.id);
     await transaction.execute({ sql: `UPDATE vat_invoices SET ${assignments.join(", ")} WHERE id = ?`, args });
     await recordVatEvent(transaction, {
       actor: input.actor,
@@ -396,6 +426,36 @@ export async function updateVatInvoiceDetails(input: {
     invalidateActivityLogCache();
     revalidateVat();
   }
+  return result;
+}
+
+/** Staff keep a flagged invoice: it is approved and joins the accountant's log. */
+export async function approveVatInvoice(input: { id: number; expectedUpdatedAt: string; actor: ActivityActor }) {
+  const result = await inTransaction(async (transaction) => {
+    const state = await lockedState(transaction, input.id, input.expectedUpdatedAt);
+    if (state.status !== "saved") throw new VatRecordError("invalid_state", "Only saved invoices are reviewed.");
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await transaction.execute({
+      sql: `UPDATE vat_invoices SET reviewed_at = ?, reviewed_by_id = ?, reviewed_by_label = ?, updated_at = ? WHERE id = ?`,
+      args: [updatedAt, input.actor.id, input.actor.label, updatedAt, input.id],
+    });
+    if (state.emailId) {
+      // A staff decision about this sender; Jev uses these for future emails.
+      await transaction.execute({
+        sql: "UPDATE vat_emails SET decided_by = 'owner', decided_by_id = ?, decided_by_label = ? WHERE id = ?",
+        args: [input.actor.id, input.actor.label, state.emailId],
+      });
+    }
+    await recordVatEvent(transaction, {
+      actor: input.actor,
+      action: "invoice.approved",
+      invoiceId: input.id,
+      summary: `Reviewed and kept ${state.supplierName ?? "invoice"}`,
+    });
+    return { years: state.invoiceDate ? [state.invoiceDate.slice(0, 4)] : [] };
+  });
+  invalidateActivityLogCache();
+  revalidateVat();
   return result;
 }
 
@@ -663,6 +723,9 @@ export async function getVatLogRows(year: string): Promise<VatLogRow[]> {
                  status, notes_json, portal_url, dropbox_url
           FROM vat_invoices
           WHERE status IN ('saved', 'to_get') AND ((invoice_date >= ? AND invoice_date < ?) OR (invoice_date IS NULL AND ? = ?))
+            -- Only approved invoices reach the accountant: flagged ones wait for review.
+            AND NOT (status = 'saved' AND reviewed_at IS NULL
+              AND EXISTS (SELECT 1 FROM json_each(notes_json) WHERE json_each.value IN ('duplicate', 'unsure')))
           ORDER BY invoice_date, id`,
     args: [`${year}-01-01`, `${Number(year) + 1}-01-01`, year, currentYear],
   });

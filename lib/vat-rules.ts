@@ -355,7 +355,7 @@ export function parseVatWorkspaceQuery(params: Record<string, string | string[] 
   const tab = TABS.includes(first("tab") as VatTab) ? first("tab") as VatTab : "saved";
   const month = first("month");
   const page = Math.max(1, Math.min(10_000, Math.trunc(Number(first("page")) || 1)));
-  return { tab, month: month && MONTH.test(month) ? month : null, page };
+  return { tab, month: month && MONTH.test(month) ? month : null, page, review: tab === "saved" && first("review") === "1" };
 }
 
 function csvCell(value: unknown) {

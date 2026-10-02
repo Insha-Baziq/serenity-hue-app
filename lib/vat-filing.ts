@@ -12,6 +12,7 @@ import {
   writeVatDropboxFile,
 } from "@/lib/vat-dropbox";
 import {
+  approveVatInvoice,
   completeVatUpload,
   createVatUpload,
   getVatDropboxSecrets,
@@ -143,6 +144,12 @@ export async function saveVatInvoiceDetails(input: { id: number; details: VatInv
     fileUnchanged: Boolean(state.dropboxPath) && !access,
     logWarning: result.changed ? await refreshVatInvoiceLogs(result.years) : null,
   };
+}
+
+/** Keeps a flagged invoice after review; it then appears in the accountant's log. */
+export async function approveVatInvoiceRecord(input: { id: number; expectedUpdatedAt: string; actor: ActivityActor }) {
+  const result = await approveVatInvoice(input);
+  return { logWarning: await refreshVatInvoiceLogs(result.years) };
 }
 
 export async function removeVatInvoiceRecord(input: { id: number; reason: string; expectedUpdatedAt: string; actor: ActivityActor }) {

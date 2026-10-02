@@ -69,7 +69,7 @@ function InvoiceTable({ tab, rows, onOpen }: { tab: VatTab; rows: VatInvoiceRow[
         <TableCell>{tab === "to_get" ? <VatNoteChips notes={row.notes.filter((note) => note in VAT_GET_REASON_LABELS)} /> : tab === "removed" ? VAT_REMOVED_REASON_LABELS[row.removedReason ?? ""] ?? "—" : row.invoiceNumber ?? "—"}</TableCell>
         {tab === "saved" && <><TableCell className={styles.amount}>{formatVatMoney(row.netMinor, row.currency)}</TableCell><TableCell className={styles.amount}>{formatVatMoney(row.vatMinor, row.currency)}</TableCell></>}
         <TableCell className={styles.amount}>{formatVatMoney(row.grossMinor, row.currency)}</TableCell>
-        <TableCell className={styles.notesCell}>{tab === "saved" ? <VatNoteChips notes={row.notes} /> : tab === "removed" ? row.removedBy ?? "—" : row.source === "manual" ? "Upload" : row.emailFrom ?? "Email"}</TableCell>
+        <TableCell className={styles.notesCell}>{tab === "saved" ? <>{row.needsReview && <span className={`${styles.chip} ${styles.chipWarn}`} style={{ marginBottom: 4 }}>To review</span>}<VatNoteChips notes={row.notes} /></> : tab === "removed" ? row.removedBy ?? "—" : row.source === "manual" ? "Upload" : row.emailFrom ?? "Email"}</TableCell>
 <TableCell onClick={(event) => event.stopPropagation()}><span className={styles.chips}>{row.emailId && <a className={styles.link} href={vatEmailLink(row.emailId)} target="_blank" rel="noreferrer">Email</a>}{row.dropboxUrl && <a className={styles.link} href={row.dropboxUrl} target="_blank" rel="noreferrer">File</a>}</span></TableCell>
       </TableRow>)}</TableBody>
     </Table>
@@ -125,6 +125,7 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
     if (merged.tab !== "saved") params.set("tab", merged.tab);
     if (merged.month) params.set("month", merged.month);
     if (merged.page > 1) params.set("page", String(merged.page));
+    if (merged.review && merged.tab === "saved") params.set("review", "1");
     return params.toString() ? `${pathname}?${params}` : pathname;
   }
 
@@ -177,6 +178,7 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
         </Link>)}
       </nav>
       <div className={styles.filters}>
+        {query.tab === "saved" && <Button variant={query.review ? "primary" : "outline"} size="compact" onClick={() => navigate({ review: !query.review })}>To review ({data.reviewCount})</Button>}
         {monthFilters && <Select value={query.month ?? "all"} onValueChange={(value) => navigate({ month: value === "all" ? null : value })}>
           <SelectTrigger aria-label="Month"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="all">All months</SelectItem>{data.months.map((month) => <SelectItem key={month} value={month}>{monthLabel(month)}</SelectItem>)}</SelectContent>
@@ -207,6 +209,7 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
       dropboxReady={dropboxReady}
       onClose={() => setOpenInvoiceId(null)}
       onChanged={refresh}
+      onReviewed={(id) => { const queue = data.invoices.filter((row) => row.needsReview && row.id !== id); setOpenInvoiceId(queue[0]?.id ?? null); }}
       onUpload={(invoice) => { setOpenInvoiceId(null); setUploadTarget({ invoice }); }}
     />
     <VatUploadDialog target={uploadTarget} dropboxReady={dropboxReady} onClose={() => setUploadTarget(null)} onFiled={refresh} />

@@ -16,6 +16,8 @@ type Props = {
   dropboxReady: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** Called after a review decision so the next invoice to review can open. */
+  onReviewed: (id: number) => void;
   onUpload: (invoice: VatInvoiceDetail) => void;
 };
 
@@ -25,7 +27,7 @@ function statusLabel(invoice: VatInvoiceDetail) {
   return invoice.status === "saved" ? "Saved invoice" : invoice.status === "to_get" ? "To get" : "Removed";
 }
 
-export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, onUpload }: Props) {
+export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, onReviewed, onUpload }: Props) {
   const [invoice, setInvoice] = useState<VatInvoiceDetail | null>(null);
   const [form, setForm] = useState<VatInvoiceForm>(vatFormFromInvoice(null));
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -95,6 +97,28 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
   const remove = () => run(() => vatRequest(`/api/vat/invoices/${invoice!.id}/remove`, { body: { reason: removeReason, expectedUpdatedAt: invoice!.updatedAt } }), "Moved to Removed. The record and its document are kept.");
   const restore = () => run(() => vatRequest(`/api/vat/invoices/${invoice!.id}/restore`, { body: { expectedUpdatedAt: invoice!.updatedAt } }), "Restored.");
 
+  // Review decisions move straight on to the next invoice waiting for review.
+  async function decide(action: () => Promise<unknown>) {
+    if (!invoice) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      onChanged();
+      onReviewed(invoice.id);
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const keep = () => decide(() => vatRequest(`/api/vat/invoices/${invoice!.id}/approve`, { body: { expectedUpdatedAt: invoice!.updatedAt } }));
+  const removeThis = (reason: "duplicate" | "not_invoice") => decide(() => vatRequest(`/api/vat/invoices/${invoice!.id}/remove`, { body: { reason, expectedUpdatedAt: invoice!.updatedAt } }));
+  const removeOther = (id: number, updatedAt: string) => run(
+    () => vatRequest(`/api/vat/invoices/${id}/remove`, { body: { reason: "duplicate", expectedUpdatedAt: updatedAt } }),
+    "Removed the other one as a duplicate. Keep this one if it is right.",
+  );
+
   const ownFileNeedsDropbox = Boolean(invoice?.hasFile && !invoice.legacyFile && !dropboxReady);
   const notes = invoice?.notes.filter((note) => note in VAT_NOTE_LABELS || note in VAT_GET_REASON_LABELS) ?? [];
 
@@ -115,6 +139,31 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
               const label = VAT_GET_REASON_LABELS[note] ?? VAT_NOTE_LABELS[note];
               return <div className={styles.noteItem} key={note}><strong>{label.label}</strong>{label.help}</div>;
             })}</div>
+          </section>}
+
+          {invoice.needsReview && <section className={styles.dangerZone} style={{ borderColor: "#f1d8b8", background: "var(--orange-soft)" }} aria-label="Review">
+            <h3>Review</h3>
+            {invoice.similar.length
+              ? <>
+                  <p className={styles.formHint}>Similar invoices from this supplier. If one is the same purchase, remove the extra one.</p>
+                  {invoice.similar.map((other) => <div className={styles.connectionRow} key={other.id}>
+                    <div>
+                      <span className={styles.strong}>{formatVatMoney(other.grossMinor, other.currency)} · {formatVatDate(other.receivedAt ?? other.invoiceDate)}</span>
+                      <span className={styles.muted}>{[other.invoiceNumber && `No. ${other.invoiceNumber}`, other.emailSubject].filter(Boolean).join(" · ") || "No number"}</span>
+                      <span className={styles.chips}>
+                        {other.emailId && <a className={styles.link} href={vatEmailLink(other.emailId)} target="_blank" rel="noreferrer">Email</a>}
+                        {other.dropboxUrl && <a className={styles.link} href={other.dropboxUrl} target="_blank" rel="noreferrer">File</a>}
+                      </span>
+                    </div>
+                    <Button variant="ghost" size="compact" disabled={busy} onClick={() => removeOther(other.id, other.updatedAt)}>Remove that one</Button>
+                  </div>)}
+                </>
+              : <p className={styles.formHint}>No similar invoice is left. Keep it if it is a real purchase.</p>}
+            <div className={styles.actions}>
+              <Button variant="primary" disabled={busy} onClick={keep}>Keep this invoice</Button>
+              <Button variant="outline" disabled={busy || ownFileNeedsDropbox} onClick={() => removeThis("duplicate")}>Remove as duplicate</Button>
+              <Button variant="ghost" disabled={busy || ownFileNeedsDropbox} onClick={() => removeThis("not_invoice")}>Not a purchase</Button>
+            </div>
           </section>}
 
           {invoice.status === "removed" && <div className={styles.noteItem}>
