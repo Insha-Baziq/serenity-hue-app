@@ -17,8 +17,12 @@
 .tab:hover { color: var(--plum-dark); background: var(--canvas-muted); }
 .tab[aria-current="page"] { background: var(--magenta-soft); color: var(--plum-dark); box-shadow: inset 0 0 0 1px rgba(193, 58, 155, 0.28); }
 .tab b { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: rgba(108, 40, 95, 0.08); font-size: 11px; text-align: center; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.filters :global(.ui-select-trigger), .filters > * { min-width: 170px; }
+.filters { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; }
+.filters > * { flex: none; }
+/* One height and type size for every toolbar control so they read as a set. */
+.filters .control { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-height: 40px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight: 650; white-space: nowrap; }
+.filters .monthSelect { width: 168px; height: 40px; min-height: 40px; }
+.reviewCount { min-width: 20px; padding: 1px 7px; border-radius: 999px; background: var(--orange-soft); color: #9a5409; font-size: 11px; text-align: center; }
 
 .panel { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
 .table { width: 100%; }
@@ -101,7 +105,9 @@ th.amount { text-align: right; }
   .formGrid { grid-template-columns: 1fr; }
   .sheetHeader { padding-left: 18px; }
   .sheetBody { padding-left: 18px; padding-right: 18px; }
-  .filters, .filters > * { width: 100%; }
+  .filters { flex-wrap: wrap; width: 100%; }
+  .filters > * { flex: 1 1 auto; }
+  .monthSelect { width: auto; }
   .tabs { width: 100%; }
   .tab { flex: 1 1 auto; justify-content: center; padding: 0 8px; }
 }

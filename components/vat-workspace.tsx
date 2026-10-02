@@ -117,7 +117,8 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
   const activeRun = runController.run && ["listing", "processing", "paused"].includes(runController.run.status) ? runController.run : null;
   const { query, connections } = data;
   const dropboxReady = connections.dropbox.configured && connections.dropbox.connected;
-  const years = [...new Set(data.months.map((month) => month.slice(0, 4)))];
+  // The log for the selected month's year, else the latest year with invoices.
+  const exportYear = query.month?.slice(0, 4) ?? data.months[0]?.slice(0, 4) ?? null;
 
   function href(next: Partial<typeof query>) {
     const merged = { ...query, page: 1, ...next };
@@ -178,12 +179,17 @@ export function VatWorkspace({ data, notice, connectionError }: Props) {
         </Link>)}
       </nav>
       <div className={styles.filters}>
-        {query.tab === "saved" && <Button variant={query.review ? "primary" : "outline"} size="compact" onClick={() => navigate({ review: !query.review })}>To review ({data.reviewCount})</Button>}
+        {query.tab === "saved" && <Button
+          variant={query.review ? "primary" : "outline"}
+          className={styles.control}
+          aria-pressed={query.review}
+          onClick={() => navigate({ review: !query.review })}
+        >To review {!query.review && <span className={styles.reviewCount}>{data.reviewCount}</span>}{query.review && `(${data.reviewCount})`}</Button>}
         {monthFilters && <Select value={query.month ?? "all"} onValueChange={(value) => navigate({ month: value === "all" ? null : value })}>
-          <SelectTrigger aria-label="Month"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label="Month" className={styles.monthSelect}><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="all">All months</SelectItem>{data.months.map((month) => <SelectItem key={month} value={month}>{monthLabel(month)}</SelectItem>)}</SelectContent>
         </Select>}
-        {years.map((year) => <a key={year} className="ui-button ui-button--outline ui-button--compact" href={`/api/vat/export?year=${year}`} download><Download size={14} aria-hidden="true" /> {year} log (CSV)</a>)}
+        {exportYear && <a className={`ui-button ui-button--outline ${styles.control}`} href={`/api/vat/export?year=${exportYear}`} download title={`Invoice log for ${exportYear}`}><Download size={15} aria-hidden="true" /> Export CSV</a>}
       </div>
     </div>
 
