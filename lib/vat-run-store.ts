@@ -306,7 +306,7 @@ export async function insertVatPipelineInvoice(invoice: VatPipelineInvoice, acto
 export async function getVatDuplicateCandidates(fromDate: string) {
   const db = await getTursoClient();
   const rows = (await db.execute({
-    sql: `SELECT id, status, supplier_name, invoice_date, gross_amount_minor, invoice_number, dropbox_path, dropbox_account_id, notes_json
+    sql: `SELECT id, status, supplier_name, invoice_date, gross_amount_minor, invoice_number, dropbox_path, dropbox_account_id, notes_json, reviewed_at
           FROM vat_invoices WHERE status IN ('saved', 'to_get') AND (invoice_date IS NULL OR invoice_date >= ?)`,
     args: [fromDate],
   })).rows;
@@ -323,6 +323,7 @@ export async function getVatDuplicateCandidates(fromDate: string) {
     } satisfies VatDuplicateCandidate,
     dropboxPath: text(row.dropbox_path),
     dropboxAccountId: text(row.dropbox_account_id),
+    reviewed: Boolean(row.reviewed_at),
   }));
 }
 

@@ -41,3 +41,13 @@ test("after a run, fulfilled To get items and certain duplicates are retained as
   ]);
   assert.deepEqual(plan.flagged.sort(), [4, 5]);
 });
+
+test("two matching refunds within a week count as one refund", () => {
+  const base = { status: "saved", supplierName: "Amazon", invoiceNumber: null, hasFile: true, notes: [] };
+  const plan = planVatDuplicates([
+    { ...base, id: 1, invoiceDate: "2026-08-27", grossMinor: -4599 },
+    { ...base, id: 2, invoiceDate: "2026-08-31", grossMinor: -4599 },
+  ]);
+  assert.equal(plan.removals.length, 1);
+  assert.equal(plan.removals[0].reason, "duplicate");
+});

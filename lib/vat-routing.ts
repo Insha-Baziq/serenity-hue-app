@@ -14,9 +14,9 @@ export const VAT_CATEGORIES = {
   invoice_link_only:
     "A seller or utility says a bill, invoice or statement is ready, but the document is neither attached nor shown in the email; you must log in to an account or click a link to view or download it.",
   credit_note:
-    "A credit note or refund confirmation from a seller reducing the amount paid for an earlier purchase.",
+    "A credit note, or confirmation that a refund has actually been issued with its amount, from a seller for an earlier purchase. Return requests, return labels, return drop-off confirmations and \"we received your return\" notices without an issued refund are NOT credit notes.",
   not_invoice:
-    "No purchase was made or paid for in this email: marketing, newsletters, promotions and discount codes, shipping or delivery tracking without prices, failed or declined payments, subscription or trial reminders with no charge, sales made BY the inbox owner's own shop to its customers (Shopify or TikTok Shop new-order notifications), platform payout notices, account, login or security notices, verification codes, invitations and conversations.",
+    "No purchase was made or paid for in this email: marketing, newsletters, promotions and discount codes, shipping or delivery tracking without prices, failed or declined payments, subscription or trial reminders with no charge, sales made BY the inbox owner's own shop to its customers (Shopify or TikTok Shop new-order notifications), platform payout notices, account, login or security notices, verification codes, invitations and conversations. Also not an invoice: payment failed or declined notices, upcoming or scheduled instalment payment reminders and buy-now-pay-later instalment updates, statements of account and payment reminders about invoices already sent earlier, 'your export or report is ready' notices, and return started, return label, drop-off or return received notices without an issued refund, unless the email itself contains a new invoice or receipt.",
 } as const;
 export type VatCategory = keyof typeof VAT_CATEGORIES;
 
@@ -29,7 +29,7 @@ export const VAT_PAYMENT_STATUSES = {
   bill_on_website:
     "A bill, invoice or statement is ready but not included in the email; the owner has to log in to an account or website to see or download it.",
   no_purchase:
-    "Nothing was bought or charged: promotions, newsletters, reminders that a subscription will end, requests to add or update a card or payment details to keep a subscription or trial (even if they show an estimated bill), failed or declined payments, trial reminders ('your trial ends soon', 'your trial has ended'), welcome or onboarding emails with no order summary, account, login or security emails, delivery tracking, or sales to the owner's own customers.",
+    "Nothing was bought or charged: promotions, newsletters, reminders that a subscription will end, requests to add or update a card or payment details to keep a subscription or trial (even if they show an estimated bill), failed or declined payments, trial reminders ('your trial ends soon', 'your trial has ended'), welcome or onboarding emails with no order summary, account, login or security emails, delivery tracking, sales to the owner's own customers, instalment or scheduled-payment reminders and failed instalments for an order already placed, statements of account or reminders about invoices sent earlier, 'your export or report is ready' notices, and return or drop-off notices without an issued refund.",
 } as const;
 export type VatPaymentStatus = keyof typeof VAT_PAYMENT_STATUSES;
 
@@ -131,8 +131,10 @@ export function planVatDuplicates(invoices: VatDuplicateCandidate[]) {
       if (!live.has(b.id) || !sameSupplier(a.supplierName, b.supplierName)) continue;
       const sameNumber = Boolean(a.invoiceNumber) && a.invoiceNumber === b.invoiceNumber;
       const likely = compatible(a, b) && daysApart(a.invoiceDate, b.invoiceDate) <= 3;
-      if (!sameNumber && !likely) continue;
-      if (sameNumber || !a.invoiceNumber !== !b.invoiceNumber) {
+      // Suppliers send several emails about one refund; the same refund amount twice within a week is one refund.
+      const sameRefund = a.grossMinor !== null && a.grossMinor < 0 && a.grossMinor === b.grossMinor && daysApart(a.invoiceDate, b.invoiceDate) <= 7;
+      if (!sameNumber && !likely && !sameRefund) continue;
+      if (sameNumber || sameRefund || !a.invoiceNumber !== !b.invoiceNumber) {
         const [keep, drop] = completeness(a) > completeness(b) ? [a, b] : [b, a];
         removals.push({ id: drop.id, keepId: keep.id, reason: "duplicate" });
         live.delete(drop.id);

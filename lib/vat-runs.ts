@@ -91,13 +91,12 @@ export async function stepVatRun(runId: string, actor: ActivityActor) {
  * works on all of them side by side.
  */
 async function listRun(runId: string, startDate: string) {
-  const since = new Date(`${startDate}T00:00:00Z`);
   let lastError: string | null = null;
   const perInbox = await Promise.all((await connectedVatMailboxIds()).map(async (accountId) => {
     try {
       const mailbox = await openVatMailbox(accountId);
       // Mailboxes list newest first; work oldest first.
-      const ids = (await filterUnhandledVatEmails(await mailbox.listIdsSince(since))).reverse();
+      const ids = (await filterUnhandledVatEmails(await mailbox.listIdsSince(startDate))).reverse();
       await markVatMailboxError(accountId, null);
       return ids.map((emailId) => ({ emailId, accountId }));
     } catch (error) {
@@ -167,15 +166,23 @@ async function processRun(runId: string, startDate: string, actor: ActivityActor
     await Promise.all(Array.from({ length: Math.min(WORKERS_PER_INBOX, emailIds.length) }, worker));
   }));
   await addVatRunCounts(runId, counts);
+  // Clean up duplicates as the run goes, so the lists stay tidy before it finishes.
+  if (counts.invoices + counts.toGet > 0) await resolveRunDuplicates(startDate, actor);
   if (blocked) throw blocked;
 }
-async function finishRun(runId: string, startDate: string, actor: ActivityActor) {
-  const run = await getVatRun(runId);
+/**
+ * The duplicate rules over everything since a week before the start date.
+ * Runs after every step (not only at the end) and never overrules staff:
+ * invoices already kept in review are not removed or re-flagged.
+ */
+async function resolveRunDuplicates(startDate: string, actor: ActivityActor) {
   const from = new Date(Date.parse(`${startDate}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
   const rows = await getVatDuplicateCandidates(from);
+  const reviewed = new Set(rows.filter((row) => row.reviewed).map((row) => row.candidate.id));
   const plan = planVatDuplicates(rows.map((row) => row.candidate));
-  const dropbox = plan.removals.length ? await getVatDropboxAccess() : null;
-  for (const removal of plan.removals) {
+  const removals = plan.removals.filter((removal) => !reviewed.has(removal.id));
+  const dropbox = removals.length ? await getVatDropboxAccess() : null;
+  for (const removal of removals) {
     const row = rows.find((item) => item.candidate.id === removal.id)!;
     let movedPath: string | null = null;
     // The duplicate's document is kept in the removed folder, never deleted.
@@ -184,14 +191,20 @@ async function finishRun(runId: string, startDate: string, actor: ActivityActor)
     }
     await markVatInvoiceDuplicate({ ...removal, movedPath, actor });
   }
-  await flagVatPossibleDuplicates(plan.flagged);
+  await flagVatPossibleDuplicates(plan.flagged.filter((id) => !reviewed.has(id)));
+  return removals.length;
+}
+
+async function finishRun(runId: string, startDate: string, actor: ActivityActor) {
+  const run = await getVatRun(runId);
+  const removed = await resolveRunDuplicates(startDate, actor);
   const years = new Set<string>();
   for (let year = Number(startDate.slice(0, 4)); year <= new Date().getUTCFullYear(); year += 1) years.add(String(year));
   await refreshVatInvoiceLogs([...years]);
   await setVatRunStatus(runId, "completed");
   if (run) {
     await recordVatRunEvent(actor, `Got invoices from ${startDate}: ${run.processed} emails checked, ${run.invoices} invoices filed, ${run.toGet} to get`, {
-      startDate, processed: run.processed, invoices: run.invoices, toGet: run.toGet, failed: run.failed, duplicatesRemoved: plan.removals.length,
+      startDate, processed: run.processed, invoices: run.invoices, toGet: run.toGet, failed: run.failed, duplicatesRemoved: removed,
     });
   }
 }

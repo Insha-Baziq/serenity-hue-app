@@ -28,7 +28,8 @@ export type VatParsedEmail = {
 export type VatMailbox = {
   accountId: number;
   accountEmail: string;
-  listIdsSince(since: Date): Promise<string[]>;
+  /** Ids of emails received on or after this UK date (YYYY-MM-DD). */
+  listIdsSince(startDate: string): Promise<string[]>;
   getEmail(id: string): Promise<VatParsedEmail>;
   downloadAttachment(emailId: string, attachmentId: string): Promise<Buffer>;
 };
@@ -102,7 +103,7 @@ export async function openVatMailbox(accountId: number): Promise<VatMailbox> {
   return {
     accountId,
     accountEmail: secrets.email,
-    async listIdsSince(since) {
+    async listIdsSince(startDate) {
       const skipped = new Set<string>();
       for (const name of SKIPPED_FOLDERS) {
         try {
@@ -111,12 +112,16 @@ export async function openVatMailbox(accountId: number): Promise<VatMailbox> {
           // Not every mailbox has every folder; nothing to skip then.
         }
       }
-      // A day earlier than asked so a timezone difference never drops an email. Ids only: no reading yet.
-      const from = new Date(since.getTime() - 86_400_000).toISOString();
-      const rows = await graphAll<{ id: string; parentFolderId: string; isDraft: boolean }>(
-        `/me/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${from}`)}&$orderby=receivedDateTime desc&$select=id,parentFolderId,isDraft&$top=500`,
+      // Ask from a day earlier (UTC), then keep only emails received on or after the start date in UK time.
+      // Ids only: no reading yet.
+      const from = new Date(Date.parse(`${startDate}T00:00:00Z`) - 86_400_000).toISOString();
+      const ukDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
+      const rows = await graphAll<{ id: string; parentFolderId: string; isDraft: boolean; receivedDateTime: string }>(
+        `/me/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${from}`)}&$orderby=receivedDateTime desc&$select=id,parentFolderId,isDraft,receivedDateTime&$top=500`,
       );
-      return rows.filter((row) => !row.isDraft && !skipped.has(row.parentFolderId)).map((row) => VAT_OUTLOOK_PREFIX + row.id);
+      return rows
+        .filter((row) => !row.isDraft && !skipped.has(row.parentFolderId) && ukDate.format(new Date(row.receivedDateTime)) >= startDate)
+        .map((row) => VAT_OUTLOOK_PREFIX + row.id);
     },
     async getEmail(id) {
       const message = await graphJson<{
