@@ -987,3 +987,223 @@ CREATE TABLE IF NOT EXISTS employee_invitations (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS employee_invitations_expiry_idx ON employee_invitations(expires_at);
+
+-- VAT workspace: business-wide purchase invoices for the UK VAT return.
+-- Every signed-in staff member sees the same records; staff identity is kept only
+-- for audit. Money is stored as integer hundredths of the invoice currency
+-- ("minor units", matching the source app's numeric(12,2) scale), never as REAL.
+-- Dates are YYYY-MM-DD text; timestamps are ISO-8601 UTC text.
+CREATE TABLE IF NOT EXISTS vat_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by_id TEXT,
+  updated_by_label TEXT
+);
+
+-- One shared Dropbox account for invoice filing. Tokens are AES-GCM encrypted
+-- with VAT_TOKEN_ENCRYPTION_KEY and never leave server code.
+CREATE TABLE IF NOT EXISTS vat_connections (
+  provider TEXT PRIMARY KEY CHECK (provider IN ('dropbox')),
+  account_id TEXT NOT NULL,
+  account_email TEXT,
+  refresh_token TEXT NOT NULL,
+  access_token TEXT,
+  expires_at TEXT,
+  last_error TEXT,
+  connected_by_id TEXT,
+  connected_by_label TEXT,
+  connected_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Short-lived OAuth state for VAT connection flows, bound to the staff member
+-- who started it. Consumed (deleted) once on callback.
+CREATE TABLE IF NOT EXISTS vat_oauth_states (
+  state_hash TEXT PRIMARY KEY,
+  provider TEXT NOT NULL CHECK (provider IN ('dropbox', 'microsoft')),
+  user_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vat_oauth_states_expiry_idx ON vat_oauth_states(expires_at);
+
+-- Connected business inboxes. Imported or disconnected inboxes keep their row
+-- (emails point at it) with no tokens. Inbox reading is deferred.
+CREATE TABLE IF NOT EXISTS vat_mail_accounts (
+  id INTEGER PRIMARY KEY,
+  legacy_id INTEGER UNIQUE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
+  account_email TEXT NOT NULL,
+  refresh_token TEXT,
+  access_token TEXT,
+  expires_at TEXT,
+  last_error TEXT,
+  last_synced_at TEXT,
+  connected_by_id TEXT,
+  connected_by_label TEXT,
+  connected_at TEXT,
+  disconnected_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (provider, account_email)
+);
+
+-- Light record of every classified email. Body text is kept only for invoices.
+CREATE TABLE IF NOT EXISTS vat_emails (
+  id TEXT PRIMARY KEY,
+  account_id INTEGER REFERENCES vat_mail_accounts(id) ON DELETE SET NULL,
+  thread_id TEXT,
+  from_name TEXT,
+  from_email TEXT,
+  subject TEXT,
+  received_at TEXT NOT NULL,
+  attachments_json TEXT NOT NULL DEFAULT '[]',
+  body_text TEXT,
+  category TEXT,
+  confidence REAL,
+  jev_answers_json TEXT,
+  status TEXT NOT NULL CHECK (status IN ('processing', 'invoice', 'ignored', 'error')),
+  decided_by TEXT NOT NULL DEFAULT 'jev' CHECK (decided_by IN ('jev', 'owner')),
+  decided_by_id TEXT,
+  decided_by_label TEXT,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  imported_at TEXT
+);
+CREATE INDEX IF NOT EXISTS vat_emails_status_received_idx ON vat_emails(status, received_at DESC);
+
+-- saved: the document is filed; to_get: a purchase whose invoice staff must
+-- fetch; removed: retained record hidden from the working lists (never deleted).
+CREATE TABLE IF NOT EXISTS vat_invoices (
+  id INTEGER PRIMARY KEY,
+  legacy_id INTEGER UNIQUE,
+  email_id TEXT REFERENCES vat_emails(id) ON DELETE SET NULL,
+  source TEXT NOT NULL CHECK (source IN ('email', 'manual')),
+  document_type TEXT,
+  supplier_name TEXT,
+  supplier_vat_number TEXT,
+  invoice_number TEXT,
+  invoice_date TEXT CHECK (invoice_date IS NULL OR invoice_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  due_date TEXT CHECK (due_date IS NULL OR due_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  currency TEXT,
+  net_amount_minor INTEGER CHECK (net_amount_minor IS NULL OR typeof(net_amount_minor) = 'integer'),
+  vat_amount_minor INTEGER CHECK (vat_amount_minor IS NULL OR typeof(vat_amount_minor) = 'integer'),
+  gross_amount_minor INTEGER CHECK (gross_amount_minor IS NULL OR typeof(gross_amount_minor) = 'integer'),
+  vat_breakdown_json TEXT,
+  original_invoice_number TEXT,
+  portal_url TEXT,
+  field_confidence_json TEXT,
+  status TEXT NOT NULL CHECK (status IN ('saved', 'to_get', 'removed')),
+  notes_json TEXT NOT NULL DEFAULT '[]',
+  file_name TEXT,
+  dropbox_path TEXT,
+  dropbox_url TEXT,
+  -- Dropbox account that holds dropbox_path; NULL for files filed by the
+  -- previous standalone app, which this app must not try to move.
+  dropbox_account_id TEXT,
+  removed_from_status TEXT CHECK (removed_from_status IS NULL OR removed_from_status IN ('saved', 'to_get')),
+  removed_reason TEXT,
+  removed_at TEXT,
+  removed_by_id TEXT,
+  removed_by_label TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by_id TEXT,
+  updated_by_label TEXT,
+  imported_at TEXT,
+  CHECK ((status = 'removed') = (removed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS vat_invoices_status_date_idx ON vat_invoices(status, invoice_date DESC, id DESC);
+CREATE INDEX IF NOT EXISTS vat_invoices_email_idx ON vat_invoices(email_id);
+
+-- Direct-to-Dropbox uploads: the browser sends the file to a temporary Dropbox
+-- upload link, then staff complete the record. Never passes through a function.
+CREATE TABLE IF NOT EXISTS vat_uploads (
+  id TEXT PRIMARY KEY,
+  invoice_id INTEGER REFERENCES vat_invoices(id),
+  staging_path TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  dropbox_account_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+  result_invoice_id INTEGER REFERENCES vat_invoices(id),
+  created_by_id TEXT NOT NULL,
+  created_by_label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+-- Permanent, append-only VAT audit history (the activity feed keeps seven days).
+CREATE TABLE IF NOT EXISTS vat_events (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  actor_id TEXT,
+  actor_label TEXT NOT NULL,
+  action TEXT NOT NULL,
+  invoice_id INTEGER REFERENCES vat_invoices(id),
+  summary TEXT NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS vat_events_invoice_idx ON vat_events(invoice_id, occurred_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS vat_invoices_retained BEFORE DELETE ON vat_invoices BEGIN
+  SELECT RAISE(ABORT, 'VAT invoices are retained; mark them removed instead');
+END;
+CREATE TRIGGER IF NOT EXISTS vat_emails_retained BEFORE DELETE ON vat_emails BEGIN
+  SELECT RAISE(ABORT, 'VAT emails are retained');
+END;
+CREATE TRIGGER IF NOT EXISTS vat_events_no_update BEFORE UPDATE ON vat_events BEGIN
+  SELECT RAISE(ABORT, 'VAT events are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS vat_events_no_delete BEFORE DELETE ON vat_events BEGIN
+  SELECT RAISE(ABORT, 'VAT events are append-only');
+END;
+
+-- "Get invoices" runs. The browser advances a run in short steps (Vercel
+-- functions are time-limited); a lease stops two tabs working the same run.
+CREATE TABLE IF NOT EXISTS vat_runs (
+  id TEXT PRIMARY KEY,
+  start_date TEXT NOT NULL CHECK (start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  status TEXT NOT NULL CHECK (status IN ('listing', 'processing', 'paused', 'completed', 'cancelled')),
+  total INTEGER NOT NULL DEFAULT 0,
+  processed INTEGER NOT NULL DEFAULT 0,
+  failed INTEGER NOT NULL DEFAULT 0,
+  invoices INTEGER NOT NULL DEFAULT 0,
+  to_get INTEGER NOT NULL DEFAULT 0,
+  pause_service TEXT,
+  pause_detail TEXT,
+  last_error TEXT,
+  lease_until TEXT,
+  started_by_id TEXT NOT NULL,
+  started_by_label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS vat_runs_status_idx ON vat_runs(status, created_at DESC);
+
+-- The run's queue: only emails never handled before (or unfinished ones), oldest first.
+CREATE TABLE IF NOT EXISTS vat_run_items (
+  run_id TEXT NOT NULL REFERENCES vat_runs(id),
+  email_id TEXT NOT NULL,
+  account_id INTEGER NOT NULL REFERENCES vat_mail_accounts(id),
+  position INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done', 'failed')),
+  PRIMARY KEY (run_id, email_id)
+);
+CREATE INDEX IF NOT EXISTS vat_run_items_next_idx ON vat_run_items(run_id, state, position);
+
+-- Service API keys staff can replace from the VAT workspace (OpenRouter for Jev,
+-- LlamaCloud for extraction). Encrypted with VAT_TOKEN_ENCRYPTION_KEY; a stored
+-- key takes precedence over the server environment value.
+CREATE TABLE IF NOT EXISTS vat_api_keys (
+  service TEXT PRIMARY KEY CHECK (service IN ('jev', 'llama')),
+  encrypted_key TEXT NOT NULL,
+  last4 TEXT NOT NULL,
+  updated_by_id TEXT,
+  updated_by_label TEXT,
+  updated_at TEXT NOT NULL
+);

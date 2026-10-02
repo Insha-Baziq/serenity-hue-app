@@ -145,6 +145,36 @@ or recommend a purchase quantity in V1.
 - **Is not**: a static low-stock list, a channel inventory snapshot, or a stock count
 - **Lives in**: KPI forecast reads over physical inventory, order history, and mappings
 
+### VAT invoice
+A purchase invoice or receipt the business received, kept for the UK VAT return
+with its supplier, invoice date (tax point), net/VAT/total in exact minor units, and
+its filed document. A **saved** VAT invoice has its document filed in the shared
+Dropbox by invoice month. VAT invoices are business-wide records, not owned by a
+staff member.
+- **Is not**: a customer order, a sales/KPI figure, or a channel payout
+- **Lives in**: `vat_invoices`, the `/vat` workspace, and `/Invoices/<year>/<MM - Month>/` in Dropbox
+
+### To get item
+A purchase the business made whose invoice was not in the email (bill on the
+supplier's website, no invoice in the email, or an unpaid payment request). Staff
+fetch the invoice and upload it. It is never silently dropped.
+- **Is not**: a saved invoice or an ignored email
+- **Lives in**: `vat_invoices` with status `to_get` and a reason note
+
+### Removed VAT record
+A VAT invoice or To get item taken out of the working lists, with a reason and the
+staff member who removed it. It is retained, can be restored, and its document
+moves to `/Invoices/_Removed/` rather than being deleted.
+- **Is not**: a deletion
+- **Lives in**: `vat_invoices` with status `removed`
+
+### VAT connection
+The single business Dropbox used for filing, or a business inbox authorization.
+Connected once by any staff member and shared by all. Tokens are encrypted and
+server-only. Connecting an inbox does not read mail; inbox sync is deferred.
+- **Is not**: a personal staff integration or a TikTok/Shopify credential
+- **Lives in**: `vat_connections` and `vat_mail_accounts`
+
 ## Deliberately rejected words
 
 | Don't say | Say | Why |
@@ -175,3 +205,5 @@ or recommend a purchase quantity in V1.
 6. Secrets and provider tokens are read only in server-side code and are never sent to the client.
 7. Batch creation never requires a counted ingredient and never creates a negative ingredient quantity.
 8. A batch's packaged output cannot exceed its batch size; when a formula fill size is configured, each packaging increment must match its unit and produce a whole number of finished units.
+9. VAT records and their Dropbox documents are never permanently deleted; removal is retained and reversible, and VAT money is stored as exact integer minor units.
+10. VAT data is business-wide: any signed-in staff member sees and acts on the same records and connections; staff identity is recorded only for audit.

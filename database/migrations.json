@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-02-shared-parcel2go-bookings",
+  "version": "2026-10-02-vat-api-keys",
   "columns": [
     ["variants", "packaging_type", "TEXT"],
     ["variants", "units_per_box", "INTEGER NOT NULL DEFAULT 1"],

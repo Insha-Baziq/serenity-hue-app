@@ -266,3 +266,12 @@ The `/overview` workspace is the operational home screen, not a duplicate report
 - **Material:** Primary sections are flat warm-paper surfaces with one soft border, `16px` corners, open row dividers, small tinted icon tiles, serif section titles, and sans-serif operational values. Avoid nested cards and persistent ornamental shadows.
 - **Responsive behavior:** Stack the attention queue above the order ledger on smaller screens. Render orders as readable multi-line rows rather than a horizontally scrolling table. The operations pulse becomes a two-column grid while preserving labels, values, state, and destination links.
 - **Motion and access:** Use only a brief reduced-motion-safe entrance and subtle row hover. Links and the sync control retain visible focus states, and no important state depends on color or hover alone.
+
+### VAT workspace (2026-10-01)
+
+The `/vat` workspace is an operational table surface, not a finance dashboard. The implementation reference is `components/vat-workspace.tsx` and its CSS module.
+
+- **Hierarchy:** Serif "VAT" title with one sentence of scope, then **Connections** (outline) and **Upload invoice** (primary). A single orange setup banner appears while the shared Dropbox is missing; it names the consequence and links to Connections. The page has no health badges.
+- **Lists:** A compact segmented tab row (Invoices, To get, Ignored, Removed), each tab with its count, sits beside the month filter and the per-year CSV log downloads. Tables follow the Products table rhythm. Amounts are right-aligned with tabular numerals. Notes are short chips whose tooltip carries the action text; red is reserved for "Couldn't read" and "Totals don't add up", orange for "Check" and "Possible duplicate".
+- **Details:** Rows open a right sheet with notes first, then editable details, source facts, a quiet removal block, and history. Removal always states that nothing is deleted.
+- **Responsive:** Below 760px, tables become single-column summary rows with supplier, total, date, and chips; the tabs fill the width.

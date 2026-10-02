@@ -12,7 +12,7 @@ const securityHeaders = [
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   // Next's current App Router runtime needs inline bootstrap scripts. The
   // remaining directives still block framing, plugins, and foreign base/forms.
-  { key: "Content-Security-Policy", value: `default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src ${scriptSource}; connect-src 'self'; font-src 'self' data:` },
+  { key: "Content-Security-Policy", value: `default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src ${scriptSource}; connect-src 'self' https://content.dropboxapi.com; font-src 'self' data:` },
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 

@@ -63,7 +63,7 @@ function activityExpiry(occurredAt: string) {
   return new Date((Number.isFinite(parsed) ? parsed : Date.now()) + ACTIVITY_LOG_RETENTION_DAYS * 86_400_000).toISOString();
 }
 
-async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventInput) {
+export async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventInput) {
   const occurredAt = input.occurredAt ?? new Date().toISOString();
   const assistant = input.actor.assistant;
   const details = assistant ? { ...input.details, assistantClientId: assistant.clientId, assistantOperationId: assistant.operationId, assistantToolName: assistant.toolName } : input.details;
@@ -94,7 +94,7 @@ async function insertActivityEvent(executor: SqlExecutor, input: ActivityEventIn
   return Number(result.rowsAffected ?? 0) > 0;
 }
 
-function invalidateActivityLogCache() {
+export function invalidateActivityLogCache() {
   revalidateTag(ACTIVITY_LOG_CACHE_TAG, "max");
   revalidatePath("/logs");
 }

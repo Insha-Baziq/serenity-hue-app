@@ -34,6 +34,15 @@ Create a Turso database and run `database/schema.sql` with the Turso CLI or dash
 
 `SHOPIFY_CLIENT_SECRET`, `TIKTOK_SHOP_APP_SECRET`, and `TURSO_AUTH_TOKEN` are only read in server files. For a client-credentials Shopify app, the Client ID and Client Secret are exchanged server-side for a short-lived Admin API token. The sync connector intentionally reports a clear configuration error until direct-channel credentials and the TikTok Shop region are configured.
 
+## VAT workspace
+
+`/vat` holds the business's purchase invoices for the UK VAT return (moved from the
+standalone VAT Automation app). It uses the normal staff login, and its records and
+connections are shared by all staff. Inbox sync is deferred: nothing reads mail yet.
+Setup (Dropbox and Microsoft apps, `VAT_*` variables, redirect URIs) and the
+idempotent PostgreSQL-to-Turso import are described in
+[`docs/VAT-WORKSPACE.md`](docs/VAT-WORKSPACE.md).
+
 ## Create the QStash schedule
 
 After deployment, create one schedule to call:

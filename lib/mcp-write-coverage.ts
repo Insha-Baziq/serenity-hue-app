@@ -31,4 +31,18 @@ export const MCP_STAFF_ROUTE_COVERAGE = {
   "webhooks/parcel2go": { internalReason: "Verified provider webhook" },
   "tiktok/authorize": { tools: ["start_tiktok_shop_connection"] },
   "tiktok-ads/authorize": { tools: ["start_tiktok_ads_connection"] },
+  // VAT workspace (ADR 0011): staff-only in this phase; MCP VAT tools need their own decision.
+  "vat/connections/dropbox": { internalReason: "VAT shared connection management; MCP VAT tools deferred (ADR 0011)" },
+  "vat/invoices/[invoiceId]": { internalReason: "VAT invoice review in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
+  "vat/invoices/[invoiceId]/remove": { internalReason: "Retained VAT removal in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
+  "vat/invoices/[invoiceId]/restore": { internalReason: "VAT restore in the staff workspace; MCP VAT tools deferred (ADR 0011)" },
+  "vat/mailboxes/[mailboxId]": { internalReason: "VAT shared connection management; MCP VAT tools deferred (ADR 0011)" },
+  "vat/api-keys": { internalReason: "VAT service key management in the staff workspace; never exposed to assistants" },
+  "vat/unlock": { internalReason: "VAT workspace password check for the signed-in browser" },
+  "vat/runs": { internalReason: "Browser-driven Get invoices run; MCP VAT tools deferred (ADR 0011)" },
+  "vat/runs/[runId]/step": { internalReason: "Browser-driven Get invoices run step" },
+  "vat/runs/[runId]/resume": { internalReason: "Browser-driven Get invoices run control" },
+  "vat/runs/[runId]/cancel": { internalReason: "Browser-driven Get invoices run control" },
+  "vat/uploads": { internalReason: "Browser-to-Dropbox upload handshake; not an assistant action" },
+  "vat/uploads/[uploadId]/complete": { internalReason: "Browser-to-Dropbox upload handshake; not an assistant action" },
 } as const;

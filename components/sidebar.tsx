@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ArchiveIcon, AvatarIcon, ChevronDownIcon, CubeIcon, DashboardIcon, ExitIcon, LayersIcon, PersonIcon } from "@radix-ui/react-icons";
 import { useState, type ElementType } from "react";
-import { BarChart3, FlaskConical, Menu } from "lucide-react";
+import { BarChart3, FlaskConical, Menu, ReceiptText } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   Sidebar as ShadcnSidebar,
@@ -31,6 +31,7 @@ const primaryItems: NavigationItem[] = [
   { href: "/customers", label: "Customers", icon: AvatarIcon },
   { href: "/employees", label: "Employees", icon: PersonIcon },
   { href: "/labs", label: "Labs", icon: FlaskConical },
+  { href: "/vat", label: "VAT", icon: ReceiptText },
 ];
 
 const mobileMenuItems: NavigationItem[] = [
@@ -42,6 +43,7 @@ const mobileMenuItems: NavigationItem[] = [
   { href: "/inventory/products", label: "Products", icon: CubeIcon },
   { href: "/inventory/packaging", label: "Packaging", icon: LayersIcon },
   { href: "/labs", label: "Labs", icon: FlaskConical },
+  { href: "/vat", label: "VAT", icon: ReceiptText },
 ];
 
 export function Sidebar() {

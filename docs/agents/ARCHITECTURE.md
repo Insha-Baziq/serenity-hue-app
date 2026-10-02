@@ -84,6 +84,9 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
   updateLabBatchNotes({ batchId, notes, expectedUpdatedAt, actor }) -> authenticated,
     stale-safe batch note replacement with activity provenance and no inventory effect
   recordActivityEvent / recordActivityEvents / getActivityLogPage / pruneExpiredActivityLog
+  insertActivityEvent(executor, input) / invalidateActivityLogCache() for writers
+    (such as the VAT repository) that record activity inside their own transaction
+  ActivityEventInput / ActivityLogQuery / ActivityLogPage
   ActivityEventInput / ActivityLogQuery / ActivityLogPage
   recordSyncRun / takeSyncLease / releaseSyncLease / reconcileInventoryAlerts
   ```
@@ -146,6 +149,44 @@ Turso/libSQL ← schema + migration manifest + append-only ledgers
 - **Depends on**: repository, Labs seed definitions, authenticated routes, shared types.
 - **Tested at**: `tests/lab-production.test.mjs` protects allocation, unit conversion, and advisory ingredient deduction rules; browser verification remains needed for the authenticated side-sheet flow.
 - **Depth**: mixed; pure allocation rules are isolated, while repository SQL remains broad.
+
+### VAT workspace
+
+- **Owns**: business-wide purchase invoices for the UK VAT return (saved, To get,
+  removed), ignored-email records imported from the VAT Automation app, shared
+  Dropbox/Outlook connections, direct-to-Dropbox uploads, filing/naming rules,
+  duplicate and To-get matching, the accountant's CSV log, and permanent VAT audit
+  history. See `docs/VAT-WORKSPACE.md` and ADR 0011.
+- **Public interface**:
+  ```text
+  /vat page (requirePageSession) -> VatWorkspace(data)
+  GET/PATCH /api/vat/invoices/[invoiceId]; POST .../remove; POST .../restore
+  POST /api/vat/uploads -> { uploadId, uploadUrl } (single-use Dropbox upload link)
+  POST /api/vat/uploads/[uploadId]/complete; GET /api/vat/export?year=YYYY (CSV)
+  GET /api/vat/connections/{dropbox,outlook}/{authorize,callback}
+  DELETE /api/vat/connections/dropbox; DELETE /api/vat/mailboxes/[mailboxId]
+  lib/vat-repository: getVatWorkspace(query) / getVatInvoiceDetail /
+    updateVatInvoiceDetails / removeVatInvoice / restoreVatInvoice /
+    createVatUpload / completeVatUpload / getVatLogRows / connection + OAuth state
+  lib/vat-filing: saveVatInvoiceDetails / removeVatInvoiceRecord /
+    restoreVatInvoiceRecord / prepareVatUpload / completeVatUploadFiling /
+    refreshVatInvoiceLogs / getVatDropboxAccess
+  lib/vat-rules (pure): normalizeVatInvoiceFields, figureNotes, notesAfterReview,
+    matchSavedInvoice, vatFolderFor, vatInvoiceFileName, buildVatInvoiceLogCsv
+  lib/vat-money (pure): parseMoneyToMinor / minorToDecimal / formatVatMoney
+  scripts/vat-import.mjs: importVatExport(db, export) (idempotent, no credentials)
+  ```
+- **Hides**: SQL, Dropbox/Microsoft token exchange and refresh, AES-GCM token
+  encryption (`VAT_TOKEN_ENCRYPTION_KEY`), file moves and their rollback, staged
+  upload verification, and stale-update checks.
+- **Depends on**: auth guard, `lib/turso.ts`, the activity-log writer
+  (`insertActivityEvent`), Dropbox and Microsoft identity APIs.
+- **Tested at**: `tests/vat-rules.test.mjs` (money, notes, validation, naming,
+  matching, CSV) and `tests/vat-import.test.mjs` (schema guards, exact
+  import, idempotency, no credentials). Dropbox/Microsoft flows are untested against
+  live providers until the business accounts are connected.
+- **Depth**: new; inbox sync and document extraction are deliberately deferred,
+  and no VAT page or route fetches mail.
 
 ## Known shallow spots
 
