@@ -29,6 +29,11 @@ export type VatApiKeyStatus = {
   updatedAt: string | null;
 };
 
+/** Forgets cached keys so the next call reads the current key (start of each run step). */
+export function clearVatApiKeyCache() {
+  cache.clear();
+}
+
 /** The key to use now: the app-saved key, else the server environment value. */
 export async function getVatApiKey(service: VatKeyService) {
   const cached = cache.get(service);

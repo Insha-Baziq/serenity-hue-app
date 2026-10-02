@@ -25,6 +25,7 @@ import {
   takeVatRunLease,
 } from "@/lib/vat-run-store";
 import { hasVatPipelineKeys, isVatServiceBlocked } from "@/lib/vat-services";
+import { clearVatApiKeyCache } from "@/lib/vat-api-keys";
 import type { ActivityActor } from "@/lib/types";
 
 // Get invoices runs are driven by the browser in short steps so each fits in
@@ -61,6 +62,8 @@ export async function cancelVatRun(runId: string) {
 /** Advances a run by one step. Returns the run, or null if another tab is working on it. */
 export async function stepVatRun(runId: string, actor: ActivityActor) {
   if (!(await takeVatRunLease(runId, LEASE_MS))) return { busy: true, run: await getVatRun(runId) };
+  // A key replaced in Connections applies from this step on, on every server instance.
+  clearVatApiKeyCache();
   try {
     const run = await getVatRun(runId);
     if (!run) throw new VatInputError("That run no longer exists.");
