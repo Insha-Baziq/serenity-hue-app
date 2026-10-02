@@ -136,6 +136,15 @@ export async function moveVatDropboxFile(token: string, fromPath: string, toPath
   return result.metadata.path_display;
 }
 
+/** Deletes a file in Dropbox. A file that is already gone counts as deleted. */
+export async function deleteVatDropboxFile(token: string, path: string) {
+  try {
+    await rpc(token, "files/delete_v2", { path });
+  } catch (error) {
+    if (!(error instanceof VatDropboxError && error.code === "not_found")) throw error;
+  }
+}
+
 export async function vatDropboxSharedLink(token: string, path: string) {
   try {
     const result = await rpc<{ url: string }>(token, "sharing/create_shared_link_with_settings", { path });

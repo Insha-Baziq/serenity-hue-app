@@ -223,7 +223,7 @@ export function VatInvoiceSheet({ invoiceId, dropboxReady, onClose, onChanged, o
                           {REMOVE_REASONS.map((reason) => <option key={reason} value={reason}>{VAT_REMOVED_REASON_LABELS[reason]}</option>)}
                         </select>
                       </label>
-                      <p className={styles.formHint}>The record moves to Removed{invoice.hasFile && !invoice.legacyFile ? " and its document moves to the removed folder in Dropbox" : ""}. Nothing is deleted.</p>
+                      <p className={styles.formHint}>The record is hidden from the lists{invoice.hasFile && !invoice.legacyFile ? " and its document is deleted from Dropbox" : ""}.</p>
                       <div className={styles.actions}>
                         <Button variant="primary" onClick={remove} disabled={busy || ownFileNeedsDropbox}>Remove</Button>
                         <Button variant="ghost" onClick={() => setConfirmRemove(false)} disabled={busy}>Cancel</Button>

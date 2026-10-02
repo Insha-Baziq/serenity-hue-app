@@ -709,14 +709,33 @@ export async function completeVatUpload(input: {
 }
 
 /** Points a record at the retained copy of a replaced document. */
+/** Forgets a removed invoice's document once it has been deleted from Dropbox. The record itself is kept. */
+/** Removed invoices whose document still sits in the removed folder. */
+export async function getVatRemovedFiles(limit = 200) {
+  const db = await getTursoClient();
+  const result = await db.execute({
+    sql: "SELECT id, dropbox_path FROM vat_invoices WHERE status = 'removed' AND dropbox_path IS NOT NULL AND dropbox_account_id IS NOT NULL LIMIT ?",
+    args: [limit],
+  });
+  return result.rows.map((row) => ({ id: Number(row.id), path: String(row.dropbox_path) }));
+}
+
+export async function clearVatRemovedFile(invoiceId: number) {
+  const db = await getTursoClient();
+  await db.execute({
+    sql: "UPDATE vat_invoices SET dropbox_path = NULL, file_name = NULL, dropbox_url = NULL WHERE id = ? AND status = 'removed'",
+    args: [invoiceId],
+  });
+}
+
 export async function recordVatRetainedFile(invoiceId: number, retainedPath: string, actor: ActivityActor) {
   const db = await getTursoClient();
   await recordVatEvent(db, {
     actor,
     action: "invoice.document_replaced",
     invoiceId,
-    summary: "Kept the replaced document in the removed files folder",
-    details: { retainedPath },
+    summary: "Deleted the replaced document from Dropbox",
+    details: { deletedPath: retainedPath },
   });
 }
 

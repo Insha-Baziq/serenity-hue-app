@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { isVatDropboxConfigured } from "@/lib/vat-config";
 import {
   createVatTemporaryUploadLink,
+  deleteVatDropboxFile,
   getVatDropboxFile,
   moveVatDropboxFile,
   refreshVatDropboxToken,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/vat-dropbox";
 import {
   approveVatInvoice,
+  clearVatRemovedFile,
+  getVatRemovedFiles,
   completeVatUpload,
   createVatUpload,
   getVatDropboxSecrets,
@@ -167,7 +170,31 @@ export async function removeVatInvoiceRecord(input: { id: number; reason: string
   const result = access
     ? await withMoveRollback(access, moved, () => removeVatInvoice({ ...input, file }))
     : await removeVatInvoice(input);
+  // Dropbox holds only finalized invoices: once the record is removed, its document is deleted.
+  const sweepAccess = access ?? await optionalDropboxAccess().catch(() => null);
+  if (sweepAccess) await sweepRemovedVatFiles(sweepAccess);
   return { fileUnchanged: Boolean(state.dropboxPath) && !access, logWarning: await refreshVatInvoiceLogs(result.years) };
+}
+
+/**
+ * Deletes a removed invoice's document from Dropbox and forgets its location.
+ * A failure leaves the file in the removed folder; the removal still stands.
+ */
+export async function deleteRemovedVatFile(access: { token: string }, invoiceId: number, path: string) {
+  try {
+    await deleteVatDropboxFile(access.token, path);
+    await clearVatRemovedFile(invoiceId);
+  } catch {
+    // Left in /Invoices/_Removed for a later cleanup.
+  }
+}
+
+/**
+ * Deletes the documents of every removed invoice still in Dropbox, including
+ * ones from before removals deleted files, or whose delete failed earlier.
+ */
+export async function sweepRemovedVatFiles(access: { token: string }) {
+  for (const file of await getVatRemovedFiles()) await deleteRemovedVatFile(access, file.id, file.path);
 }
 
 export async function restoreVatInvoiceRecord(input: { id: number; expectedUpdatedAt: string; actor: ActivityActor }) {
@@ -245,12 +272,12 @@ export async function completeVatUploadFiling(input: { uploadId: string; details
   const previous = result.previousFile;
   if (previous && previous.path !== to) {
     if (previous.accountId === access.accountId) {
-      // The replaced document is kept, never deleted.
+      // The replaced document is deleted: Dropbox keeps only the current one.
       try {
-        const retained = await moveVatDropboxFile(access.token, previous.path, `${VAT_REMOVED_FOLDER}/${fileName(previous.path)}`);
-        await recordVatRetainedFile(result.invoiceId, retained, input.actor);
+        await deleteVatDropboxFile(access.token, previous.path);
+        await recordVatRetainedFile(result.invoiceId, previous.path, input.actor);
       } catch {
-        retainWarning = "The new document is filed, but the replaced file could not be moved to the removed folder. It is still in its month folder.";
+        retainWarning = "The new document is filed, but the replaced file could not be deleted from Dropbox. It is still in its month folder.";
       }
     }
   }

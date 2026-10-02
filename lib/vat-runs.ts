@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getVatDropboxAccess, refreshVatInvoiceLogs, VatSetupRequiredError } from "@/lib/vat-filing";
+import { getVatDropboxAccess, sweepRemovedVatFiles, refreshVatInvoiceLogs, VatSetupRequiredError } from "@/lib/vat-filing";
 import { moveVatDropboxFile } from "@/lib/vat-dropbox";
 import { openVatMailbox, type VatMailbox } from "@/lib/vat-mailbox";
 import { processVatEmail } from "@/lib/vat-pipeline";
@@ -185,13 +185,14 @@ async function resolveRunDuplicates(startDate: string, actor: ActivityActor) {
   for (const removal of removals) {
     const row = rows.find((item) => item.candidate.id === removal.id)!;
     let movedPath: string | null = null;
-    // The duplicate's document is kept in the removed folder, never deleted.
+    // Moved out first so a failed record update can't leave it half-filed; deleted once the removal is saved.
     if (dropbox && row.dropboxPath && row.dropboxAccountId === dropbox.accountId) {
       movedPath = await moveVatDropboxFile(dropbox.token, row.dropboxPath, `${VAT_REMOVED_FOLDER}/${row.dropboxPath.split("/").pop()}`);
     }
     await markVatInvoiceDuplicate({ ...removal, movedPath, actor });
   }
   await flagVatPossibleDuplicates(plan.flagged.filter((id) => !reviewed.has(id)));
+  if (dropbox) await sweepRemovedVatFiles(dropbox);
   return removals.length;
 }
 
